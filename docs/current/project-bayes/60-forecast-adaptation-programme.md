@@ -1178,7 +1178,8 @@ adapting around the temporary contract.
 
 ### A.2 Evidence-merge role reserved for WP8
 
-[`73h-shared-evidence-merge-design.md`](73h-shared-evidence-merge-design.md)
+[`73i-shared-evidence-merge-design.md`](73i-shared-evidence-merge-design.md)
+(renumbered 30-Apr-26 from 73h)
 reserves the `direct_cohort_exact_subject` evidence role for WP8. That
 role represents direct cohort-family rate evidence for exact
 `cohort(A, X -> end)` subject matches.

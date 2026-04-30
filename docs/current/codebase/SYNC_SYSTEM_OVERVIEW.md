@@ -169,15 +169,19 @@ Common failure pattern: data exists in **three layers simultaneously** (param fi
 
 Single most common cause of multi-attempt fixes. Read GRAPH_MUTATION_UPDATE_MANAGER.md for the mapping configurations.
 
-### Three writers to `edge.p.posterior`, only one is DSL-aware
+### Single writer for `edge.p.posterior` and `edge.p.latency.posterior` (posterior unification, 30-Apr-26)
 
-Worth knowing because the two DSL-blind writers (which run on every fit and every cascade) silently produce stale projections when the user is on a context-qualified or cohort-mode DSL:
+`applyPromotion` is the only writer of these two surfaces. They are source-agnostic projections of the active `model_vars[*]` entry, written every time promotion runs.
 
-- **`bayesPatchService.applyPatch`** — direct write at fit-apply time. Hardcodes `slicesRaw['window()']` and `slicesRaw['cohort()']`. Picks the bare aggregate slice. Has no `currentDSL` parameter.
-- **UpdateManager mapping** at [`updateManager/mappingConfigurations.ts`](src/services/updateManager/mappingConfigurations.ts) — fires through the cascade whenever `getParameterFromFile` runs. Hardcodes `projectProbabilityPosterior(value, '')` (empty DSL). Picks the bare aggregate slice. Even though `getParameterFromFile` receives `targetSlice: currentDSL`, that DSL is used for window aggregation and slice-family `values[]` matching, NOT threaded into the posterior mapping.
-- **`contextLiveGraphForCurrentDsl`** at [`posteriorSliceContexting.ts`](src/services/posteriorSliceContexting.ts) — invoked by [`useDSLReaggregation`](src/hooks/useDSLReaggregation.ts). DSL-aware: matches the slice key `${context-dims}.${mode}()` from the current DSL. Single source of truth for what should land on the live edge.
+Three upstream paths populate `model_vars[bayesian]` so promotion can project from it:
 
-The DSL-aware re-projection is gated by `lastContextedDSLRef.current === currentDSL`, so it only fires on a DSL change. After a fresh fit, the DSL has not changed and the gate trips — leaving the bare-aggregate projection from the two DSL-blind writers in place. The 29-Apr-26 fix dispatches `dagnet:bayesPosteriorsUpdated` from `applyPatchAndCascade` after Tier 2 succeeds; `useDSLReaggregation` listens, runs `contextLiveGraphForCurrentDsl` against the active DSL, and `setGraph`s the result. This closes the gap created when Stage 4(b) removed `_posteriorSlices` AND the Bayes compiler started emitting context-qualified slices: pre-Stage-4(b), both shapes lived on the graph file together, so the user's view always matched the most recent fit. Now the file is the slice library and the graph holds only one projection at a time, so the FE must re-project on every event that could change the active slice — DSL change OR posterior arrival.
+- **`bayesPatchService.applyPatch`** — at fit-apply time. Builds `model_vars[bayesian].{probability, latency, quality, fit_diagnostics}` from the freshly-fitted slice library and runs `applyPromotion`.
+- **`posteriorSliceContexting.contextProbabilityBlock`** at [`posteriorSliceContexting.ts`](src/services/posteriorSliceContexting.ts) — invoked by [`useDSLReaggregation`](src/hooks/useDSLReaggregation.ts) and by the request-graph build (`contextGraphForEffectiveDsl`). DSL-aware: matches the slice key `${context-dims}.${mode}()` from the current DSL, projects the slice into a `model_vars[bayesian]` entry, then runs promotion.
+- **On-load migration** in [`workspaceService.ts`](src/services/workspaceService.ts) (`_migrateBayesianPosteriorToSourceLedgerInPlace`) — copies legacy `p.posterior`/`p.latency.posterior` Beta + bayesian metadata onto `model_vars[bayesian]` for graphs saved before the unification refactor.
+
+Bayesian-fit-only metadata (HDI bands, fitted_at, fingerprint, prior_tier, ESS, rhat, PPC, LOO) lives on `model_vars[bayesian].fit_diagnostics.{probability, latency}` and `model_vars[bayesian].quality`, not on the source-agnostic projection surface.
+
+The DSL-aware re-projection is gated by `lastContextedDSLRef.current === currentDSL`, so it only fires on a DSL change. After a fresh fit, the DSL has not changed and the gate trips — but `bayesPatchService` runs its own `applyPromotion` and dispatches `dagnet:bayesPosteriorsUpdated` from `applyPatchAndCascade` after Tier 2 succeeds; `useDSLReaggregation` listens, runs `contextLiveGraphForCurrentDsl` against the active DSL, and `setGraph`s the result. The full design is in [`docs/current/posterior-unification-plan-29-Apr-26.md`](../posterior-unification-plan-29-Apr-26.md).
 
 ### Pull post-merge invariant
 

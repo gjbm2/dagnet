@@ -45,6 +45,8 @@ Three flags and code paths historically encoded an incorrect assumption that "an
 
 The durable two-step framing is now reflected end-to-end. The §6.1 binding gate (layer-isolation: scoped `p.evidence` cannot alter the resolved analytic prior when a valid source-layer shape exists) is met by the resolver; the consumer-side conjugate-update path is now uniform.
 
+**Posterior unification (30-Apr-26)**: a separate refactor extends the source-ledger contract one step further — `p.posterior` and `p.latency.posterior` become source-agnostic projections written exclusively by `applyPromotion` from the active `model_vars[*]` entry. The bayesian-only metadata that previously squatted on `p.posterior` (HDI bands, fitted_at, fingerprint, prior_tier, ESS, rhat, PPC, LOO) moves to `model_vars[bayesian].fit_diagnostics`. The Python resolver (`model_resolver.resolve_model_params`) reads `model_vars[promoted_source].probability` first and falls back to `posterior_block` only for un-promoted graphs (older snapshots, share bundles, CLI graphs that bypass `applyPromotion`). See [`docs/current/posterior-unification-plan-29-Apr-26.md`](../posterior-unification-plan-29-Apr-26.md) for the full design.
+
 ## What the Stage 2 passes compute
 
 Per edge, given raw cohort evidence, Stage 2 produces:

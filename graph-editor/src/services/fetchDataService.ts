@@ -2003,7 +2003,7 @@ export async function runStage2EnhancementsAndInboundN(
           // historical cohort data, making completeness consistent with evidence.
           //
           // In cohort() mode: this is the explicit cohort window (unchanged).
-          const lagCohortWindow = (lagSliceStart && lagSliceEnd) 
+          const lagCohortWindow = (lagSliceStart && lagSliceEnd)
             ? { start: lagSliceStart, end: lagSliceEnd }
             : undefined;
           
@@ -2149,6 +2149,18 @@ export async function runStage2EnhancementsAndInboundN(
                       },
                     };
                     upsertModelVars(ep, analyticEntry);
+                    // Posterior unification plan §4 Step 0: this
+                    // upsert is not paired with applyPromotion here
+                    // because the surrounding fetch always runs the
+                    // FE LAG/FE topo pass below (~line 2183) followed
+                    // by an explicit applyPromotion sweep (~line 2342)
+                    // before returning. If a future caller uses this
+                    // bootstrap path without that downstream pipeline,
+                    // p.forecast.* and the promoted_* latency scalars
+                    // will be stale — add an explicit promotion call
+                    // here in that case. The
+                    // promotionCoverageInvariant test pins this
+                    // contract.
                   }
                   bootstrapped++;
                 }
@@ -2377,7 +2389,7 @@ export async function runStage2EnhancementsAndInboundN(
             || itemOptions?.skipBackendCalls === true
             || isBeCfDisabledByUrl();
           updatePipelineStep('cf', cfSkipped ? 'complete' : 'running', cfSkipped ? 'skipped' : undefined);
-          const { runConditionedForecast, applyConditionedForecastToGraph } =
+          const { runConditionedForecast, applyConditionedForecastToGraph, extractCfEdgeWriteSpec } =
             await import('./conditionedForecastService');
           const cfGen = cfSupersessionState.nextGeneration(cfScenarioId);
           const cfStartTime = Date.now();
@@ -2531,83 +2543,59 @@ export async function runStage2EnhancementsAndInboundN(
             };
 
           // ── Helper: merge conditioned forecast scalars into FE edge values ──
-          // When the conditioned forecast wins the 500ms race, its p.mean
-          // replaces FE's blended p.mean in the same render.
-          // Merge every scalar CF is authoritative for (doc 45):
-          // p_mean/p_sd AND completeness/completeness_sd. FE's latency
-          // fit fields (mu, sigma, t95, path_t95, median_lag_days,
-          // mean_lag_days, etc.) are left untouched — those are
-          // FE topo's responsibility.
+          // When the conditioned forecast wins the 500ms race, its scalars
+          // overwrite FE's quick-pass equivalents in the same render.
+          //
+          // Doc 73l Fix 2 (30-Apr-26): the per-edge CF write decision (which
+          // fields are valid, which are owned by CF) lives entirely in
+          // `extractCfEdgeWriteSpec` in `conditionedForecastService.ts`. Both
+          // this race fast path and the slow / direct-apply path consume that
+          // single helper, so they cannot drift on field selection or validity
+          // gates. The race path differs from the direct path only in *output
+          // shape* — race merges into `EdgeLAGValues` which then feeds
+          // `UpdateManager.applyBatchLAGValues`; direct path constructs a
+          // batch update directly. Both write the same set of fields.
+          //
+          // CF MUST NOT write `p.forecast.*` (the L2 promoted-baseline path-3
+          // contamination through `UpdateManager.applyBatchLAGValues` →
+          // `model_vars[analytic].probability.mean` → `applyPromotion` →
+          // `p.forecast.mean` was a canary divergence vector pre-fix).
           const mergeCfIntoFe = (
             feValues: typeof feEdgeValues,
             cfResults: Awaited<ReturnType<typeof runConditionedForecast>>,
           ): typeof feEdgeValues => {
             if (!cfResults || cfResults.length === 0 || !cfResults[0]?.edges?.length) return feValues;
-            type CfScalars = {
-              p_mean: number;
-              p_sd?: number;
-              evidence_n?: number;
-              evidence_k?: number;
-              completeness?: number;
-              completeness_sd?: number;
-            };
-            const byEdge = new Map<string, CfScalars>();
+            type Spec = ReturnType<typeof extractCfEdgeWriteSpec>;
+            const byEdge = new Map<string, NonNullable<Spec>>();
             for (const e of cfResults[0].edges) {
-              if (e.p_mean != null && Number.isFinite(e.p_mean)) {
-                byEdge.set(e.edge_uuid, {
-                  p_mean: e.p_mean as number,
-                  p_sd:
-                    e.p_sd != null && Number.isFinite(e.p_sd) && e.p_sd >= 0
-                      ? (e.p_sd as number)
-                      : undefined,
-                  evidence_n:
-                    e.evidence_n != null
-                    && Number.isFinite(e.evidence_n)
-                    && e.evidence_n >= 0
-                      ? (e.evidence_n as number)
-                      : undefined,
-                  evidence_k:
-                    e.evidence_k != null
-                    && Number.isFinite(e.evidence_k)
-                    && e.evidence_k >= 0
-                      ? (e.evidence_k as number)
-                      : undefined,
-                  completeness:
-                    e.completeness != null && Number.isFinite(e.completeness)
-                      ? (e.completeness as number)
-                      : undefined,
-                  completeness_sd:
-                    e.completeness_sd != null && Number.isFinite(e.completeness_sd)
-                      ? (e.completeness_sd as number)
-                      : undefined,
-                });
-              }
+              const spec = extractCfEdgeWriteSpec(e);
+              if (spec) byEdge.set(spec.edge_uuid, spec);
             }
             if (byEdge.size === 0) return feValues;
             return feValues.map(fe => {
-              const cf = byEdge.get(fe.edgeUuid);
-              if (cf == null) return fe;
+              const spec = byEdge.get(fe.edgeUuid);
+              if (spec == null) return fe;
               return {
                 ...fe,
-                ...(cf.p_sd != null ? { stdev: cf.p_sd } : {}),
-                blendedMean: cf.p_mean,
-                forecast: { ...(fe.forecast || {}), mean: cf.p_mean },
-                ...((cf.evidence_n != null || cf.evidence_k != null)
+                ...(spec.stdev_pred != null ? { stdev_pred: spec.stdev_pred } : {}),
+                ...(spec.stdev != null ? { stdev: spec.stdev } : {}),
+                blendedMean: spec.blendedMean,
+                ...((spec.evidence_n != null || spec.evidence_k != null)
                   ? {
                       evidence: {
                         ...(fe.evidence || {}),
-                        ...(cf.evidence_n != null ? { n: cf.evidence_n } : {}),
-                        ...(cf.evidence_k != null ? { k: cf.evidence_k } : {}),
+                        ...(spec.evidence_n != null ? { n: spec.evidence_n } : {}),
+                        ...(spec.evidence_k != null ? { k: spec.evidence_k } : {}),
                       },
                     }
                   : {}),
                 latency: {
                   ...fe.latency,
-                  ...(cf.completeness != null
-                    ? { completeness: cf.completeness }
+                  ...(spec.completeness != null
+                    ? { completeness: spec.completeness }
                     : {}),
-                  ...(cf.completeness_sd != null
-                    ? { completeness_stdev: cf.completeness_sd }
+                  ...(spec.completeness_stdev != null
+                    ? { completeness_stdev: spec.completeness_stdev }
                     : {}),
                 },
               };

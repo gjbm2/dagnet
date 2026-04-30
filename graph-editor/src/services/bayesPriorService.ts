@@ -2,13 +2,14 @@
  * Bayes Prior Service
  *
  * Provides reset-priors and delete-history operations for Bayesian posteriors.
- * Used by: BayesPosteriorCard (single edge), Data Menu (bulk, all edges).
+ * Used by: PromotedModelCard (single edge), Data Menu (bulk, all edges).
  *
  * See: docs/current/project-bayes/19-model-vars-production-consumption-separation.md §4.5
  */
 
 import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
+import { applyPromotion } from './modelVarsResolution';
 import type { GraphData } from '../types';
 
 // ── Graph preference revert (internal) ──────────────────────────────────────
@@ -62,6 +63,15 @@ function invalidateBayesianOnEdges(
       if (edge.p.posterior) { delete edge.p.posterior; changed = true; }
       if (edge.p._posteriorSlices) { delete edge.p._posteriorSlices; changed = true; }
       if (edge.p.latency?.posterior) { delete edge.p.latency.posterior; changed = true; }
+    }
+
+    // Re-promote so p.forecast.{mean,stdev,source} and the promoted_*
+    // latency scalars reflect the now-failed bayesian gate (analytic
+    // takes over). Idempotent with any downstream fetch the caller
+    // triggers. Posterior unification plan §4 Step 0 — the post-condition
+    // of this function is "edges left in a fully promoted state".
+    if (changed && edge.p) {
+      applyPromotion(edge.p, (graph as any).model_source_preference);
     }
   }
   return changed;
@@ -254,6 +264,19 @@ export async function resetPriorsForAllParams(
         (liveGraph as any).model_source_preference = 'best_available';
       }
 
+      // Promote every edge so `p.forecast.{mean,stdev,source}` and the
+      // promoted_* latency scalars reflect the now-failed bayesian gate
+      // (analytic takes over). Posterior unification plan §4 Step 0:
+      // every site that mutates `model_vars` or selector preferences
+      // must end with promotion so `p.posterior` (after Step 2) and the
+      // promoted scalars are never stale. Idempotent with the downstream
+      // from-file fetch the caller triggers.
+      for (const edge of (liveGraph.edges ?? []) as any[]) {
+        if (edge.p) {
+          applyPromotion(edge.p, (liveGraph as any).model_source_preference);
+        }
+      }
+
       sessionLogService.info('data-update', 'BAYES_RESET_ALL_GATES_INVALIDATED',
         'Invalidated bayesian gates on all edges — analytic will be promoted');
     }
@@ -330,6 +353,17 @@ export async function deleteHistoryForAllParams(
       if (edge.p?.posterior) { delete edge.p.posterior; edgesCleared = true; }
       if (edge.p?._posteriorSlices) { delete edge.p._posteriorSlices; edgesCleared = true; }
       if (edge.p?.latency?.posterior) { delete edge.p.latency.posterior; edgesCleared = true; }
+    }
+
+    // Promote every edge so the post-condition is "graph fully promoted
+    // and reflective of the failed bayesian gate". Posterior unification
+    // plan §4 Step 0 — once Step 2 lands, this also rewrites p.posterior
+    // from the active analytic source (or clears it when no source has
+    // a Beta).
+    for (const edge of (liveGraph.edges ?? []) as any[]) {
+      if (edge.p) {
+        applyPromotion(edge.p, (liveGraph as any).model_source_preference);
+      }
     }
 
     if (edgesCleared) {

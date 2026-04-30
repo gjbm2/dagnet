@@ -185,31 +185,37 @@ const LATENCY_FIELD_WHITELIST = [
   'promoted_path_onset_sd',
 ];
 
-// Whitelist of probability posterior fields (edge.p.posterior) that belong in the pack.
-// Keeps posterior metadata (alpha/beta/HDI/ess/rhat/etc.) but drops raw sample arrays
-// and any future internal fields by not copying the object wholesale.
+// Whitelist of fields on the promoted probability posterior surface
+// (edge.p.posterior) that belong in the param pack — posterior unification
+// plan §3. Bayesian-only metadata (HDI, ESS, Rhat, fitted_at, …) lives on
+// model_vars[bayesian].fit_diagnostics / .quality, not on this surface, so
+// it is not extracted here.
 const PROBABILITY_POSTERIOR_FIELD_WHITELIST = [
   'distribution',
   'alpha', 'beta',
-  'hdi_lower', 'hdi_upper', 'hdi_level',
-  'ess', 'rhat',
-  'fitted_at', 'fingerprint', 'provenance',
+  'alpha_pred', 'beta_pred',
   'cohort_alpha', 'cohort_beta',
-  'cohort_hdi_lower', 'cohort_hdi_upper',
+  'cohort_alpha_pred', 'cohort_beta_pred',
+  'n_effective', 'window_n_effective', 'cohort_n_effective',
+  'provenance', 'cohort_provenance',
 ];
 
-// Whitelist of latency posterior fields (edge.p.latency.posterior).
+// Whitelist of fields on the promoted latency posterior surface
+// (edge.p.latency.posterior) — posterior unification plan §3. Bayesian-only
+// metadata (ESS, Rhat, fitted_at, fingerprint, HDI bands on t95, PPC, LOO)
+// lives on model_vars[bayesian].fit_diagnostics.latency, not here.
 const LATENCY_POSTERIOR_FIELD_WHITELIST = [
   'distribution',
-  'mu_mean', 'mu_sd', 'sigma_mean', 'sigma_sd',
+  'mu_mean', 'mu_sd', 'mu_sd_pred',
+  'sigma_mean', 'sigma_sd',
   'onset_mean', 'onset_sd', 'onset_delta_days', 'onset_mu_corr',
-  'hdi_t95_lower', 'hdi_t95_upper', 'hdi_level',
-  'ess', 'rhat',
-  'fitted_at', 'fingerprint', 'provenance',
+  'onset_hdi_lower', 'onset_hdi_upper',
+  'provenance',
   // Path-level (cohort-slice) latency
-  'path_mu_mean', 'path_mu_sd', 'path_sigma_mean', 'path_sigma_sd',
+  'path_mu_mean', 'path_mu_sd', 'path_mu_sd_pred',
+  'path_sigma_mean', 'path_sigma_sd',
   'path_onset_mean', 'path_onset_sd', 'path_onset_delta_days',
-  'path_hdi_t95_lower', 'path_hdi_t95_upper',
+  'path_onset_hdi_lower', 'path_onset_hdi_upper', 'path_onset_mu_corr',
   'path_provenance',
 ];
 

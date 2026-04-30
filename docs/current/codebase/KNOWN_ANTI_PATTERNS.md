@@ -24,12 +24,14 @@ After completing a multi-attempt fix, ask: would an agent in a different subsyst
 
 **Root cause**: state lives in 4 layers simultaneously:
 
-1. Parameter file (FileRegistry / IDB) — `file.data.posterior`
-2. Graph edge projected value — `edge.p.posterior`, `edge.p.latency.posterior`
-3. Stashed slices on the edge — `edge.p._posteriorSlices` (raw data for re-projection)
+1. Parameter file (FileRegistry / IDB) — `file.data.posterior` (slice library)
+2. Source ledger on the graph edge — `edge.p.model_vars[bayesian].{probability, latency, quality, fit_diagnostics}`. Written by `bayesPatchService.applyPatch`, by `posteriorSliceContexting` on DSL change, and by the `_migrateBayesianPosteriorToSourceLedgerInPlace` on-load migration (post 30-Apr-26 unification).
+3. Graph edge projected value — `edge.p.posterior`, `edge.p.latency.posterior`. Written **exclusively** by `applyPromotion` from layer 2 post-unification.
 4. React render tree — whatever reference React last saw via `setGraph`
 
-UpdateManager mapping configurations (`updateManager/mappingConfigurations.ts`) project param-file fields onto graph edges. The file and the edge are separate copies, not references. Clearing layer 1 alone is useless.
+(Pre-unification graphs may also carry `edge.p._posteriorSlices` as a transient FE re-projection cache; this is no longer written on the live edge but legacy share bundles and IDB snapshots can still arrive with it.)
+
+UpdateManager mapping configurations (`updateManager/mappingConfigurations.ts`) project param-file fields onto graph edges. The file and the edge are separate copies, not references. Clearing layer 1 alone is useless. Post-unification, clearing layer 3 alone is useless too — the next promotion re-projects from layer 2.
 
 **Fix**: grep for ALL read/write sites of the field. Clear all of them. Call `setGraph` with a new object reference. Test the already-clean case (field already absent on entry).
 
@@ -254,6 +256,18 @@ For `-1d:` / `-7d:` and other narrow forms, pinning isn't enough — the authori
 **Where this matters in this repo**: see `docs/current/test-wallclock-flakiness-audit.md` for the per-test ledger and `TESTING_STANDARDS.md` §"Wallclock invariance for date-DSL tests" for the canonical hardening pattern. As of 29-Apr-26, ~190 occurrences across 20 test files; `test_cohort_factorised_outside_in.py` partly hardened (17 of 26 in-scope tests pinned).
 
 **Broader principle**: test fixtures and test DSL must encode their *required preconditions explicitly*. A relative form like `-90d:` is an implicit dependency on "today, when this is run, is within the fixture's evidence window" — a precondition the test doesn't state and CI doesn't check. Relative forms in test code are an evergreen source of silent rot; treat them as a smell.
+
+## Anti-pattern 58: Forking by case instead of degenerating one path
+
+**Signature**: a new case (window vs cohort, single-hop vs multi-hop, latency vs non-latency, scalar projection vs chart rows) is implemented by branching to a parallel function or class instead of letting the existing path produce it. Two functions claim to compute "the same thing" via different code. Fixes work in one mode and reappear in the other a week later. Tests pass for the canonical case but fail in subtle ways for the degenerate edge — or vice versa. Behaviour converges where the cases happen to overlap and diverges where they should agree most strongly.
+
+**Root cause**: the engineer thinks of the new case as different because it has a different name, different DSL, or different UI affordance, and reaches for a new branch. The cases are actually *one runtime object* specialised differently. `cohort()` is `window()` with an additional carrier-arrival object that degenerates to identity in the window form; non-latency is latency with a `δ(0)` lag distribution (any cohort with age > 0 has completeness = 1); single-hop is multi-hop with a one-edge subject span. Each new branch is a copy of the resolution chain that has to be kept in sync by hand. They drift.
+
+A second variant: a downstream projection (chart row, CF scalar, graph-enrichment field) grows its own carrier / subject-span / `p∞` logic because the upstream object didn't carry the information it needed. The projection is now re-deciding semantics the resolution chain already decided, and the two answers can disagree silently.
+
+**Fix**: identify the single resolved runtime object that all cases project from. The new case must differ only by which sub-object degenerates. If the existing path can't accommodate the new case without an `if mode == ...` near the centre, the path is wrongly factored — fix the factoring before fixing the case. For projection-layer drift: move the missing information up into the resolved object, then make the projection a readout. Existing realisations in this repo: `enhanceGraphLatencies` runs the same conjugate-blend for latency and non-latency edges (I-43, I-44); the BE cohort-forecast machinery resolves one `population_root → carrier_to_x → subject_span → numerator_representation → p_conditioning_evidence → projection` object for window, cohort, single-hop and multi-hop (`docs/current/project-bayes/73g-general-purpose-f14-problem-and-invariants.md`).
+
+**Why this is its own anti-pattern, not just "no duplicate code paths"**: the duplicate-path rule says *don't copy*. This anti-pattern says *how to specialise without copying* — by degenerating sub-objects of one resolved chain. Agents who only know the duplicate-path rule still fork by case, because each fork looks locally non-duplicative ("it's a different case"). The fix template is what's load-bearing.
 
 ---
 

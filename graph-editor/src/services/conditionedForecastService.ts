@@ -18,6 +18,74 @@ import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 import { UpdateManager } from './UpdateManager';
 import { resolveConditionedForecastScenarioId } from './conditionedForecastSupersessionState';
 
+/**
+ * Canonical CF write specification per edge — what CF authoritatively writes.
+ *
+ * Doc 73l Fix 2 (30-Apr-26): both the fetch-pipeline race fast path
+ * (`mergeCfIntoFe` in fetchDataService.ts) and the direct-apply slow path
+ * (`applyConditionedForecastToGraph` below) consume this single shape, so
+ * they cannot drift on field selection or validity gates. The output shapes
+ * differ — the race path merges into pre-existing FE `EdgeLAGValues`, the
+ * direct path constructs a fresh edge update — but both decide *what* CF
+ * writes via this helper.
+ *
+ * Layer contract (doc 73b §6.2 / §12.2 row S9, doc 73g invariant 7):
+ *   - CF owns L5 current-answer fields: `p.mean` (via `blendedMean` field on
+ *     the update record), `p.stdev` (epistemic, from `p_sd_epistemic`),
+ *     `p.stdev_pred` (predictive, from `p_sd`), `latency.completeness`,
+ *     `latency.completeness_stdev`, `evidence.{n, k}`.
+ *   - CF MUST NOT write L2 promoted-baseline `p.forecast.*` or L1 source-
+ *     ledger `model_vars[*]`. Those are populated by `applyPromotion` from
+ *     the active model_vars source.
+ */
+export interface CfEdgeWriteSpec {
+  edge_uuid: string;
+  /** CF p_mean, lands on `p.mean` via `blendedMean` apply field. */
+  blendedMean: number;
+  /** CF p_sd (predictive), lands on `p.stdev_pred`. */
+  stdev_pred?: number;
+  /** CF p_sd_epistemic, lands on `p.stdev`. */
+  stdev?: number;
+  /** CF completeness, lands on `p.latency.completeness`. */
+  completeness?: number;
+  /** CF completeness_sd, lands on `p.latency.completeness_stdev`. */
+  completeness_stdev?: number;
+  /** CF evidence_n, lands on `p.evidence.n`. */
+  evidence_n?: number;
+  /** CF evidence_k, lands on `p.evidence.k`. */
+  evidence_k?: number;
+}
+
+/**
+ * Validate and project a CF response edge into the canonical write spec.
+ * Returns null if the edge has no usable `p_mean` (CF cannot write).
+ *
+ * Field-level validity gates (single source of truth):
+ *   - p_mean: required, finite. If absent, the whole spec is null.
+ *   - p_sd, p_sd_epistemic: finite and non-negative.
+ *   - completeness, completeness_sd: finite.
+ *   - evidence_n, evidence_k: finite and non-negative.
+ */
+export function extractCfEdgeWriteSpec(
+  edge: ConditionedForecastEdgeResult,
+): CfEdgeWriteSpec | null {
+  if (edge.p_mean == null || !Number.isFinite(edge.p_mean)) return null;
+  const finiteNonNeg = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isFinite(v) && v >= 0;
+  const finite = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isFinite(v);
+  return {
+    edge_uuid: edge.edge_uuid,
+    blendedMean: edge.p_mean,
+    ...(finiteNonNeg(edge.p_sd) ? { stdev_pred: edge.p_sd } : {}),
+    ...(finiteNonNeg(edge.p_sd_epistemic) ? { stdev: edge.p_sd_epistemic } : {}),
+    ...(finite(edge.completeness) ? { completeness: edge.completeness } : {}),
+    ...(finite(edge.completeness_sd) ? { completeness_stdev: edge.completeness_sd } : {}),
+    ...(finiteNonNeg(edge.evidence_n) ? { evidence_n: edge.evidence_n } : {}),
+    ...(finiteNonNeg(edge.evidence_k) ? { evidence_k: edge.evidence_k } : {}),
+  };
+}
+
 /** Per-edge result from the conditioned forecast endpoint.
  *  Doc 45 §Endpoint contract (lines 181-190):
  *    { edge_uuid, p_mean, p_sd, completeness, completeness_sd }
@@ -94,6 +162,30 @@ async function resolveWorkspace(): Promise<{ repository: string; branch: string 
   return undefined;
 }
 
+/**
+ * Split a combined DSL (e.g. "from(x).to(y).window(-90d:)") into the
+ * subject (`from(...).to(...).visited(...).visitedAny(...).exclude(...)`)
+ * part and the temporal (`window(...).cohort(...).asat(...)` plus everything
+ * else) part.
+ *
+ * Mirrors the splitter in [`analyse.ts`](../cli/commands/analyse.ts) so the
+ * BE always sees `analytics_dsl` (subject) and `effective_query_dsl`
+ * (temporal) separately, regardless of which CLI / FE entry point invoked
+ * CF. Doc 73l: the analyse CLI splits before dispatch; runConditionedForecast
+ * must do the same so the pack-side and analyse-side payloads agree.
+ */
+function splitDslSubjectTemporal(dsl: string): { subject: string; temporal: string } {
+  if (!dsl) return { subject: '', temporal: '' };
+  const subjectRe = /\b(from|to|visited|visitedAny|exclude)\([^)]*\)/g;
+  const subjectParts: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = subjectRe.exec(dsl)) !== null) {
+    subjectParts.push(match[0]);
+  }
+  const temporal = dsl.replace(subjectRe, '').replace(/^\.+|\.+$/g, '').replace(/\.{2,}/g, '.');
+  return { subject: subjectParts.join('.'), temporal };
+}
+
 export async function runConditionedForecast(
   graph: any,
   queryDsl: string,
@@ -103,6 +195,25 @@ export async function runConditionedForecast(
 ): Promise<ConditionedForecastScenarioResult[]> {
   if (!queryDsl) return [];
   const resolvedScenarioId = resolveConditionedForecastScenarioId(scenarioId);
+
+  // Doc 73l Fix 2 (30-Apr-26): the BE handler at api_handlers.py expects
+  // `analytics_dsl` to carry the subject (from/to/visited/...) and
+  // `effective_query_dsl` to carry the temporal clause only. The analyse
+  // CLI splits before dispatching to the prepared-analysis path; this
+  // function (the fetch-pipeline race-path CF call) must split too, or the
+  // BE sees a different request shape than the analyse path. When the
+  // caller has already split (analyticsDsl provided), keep the inputs
+  // unchanged.
+  let resolvedAnalyticsDsl: string;
+  let resolvedTemporalDsl: string;
+  if (analyticsDsl != null && analyticsDsl !== '') {
+    resolvedAnalyticsDsl = analyticsDsl;
+    resolvedTemporalDsl = queryDsl;
+  } else {
+    const split = splitDslSubjectTemporal(queryDsl);
+    resolvedAnalyticsDsl = split.subject;
+    resolvedTemporalDsl = split.temporal || queryDsl;
+  }
 
   const graphSnapshot = buildConditionedForecastGraphSnapshot(
     graph,
@@ -122,7 +233,9 @@ export async function runConditionedForecast(
       const { buildCandidateRegimesByEdge, filterCandidatesByContext } = await import('./candidateRegimeService');
       const fullInventory = await buildCandidateRegimesByEdge(graph, ws);
       if (Object.keys(fullInventory).length > 0) {
-        const filtered = await filterCandidatesByContext(fullInventory, queryDsl);
+        // Filter by the temporal portion only — context() lives on the
+        // temporal side, not the subject side.
+        const filtered = await filterCandidatesByContext(fullInventory, resolvedTemporalDsl);
         candidateRegimesByEdge = Object.keys(filtered).length > 0 ? filtered : fullInventory;
       }
     } catch (err: any) {
@@ -131,11 +244,11 @@ export async function runConditionedForecast(
   }
 
   const payload = {
-    analytics_dsl: analyticsDsl || '',
+    analytics_dsl: resolvedAnalyticsDsl,
     scenarios: [{
       scenario_id: resolvedScenarioId,
       graph: graphSnapshot,
-      effective_query_dsl: queryDsl,
+      effective_query_dsl: resolvedTemporalDsl,
       candidate_regimes_by_edge: candidateRegimesByEdge,
     }],
   };
@@ -210,60 +323,32 @@ export function applyConditionedForecastToGraph(
 
   for (const scenario of results) {
     for (const edge of scenario.edges) {
-      if (edge.p_mean == null) continue;
+      const spec = extractCfEdgeWriteSpec(edge);
+      if (!spec) continue;
 
       // Find existing edge to preserve its non-CF-owned latency values
+      // (t95, path_t95 — FE topo's responsibility, not CF output).
       const graphEdge = (graph.edges ?? []).find(
-        (e: any) => (e.uuid || e.id) === edge.edge_uuid
+        (e: any) => (e.uuid || e.id) === spec.edge_uuid
       );
       if (!graphEdge?.p) continue;
 
       const lat = graphEdge.p.latency ?? {};
       // Doc 45: CF owns completeness + completeness_sd. They are the
       // authoritative values — overwrite the existing (FE-topo-derived)
-      // scalars. Fall back to existing only when CF did not return a
-      // value (e.g. sweep could not populate completeness_mean).
+      // scalars. Fall back to existing only when CF did not return a value.
       const completenessFromCf =
-        edge.completeness != null && Number.isFinite(edge.completeness)
-          ? edge.completeness as number
-          : (lat.completeness ?? 0);
+        spec.completeness != null ? spec.completeness : (lat.completeness ?? 0);
       const completenessSdFromCf =
-        edge.completeness_sd != null && Number.isFinite(edge.completeness_sd)
-          ? edge.completeness_sd as number
-          : lat.completeness_stdev;
-      // Doc 73b §6.2 / §12.2 row S9: CF apply mapping is
-      //   `p_sd → p.stdev_pred` (predictive, kappa-inflated)
-      //   `p_sd_epistemic → p.stdev` (epistemic, kappa-bare).
-      // The doc 49 vs doc 61 naming inversion is contained at this
-      // boundary — `p_sd` is predictive on the wire (CF response),
-      // `p.stdev_pred` is predictive in storage (graph current-answer).
-      const stdevPredFromCf =
-        edge.p_sd != null && Number.isFinite(edge.p_sd) && edge.p_sd >= 0
-          ? edge.p_sd as number
-          : undefined;
-      const stdevEpistemicFromCf =
-        edge.p_sd_epistemic != null && Number.isFinite(edge.p_sd_epistemic) && (edge.p_sd_epistemic as number) >= 0
-          ? edge.p_sd_epistemic as number
-          : undefined;
-      const evidenceNFromCf =
-        edge.evidence_n != null
-        && Number.isFinite(edge.evidence_n)
-        && edge.evidence_n >= 0
-          ? edge.evidence_n as number
-          : undefined;
-      const evidenceKFromCf =
-        edge.evidence_k != null
-        && Number.isFinite(edge.evidence_k)
-        && edge.evidence_k >= 0
-          ? edge.evidence_k as number
-          : undefined;
+        spec.completeness_stdev != null ? spec.completeness_stdev : lat.completeness_stdev;
+
       // Doc 73b §3.2 / Stage 4(c) — CF de-collapse: CF must NOT write
       // p.forecast.{mean, stdev, source}. The promoted surface is
       // populated exclusively by applyPromotion from model_vars[]. CF's
       // p.mean (current-answer) lands via blendedMean below; CF's
-      // stdev / stdev_pred lands via stdev / stdev_pred fields below.
+      // dispersion lands via stdev / stdev_pred per §6.2 row S9.
       edgeUpdates.push({
-        edgeId: edge.edge_uuid,
+        edgeId: spec.edge_uuid,
         latency: {
           // t95 + path_t95 remain FE-topo's (latency fit, not CF output)
           t95: lat.t95 ?? 0,
@@ -272,24 +357,24 @@ export function applyConditionedForecastToGraph(
           completeness: completenessFromCf,
           ...(completenessSdFromCf != null ? { completeness_stdev: completenessSdFromCf } : {}),
         },
-        ...(stdevEpistemicFromCf != null ? { stdev: stdevEpistemicFromCf } : {}),
-        ...(stdevPredFromCf != null ? { stdev_pred: stdevPredFromCf } : {}),
-        blendedMean: edge.p_mean,
-        ...((evidenceNFromCf != null || evidenceKFromCf != null)
+        ...(spec.stdev != null ? { stdev: spec.stdev } : {}),
+        ...(spec.stdev_pred != null ? { stdev_pred: spec.stdev_pred } : {}),
+        blendedMean: spec.blendedMean,
+        ...((spec.evidence_n != null || spec.evidence_k != null)
           ? {
               evidence: {
-                ...(evidenceNFromCf != null ? { n: evidenceNFromCf } : {}),
-                ...(evidenceKFromCf != null ? { k: evidenceKFromCf } : {}),
+                ...(spec.evidence_n != null ? { n: spec.evidence_n } : {}),
+                ...(spec.evidence_k != null ? { k: spec.evidence_k } : {}),
               },
             }
           : {}),
       });
 
       console.log(
-        `[conditionedForecast] ${edge.edge_uuid.slice(0, 12)}: `
-        + `p.mean=${edge.p_mean.toFixed(4)} `
+        `[conditionedForecast] ${spec.edge_uuid.slice(0, 12)}: `
+        + `p.mean=${spec.blendedMean.toFixed(4)} `
         + `completeness=${completenessFromCf != null ? completenessFromCf.toFixed(4) : '—'} `
-        + `response_evidence=${edge.evidence_k ?? '—'}/${edge.evidence_n ?? '—'}`
+        + `response_evidence=${spec.evidence_k ?? '—'}/${spec.evidence_n ?? '—'}`
       );
     }
   }

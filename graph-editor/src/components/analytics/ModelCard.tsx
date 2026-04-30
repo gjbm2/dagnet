@@ -15,7 +15,7 @@
 
 import React from 'react';
 import type { ModelVarsEntry } from '../../types';
-import { ModelRateChart } from './BayesPosteriorCard';
+import { ModelRateChart } from './PromotedModelCard';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel, freshnessColour } from '../../utils/freshnessDisplay';
 import GlossaryTooltip from '../GlossaryTooltip';

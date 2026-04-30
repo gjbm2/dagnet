@@ -128,16 +128,20 @@ class ModelVarsLatency(BaseModel):
 class ModelVarsProbability(BaseModel):
     """Probability sub-block within a ModelVarsEntry.
 
-    Per doc 73b §3.9 (analytic source-mirror contract), the analytic
-    source carries aggregate window-family Beta-shape (`alpha`, `beta`,
+    Per doc 73b §3.9 (analytic source-mirror contract), each source
+    carries aggregate window-family Beta-shape (`alpha`, `beta`,
     `n_effective`, `provenance`) plus optional cohort-family shape
     (`cohort_alpha`, `cohort_beta`, `cohort_n_effective`,
     `cohort_provenance`) when cohort-family aggregate evidence exists.
-    The bayesian source uses the same probability sub-block but
-    populates the same fields from offline Bayes fits. Predictive
-    flavour fields (`alpha_pred`, `beta_pred`) are intentionally
-    excluded — analytic has no overdispersion model and the bayesian
-    predictive shape lives on `p.posterior` instead.
+
+    Posterior unification plan (29-Apr-26 §3): predictive Beta-flavour
+    fields (`alpha_pred`, `beta_pred`, `cohort_alpha_pred`,
+    `cohort_beta_pred`) live on the source ledger so that `p.posterior`
+    (the promoted surface) can carry the predictive shape source-
+    agnostically. The bayesian patch writer populates these from the
+    slice's predictive shape; analytic populates them from
+    `buildAnalyticProbabilityBlock` when an overdispersion estimator
+    supplies `stdev_pred`.
     """
     mean: float = Field(..., ge=0, le=1)
     stdev: float = Field(0.0, ge=0)
@@ -145,12 +149,82 @@ class ModelVarsProbability(BaseModel):
     alpha: Optional[float] = Field(None, ge=0, description="Window-family Beta α (aggregate)")
     beta: Optional[float] = Field(None, ge=0, description="Window-family Beta β (aggregate)")
     n_effective: Optional[float] = Field(None, ge=0, description="Source mass behind window-family Beta shape")
-    provenance: Optional[str] = Field(None, description="Source-basis label (e.g. analytic_window_baseline)")
+    provenance: Optional[str] = Field(None, description="Source-basis label (e.g. analytic_window_baseline / bayesian)")
     # Cohort-family aggregate Beta shape (§3.9; optional).
     cohort_alpha: Optional[float] = Field(None, ge=0, description="Cohort-family Beta α (aggregate, optional)")
     cohort_beta: Optional[float] = Field(None, ge=0, description="Cohort-family Beta β (aggregate, optional)")
     cohort_n_effective: Optional[float] = Field(None, ge=0, description="Source mass behind cohort-family Beta shape")
     cohort_provenance: Optional[str] = Field(None, description="Source-basis label for cohort-family shape")
+    # Predictive Beta flavour (posterior unification plan §3). Optional
+    # on both sources: bayesian populates from slice's predictive shape;
+    # analytic populates only when an overdispersion estimator is wired
+    # in. Absent when the source has no predictive shape.
+    alpha_pred: Optional[float] = Field(None, ge=0, description="Window-family predictive Beta α (kappa-inflated)")
+    beta_pred: Optional[float] = Field(None, ge=0, description="Window-family predictive Beta β (kappa-inflated)")
+    cohort_alpha_pred: Optional[float] = Field(None, ge=0, description="Cohort-family predictive Beta α (kappa-inflated)")
+    cohort_beta_pred: Optional[float] = Field(None, ge=0, description="Cohort-family predictive Beta β (kappa-inflated)")
+
+
+class ModelVarsFitDiagnosticsProbability(BaseModel):
+    """Bayesian metadata for the probability fit (was on `p.posterior`).
+
+    Posterior unification plan (29-Apr-26 §3). Sibling of `quality`.
+    `quality` carries gate inputs (rhat / ess / divergences /
+    evidence_grade / gate_passed); this carries everything else that
+    previously lived on `p.posterior` and is bayesian-only.
+    """
+    fitted_at: Optional[str] = None
+    fingerprint: Optional[str] = None
+    prior_tier: Optional[str] = None
+    surprise_z: Optional[float] = None
+    # HDI bands. Today MCMC quantiles; closed-form from α/β is a future
+    # improvement (plan §9).
+    hdi_lower: Optional[float] = None
+    hdi_upper: Optional[float] = None
+    hdi_level: Optional[float] = None
+    hdi_lower_pred: Optional[float] = None
+    hdi_upper_pred: Optional[float] = None
+    cohort_hdi_lower: Optional[float] = None
+    cohort_hdi_upper: Optional[float] = None
+    cohort_hdi_lower_pred: Optional[float] = None
+    cohort_hdi_upper_pred: Optional[float] = None
+    # LOO-ELPD model adequacy scoring (doc 32)
+    delta_elpd: Optional[float] = None
+    pareto_k_max: Optional[float] = None
+    n_loo_obs: Optional[int] = None
+    # PPC calibration (doc 38)
+    ppc_coverage_90: Optional[float] = None
+    ppc_n_obs: Optional[int] = None
+    ppc_traj_coverage_90: Optional[float] = None
+    ppc_traj_n_obs: Optional[int] = None
+
+
+class ModelVarsFitDiagnosticsLatency(BaseModel):
+    """Bayesian metadata for the latency fit (was on `p.latency.posterior`)."""
+    fitted_at: Optional[str] = None
+    fingerprint: Optional[str] = None
+    ess: Optional[float] = Field(None, ge=0)
+    rhat: Optional[float] = Field(None, ge=0)
+    hdi_t95_lower: Optional[float] = Field(None, ge=0)
+    hdi_t95_upper: Optional[float] = Field(None, ge=0)
+    hdi_level: Optional[float] = None
+    path_hdi_t95_lower: Optional[float] = Field(None, ge=0)
+    path_hdi_t95_upper: Optional[float] = Field(None, ge=0)
+    delta_elpd: Optional[float] = None
+    pareto_k_max: Optional[float] = None
+    n_loo_obs: Optional[int] = None
+    ppc_traj_coverage_90: Optional[float] = None
+    ppc_traj_n_obs: Optional[int] = None
+
+
+class ModelVarsFitDiagnostics(BaseModel):
+    """Bayesian-only fit diagnostics on `model_vars[bayesian]`.
+
+    Posterior unification plan §3. Sibling of `quality`. Present only
+    when `source == 'bayesian'`.
+    """
+    probability: Optional[ModelVarsFitDiagnosticsProbability] = None
+    latency: Optional[ModelVarsFitDiagnosticsLatency] = None
 
 
 class ModelVarsEntry(BaseModel):
@@ -163,6 +237,7 @@ class ModelVarsEntry(BaseModel):
     probability: ModelVarsProbability
     latency: Optional[ModelVarsLatency] = None
     quality: Optional[ModelVarsQuality] = Field(None, description="Bayesian-specific quality metadata (present only when source == 'bayesian')")
+    fit_diagnostics: Optional[ModelVarsFitDiagnostics] = Field(None, description="Bayesian-only fit diagnostics that are not promotion gate inputs (posterior unification plan §3)")
 
 
 # ── Bayesian posterior types (doc 21: unified posterior schema) ─────────────

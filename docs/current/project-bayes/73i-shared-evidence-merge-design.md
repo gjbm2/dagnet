@@ -1,4 +1,6 @@
-# 73h — Shared evidence merge design for BE CF and Bayes
+# 73i — Shared evidence merge design for BE CF and Bayes
+
+*(Renumbered 30-Apr-26 from 73h to 73i to disambiguate from [`73h-v3-router-and-carrier-conditioning-forensic.md`](73h-v3-router-and-carrier-conditioning-forensic.md). Same content.)*
 
 **Status**: Draft design  
 **Date opened**: 28-Apr-26  

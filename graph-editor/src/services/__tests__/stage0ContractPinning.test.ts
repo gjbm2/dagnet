@@ -215,6 +215,14 @@ describe('Stage 0 FE contract pinning â€” baseline-forecast vs current-answer (Â
       );
       const baselineForecastMean = 0.18;
       const cfPMean = 0.42;
+      // Posterior unification plan (29-Apr-26) Â§4 Step 6: extend the CF
+      // sentinel to assert that applyConditionedForecastToGraph does NOT
+      // write `p.posterior` / `p.latency.posterior` either. Those are
+      // single-writer surfaces owned by `applyPromotion`; CF must overlay
+      // its blended values at L4 only and never project a Beta or
+      // lognormal posterior.
+      const baselinePosterior = { distribution: 'beta', alpha: 25, beta: 58.33 };
+      const baselineLatPosterior = { distribution: 'lognormal', mu_mean: 2.0, sigma_mean: 0.4 };
       const graph: any = {
         edges: [
           {
@@ -224,7 +232,8 @@ describe('Stage 0 FE contract pinning â€” baseline-forecast vs current-answer (Â
             p: {
               mean: 0,
               forecast: { mean: baselineForecastMean, source: 'analytic' },
-              latency: {},
+              latency: { posterior: baselineLatPosterior },
+              posterior: baselinePosterior,
             },
           },
         ],
@@ -247,6 +256,10 @@ describe('Stage 0 FE contract pinning â€” baseline-forecast vs current-answer (Â
       expect(e?.p?.mean).toBeCloseTo(cfPMean, 6);
       expect(e?.p?.forecast?.mean).toBeCloseTo(baselineForecastMean, 6);
       expect(e?.p?.forecast?.source).toBe('analytic');
+      // Posterior surfaces survive CF apply unchanged (single-writer
+      // invariant: only applyPromotion can touch them).
+      expect(e?.p?.posterior).toEqual(baselinePosterior);
+      expect(e?.p?.latency?.posterior).toEqual(baselineLatPosterior);
     },
   );
 });

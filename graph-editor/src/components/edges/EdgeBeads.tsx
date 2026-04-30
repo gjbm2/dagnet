@@ -14,10 +14,10 @@ import { computeInboundN, type InboundNResult } from '../../services/statistical
 import { parseConstraints } from '../../lib/queryDSL';
 import type { ScenarioVisibilityMode, ViewOverlayMode } from '../../types';
 import { computeQualityTier } from '../../utils/bayesQualityTier';
+import { getProbabilityPosteriorView } from '../../utils/posteriorView';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
 import { depthBeadLabel, formatPct } from '../../services/dataDepthService';
 import { useScenarioHighlight } from '../../contexts/ScenarioHighlightContext';
-import type { ProbabilityPosterior } from '../../types';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_HEIGHT, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
 import { hasAnyEdgeQueryOverride, listOverriddenFlagPaths } from '../../utils/overrideFlags';
 
@@ -155,8 +155,10 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     // In Forecast Quality mode, show a single quality tier bead instead of normal beads.
     // The colour communicates the tier; the label surfaces diagnostic detail.
     if (viewOverlayMode === 'forecast-quality') {
-      const posterior = edge.p?.posterior as ProbabilityPosterior | undefined;
-      const tier = computeQualityTier(posterior);
+      // Posterior unification plan §4 Step 4: tier engine consumes the
+      // merged probability view (p.posterior + bayesian fit_diagnostics).
+      const view = getProbabilityPosteriorView(edge.p as any);
+      const tier = computeQualityTier(view);
       return [{
         type: 'probability' as const,
         values: [{ scenarioId: 'current', text: tier.reason, colour: '#FFFFFF' }],

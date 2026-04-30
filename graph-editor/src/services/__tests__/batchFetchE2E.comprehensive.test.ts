@@ -50,6 +50,7 @@ vi.mock('../sessionLogService', () => ({
     success: vi.fn(),
     error: vi.fn(),
     warning: vi.fn(),
+    isLevelEnabled: vi.fn(() => false),
   }
 }));
 

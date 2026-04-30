@@ -1107,101 +1107,75 @@
         },
         "posterior": {
           "type": "object",
-          "description": "Bayesian posterior for this probability parameter",
+          "description": "Promoted Beta-shape probability surface (posterior unification plan \u00a73). Source-agnostic projection of the active model_vars[*].probability entry, written exclusively by applyPromotion. Bayesian-fit-only metadata lives on model_vars[bayesian].fit_diagnostics / .quality, not here.",
           "additionalProperties": false,
           "properties": {
             "distribution": {
               "type": "string",
-              "description": "Distribution family fitted (e.g. 'beta', 'dirichlet-component')"
+              "description": "Distribution family (e.g. 'beta')"
             },
             "alpha": {
               "type": "number",
               "minimum": 0,
-              "description": "Beta posterior shape \u03b1"
+              "description": "Window-family Beta posterior shape \u03b1"
             },
             "beta": {
               "type": "number",
               "minimum": 0,
-              "description": "Beta posterior shape \u03b2"
+              "description": "Window-family Beta posterior shape \u03b2"
             },
-            "hdi_lower": {
+            "alpha_pred": {
               "type": "number",
               "minimum": 0,
-              "maximum": 1,
-              "description": "Lower bound of HDI"
+              "description": "Window-family predictive Beta \u03b1 (kappa-inflated)"
             },
-            "hdi_upper": {
+            "beta_pred": {
               "type": "number",
               "minimum": 0,
-              "maximum": 1,
-              "description": "Upper bound of HDI"
+              "description": "Window-family predictive Beta \u03b2 (kappa-inflated)"
             },
-            "hdi_level": {
+            "cohort_alpha": {
               "type": "number",
               "minimum": 0,
-              "maximum": 1,
-              "description": "HDI level used (e.g. 0.9)"
+              "description": "Cohort-family Beta posterior shape \u03b1"
             },
-            "ess": {
+            "cohort_beta": {
               "type": "number",
               "minimum": 0,
-              "description": "Effective sample size"
+              "description": "Cohort-family Beta posterior shape \u03b2"
             },
-            "rhat": {
+            "cohort_alpha_pred": {
               "type": "number",
               "minimum": 0,
-              "description": "Gelman-Rubin convergence diagnostic"
+              "description": "Cohort-family predictive Beta \u03b1 (kappa-inflated)"
             },
-            "evidence_grade": {
-              "type": "integer",
+            "cohort_beta_pred": {
+              "type": "number",
               "minimum": 0,
-              "maximum": 3,
-              "description": "Evidence degradation level (0=cold start, 1=weak, 2=mature, 3=full Bayesian)"
+              "description": "Cohort-family predictive Beta \u03b2 (kappa-inflated)"
             },
-            "fitted_at": {
-              "type": "string",
-              "description": "UK date (d-MMM-yy)"
+            "n_effective": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Source mass behind window-family Beta shape (canonical, matches model_vars)"
             },
-            "fingerprint": {
-              "type": "string",
-              "description": "Deterministic model hash"
+            "window_n_effective": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Legacy alias for n_effective; preserved for one cycle while consumers migrate"
+            },
+            "cohort_n_effective": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Source mass behind cohort-family Beta shape"
             },
             "provenance": {
               "type": "string",
-              "enum": [
-                "bayesian",
-                "pooled-fallback",
-                "point-estimate",
-                "skipped"
-              ]
+              "description": "Active source's source-basis label (broad vocabulary post-unification \u2014 see plan \u00a76.6)"
             },
-            "fit_history": {
-              "type": "array",
-              "description": "Rolling array of recent posterior snapshots",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "fitted_at": {
-                    "type": "string"
-                  },
-                  "alpha": {
-                    "type": "number"
-                  },
-                  "beta": {
-                    "type": "number"
-                  },
-                  "hdi_lower": {
-                    "type": "number"
-                  },
-                  "hdi_upper": {
-                    "type": "number"
-                  },
-                  "rhat": {
-                    "type": "number"
-                  }
-                }
-              }
+            "cohort_provenance": {
+              "type": "string",
+              "description": "Active source's cohort-family source-basis label"
             }
           }
         },
@@ -1247,11 +1221,15 @@
                   "alpha": {"type": "number", "minimum": 0, "description": "Window-family Beta α (aggregate, doc 73b §3.9)"},
                   "beta": {"type": "number", "minimum": 0, "description": "Window-family Beta β (aggregate, doc 73b §3.9)"},
                   "n_effective": {"type": "number", "minimum": 0, "description": "Source mass behind window-family Beta shape"},
-                  "provenance": {"type": "string", "description": "Source-basis label (e.g. analytic_window_baseline)"},
+                  "provenance": {"type": "string", "description": "Source-basis label (e.g. analytic_window_baseline / bayesian)"},
                   "cohort_alpha": {"type": "number", "minimum": 0, "description": "Cohort-family Beta α (aggregate, optional)"},
                   "cohort_beta": {"type": "number", "minimum": 0, "description": "Cohort-family Beta β (aggregate, optional)"},
                   "cohort_n_effective": {"type": "number", "minimum": 0, "description": "Source mass behind cohort-family Beta shape"},
-                  "cohort_provenance": {"type": "string", "description": "Source-basis label for cohort-family shape"}
+                  "cohort_provenance": {"type": "string", "description": "Source-basis label for cohort-family shape"},
+                  "alpha_pred": {"type": "number", "minimum": 0, "description": "Window-family predictive Beta α (kappa-inflated; posterior unification plan §3)"},
+                  "beta_pred": {"type": "number", "minimum": 0, "description": "Window-family predictive Beta β (kappa-inflated; posterior unification plan §3)"},
+                  "cohort_alpha_pred": {"type": "number", "minimum": 0, "description": "Cohort-family predictive Beta α (kappa-inflated; posterior unification plan §3)"},
+                  "cohort_beta_pred": {"type": "number", "minimum": 0, "description": "Cohort-family predictive Beta β (kappa-inflated; posterior unification plan §3)"}
                 },
                 "required": ["mean", "stdev"]
               },
@@ -1285,6 +1263,61 @@
                   "divergences": {"type": "integer", "minimum": 0},
                   "evidence_grade": {"type": "integer", "minimum": 0, "maximum": 3, "description": "0=cold start, 1=weak, 2=mature, 3=full Bayesian"},
                   "gate_passed": {"type": "boolean", "description": "meetsQualityGate() result at write time"}
+                }
+              },
+              "fit_diagnostics": {
+                "type": "object",
+                "description": "Bayesian-only fit diagnostics that are not promotion gate inputs (posterior unification plan §3). Sibling of `quality`. Present only when source == 'bayesian'.",
+                "additionalProperties": false,
+                "properties": {
+                  "probability": {
+                    "type": "object",
+                    "description": "Bayesian metadata for the probability fit (was on p.posterior).",
+                    "additionalProperties": false,
+                    "properties": {
+                      "fitted_at": {"type": "string"},
+                      "fingerprint": {"type": "string"},
+                      "prior_tier": {"type": "string"},
+                      "surprise_z": {"type": ["number", "null"]},
+                      "hdi_lower": {"type": "number"},
+                      "hdi_upper": {"type": "number"},
+                      "hdi_level": {"type": "number"},
+                      "hdi_lower_pred": {"type": "number"},
+                      "hdi_upper_pred": {"type": "number"},
+                      "cohort_hdi_lower": {"type": "number"},
+                      "cohort_hdi_upper": {"type": "number"},
+                      "cohort_hdi_lower_pred": {"type": "number"},
+                      "cohort_hdi_upper_pred": {"type": "number"},
+                      "delta_elpd": {"type": ["number", "null"]},
+                      "pareto_k_max": {"type": ["number", "null"]},
+                      "n_loo_obs": {"type": ["integer", "null"]},
+                      "ppc_coverage_90": {"type": ["number", "null"]},
+                      "ppc_n_obs": {"type": ["integer", "null"]},
+                      "ppc_traj_coverage_90": {"type": ["number", "null"]},
+                      "ppc_traj_n_obs": {"type": ["integer", "null"]}
+                    }
+                  },
+                  "latency": {
+                    "type": "object",
+                    "description": "Bayesian metadata for the latency fit (was on p.latency.posterior).",
+                    "additionalProperties": false,
+                    "properties": {
+                      "fitted_at": {"type": "string"},
+                      "fingerprint": {"type": "string"},
+                      "ess": {"type": "number", "minimum": 0},
+                      "rhat": {"type": "number", "minimum": 0},
+                      "hdi_t95_lower": {"type": "number", "minimum": 0},
+                      "hdi_t95_upper": {"type": "number", "minimum": 0},
+                      "hdi_level": {"type": "number"},
+                      "path_hdi_t95_lower": {"type": "number", "minimum": 0},
+                      "path_hdi_t95_upper": {"type": "number", "minimum": 0},
+                      "delta_elpd": {"type": ["number", "null"]},
+                      "pareto_k_max": {"type": ["number", "null"]},
+                      "n_loo_obs": {"type": ["integer", "null"]},
+                      "ppc_traj_coverage_90": {"type": ["number", "null"]},
+                      "ppc_traj_n_obs": {"type": ["integer", "null"]}
+                    }
+                  }
                 }
               }
             },
@@ -1436,17 +1469,17 @@
         },
         "posterior": {
           "type": "object",
-          "description": "Bayesian posterior for latency parameters (written by fitting engine)",
+          "description": "Promoted lognormal latency posterior surface (posterior unification plan \u00a73). Source-agnostic projection of the active model_vars[*].latency entry, written exclusively by applyPromotion. Bayesian-fit-only metadata (ESS/Rhat/fitted_at/fingerprint, HDI bands on t95, PPC, LOO) lives on model_vars[bayesian].fit_diagnostics.latency, not here.",
           "additionalProperties": false,
           "properties": {
             "distribution": {
               "type": "string",
-              "description": "Distribution family fitted (e.g. 'lognormal')"
+              "description": "Distribution family (e.g. 'lognormal')"
             },
             "onset_delta_days": {
               "type": "number",
               "minimum": 0,
-              "description": "Posterior onset (may differ from pre-Bayes value)"
+              "description": "Posterior onset"
             },
             "mu_mean": {
               "type": "number",
@@ -1456,6 +1489,11 @@
               "type": "number",
               "minimum": 0,
               "description": "Posterior SD of \u03bc"
+            },
+            "mu_sd_pred": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Predictive SD of \u03bc (kappa_lat-inflated; absent when no kappa_lat)"
             },
             "sigma_mean": {
               "type": "number",
@@ -1499,6 +1537,11 @@
               "minimum": 0,
               "description": "Path-level posterior SD of \u03bc"
             },
+            "path_mu_sd_pred": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level predictive SD of \u03bc (absent in current model)"
+            },
             "path_sigma_mean": {
               "type": "number",
               "minimum": 0,
@@ -1533,83 +1576,13 @@
               "type": "number",
               "description": "Path-level posterior correlation between onset and \u03bc"
             },
-            "path_hdi_t95_lower": {
-              "type": "number",
-              "minimum": 0,
-              "description": "Path-level lower HDI bound for t95 (days)"
-            },
-            "path_hdi_t95_upper": {
-              "type": "number",
-              "minimum": 0,
-              "description": "Path-level upper HDI bound for t95 (days)"
-            },
-            "hdi_t95_lower": {
-              "type": "number",
-              "minimum": 0,
-              "description": "Lower HDI bound for t95 (days)"
-            },
-            "hdi_t95_upper": {
-              "type": "number",
-              "minimum": 0,
-              "description": "Upper HDI bound for t95 (days)"
-            },
-            "hdi_level": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1,
-              "description": "HDI level used (e.g. 0.9)"
-            },
-            "ess": {
-              "type": "number",
-              "minimum": 0,
-              "description": "Effective sample size"
-            },
-            "rhat": {
-              "type": "number",
-              "minimum": 0,
-              "description": "Convergence diagnostic"
-            },
-            "fitted_at": {
-              "type": "string",
-              "description": "UK date (d-MMM-yy)"
-            },
-            "fingerprint": {
-              "type": "string",
-              "description": "Deterministic model hash"
-            },
             "provenance": {
               "type": "string",
-              "enum": [
-                "bayesian",
-                "pooled-fallback",
-                "point-estimate",
-                "skipped"
-              ]
+              "description": "Active source's source-basis label (broad vocabulary post-unification \u2014 see plan \u00a76.6)"
             },
-            "fit_history": {
-              "type": "array",
-              "description": "Rolling array of recent posterior snapshots",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "fitted_at": {
-                    "type": "string"
-                  },
-                  "mu_mean": {
-                    "type": "number"
-                  },
-                  "sigma_mean": {
-                    "type": "number"
-                  },
-                  "onset_delta_days": {
-                    "type": "number"
-                  },
-                  "rhat": {
-                    "type": "number"
-                  }
-                }
-              }
+            "path_provenance": {
+              "type": "string",
+              "description": "Active source's path-level source-basis label"
             }
           }
         },

@@ -9,7 +9,7 @@
  * tuned without rerunning fits.
  */
 
-import type { ProbabilityPosterior, LatencyPosterior } from '../types';
+import type { ProbabilityPosteriorView, LatencyPosteriorView } from './posteriorView';
 
 export type QualityTierLevel =
   | 'failed'    // Red — convergence failure or serious diagnostic issue
@@ -37,26 +37,36 @@ const DEGRADED_PROVENANCES = new Set(['pooled-fallback', 'point-estimate']);
 
 // ── Core computation ────────────────────────────────────────
 
-type Posterior = ProbabilityPosterior | LatencyPosterior;
+type PosteriorViewLike = ProbabilityPosteriorView | LatencyPosteriorView;
 
 /**
- * Compute the quality tier for a posterior.
- * Returns 'no-data' when posterior is null/undefined.
+ * Compute the quality tier for a posterior view (posterior unification
+ * plan §4 Step 4). Accepts the merged view returned by
+ * `getProbabilityPosteriorView` / `getLatencyPosteriorView` — combines
+ * the source-agnostic posterior surface with the bayesian source ledger's
+ * `fit_diagnostics` and `quality` blocks.
+ *
+ * Returns 'no-data' when view is null/undefined or carries no
+ * convergence diagnostics (which is expected when the active source is
+ * analytic — bayesian-only diagnostics are absent).
  */
-export function computeQualityTier(posterior: Posterior | null | undefined): QualityTier {
-  if (!posterior) {
+export function computeQualityTier(view: PosteriorViewLike | null | undefined): QualityTier {
+  if (!view) {
     return { tier: 'no-data', reason: 'No posterior available' };
   }
 
-  // Guard: if essential fields are missing, treat as no-data
-  const rhat = posterior.rhat;
-  const ess = posterior.ess;
+  // Guard: if essential fields are missing, treat as no-data. Analytic
+  // sources legitimately reach here with no rhat/ess (the bayesian-only
+  // metadata block is absent), so this branch is the canonical
+  // "analytic active source" exit.
+  const rhat = view.rhat;
+  const ess = view.ess;
   if (rhat == null || ess == null) {
     return { tier: 'no-data', reason: 'Posterior present but missing convergence diagnostics' };
   }
 
-  // divergences is on ProbabilityPosterior but not LatencyPosterior
-  const divergences = 'divergences' in posterior ? ((posterior as ProbabilityPosterior).divergences ?? 0) : 0;
+  // divergences is bayesian-only — read from the merged view (originally on quality)
+  const divergences = (view as ProbabilityPosteriorView).divergences ?? 0;
 
   // ── FAILED tier (red) ─────────────────────────────────────
   if (rhat > RHAT_FAILED) {
@@ -79,22 +89,23 @@ export function computeQualityTier(posterior: Posterior | null | undefined): Qua
     warnings.push(`${divergences} divergences`);
   }
 
-  // surprise_z only exists on ProbabilityPosterior
-  const surpriseZ = 'surprise_z' in posterior ? (posterior as ProbabilityPosterior).surprise_z : null;
+  // surprise_z is bayesian-only (was on p.posterior, now on fit_diagnostics.probability)
+  const surpriseZ = (view as ProbabilityPosteriorView).surprise_z;
   if (surpriseZ != null && Math.abs(surpriseZ) > SURPRISE_Z_THRESHOLD) {
     warnings.push(`surprise z=${surpriseZ.toFixed(1)}`);
   }
 
-  if (posterior.provenance && DEGRADED_PROVENANCES.has(posterior.provenance)) {
-    warnings.push(`degraded provenance: ${posterior.provenance}`);
+  if (view.provenance && DEGRADED_PROVENANCES.has(view.provenance)) {
+    warnings.push(`degraded provenance: ${view.provenance}`);
   }
 
-  // LOO-ELPD model adequacy (doc 32)
-  const paretoK = 'pareto_k_max' in posterior ? (posterior as ProbabilityPosterior).pareto_k_max : null;
+  // LOO-ELPD model adequacy (doc 32) — both probability and latency views
+  // have these fields after the unification merge.
+  const paretoK = (view as any).pareto_k_max;
   if (paretoK != null && paretoK > 0.7) {
     warnings.push('influential observations');
   }
-  const deltaElpd = 'delta_elpd' in posterior ? (posterior as ProbabilityPosterior).delta_elpd : null;
+  const deltaElpd = (view as any).delta_elpd;
   if (deltaElpd != null && deltaElpd < 0) {
     warnings.push('worse than analytic');
   }
@@ -104,10 +115,9 @@ export function computeQualityTier(posterior: Posterior | null | undefined): Qua
   }
 
   // ── GOOD tier (green spectrum) ────────────────────────────
-  // evidence_grade only exists on ProbabilityPosterior
-  const grade = 'evidence_grade' in posterior
-    ? (posterior as ProbabilityPosterior).evidence_grade
-    : 3; // Latency posteriors that pass diagnostics are treated as fully fitted
+  // evidence_grade is on quality (was on p.posterior, now on quality).
+  // Latency views that pass diagnostics treated as fully fitted.
+  const grade = (view as ProbabilityPosteriorView).evidence_grade ?? 3;
 
   switch (grade) {
     case 0: return { tier: 'good-0', reason: 'Cold start — prior-dominated' };

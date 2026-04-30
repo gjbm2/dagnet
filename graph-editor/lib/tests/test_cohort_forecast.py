@@ -97,8 +97,16 @@ class TestReadEdgeCohortParams:
         assert params['sigma'] == 0.4
         assert params['p'] == 0.75
 
-    def test_returns_none_without_mu(self):
-        edge = {'p': {'latency': {'sigma': 0.5}, 'forecast': {'mean': 0.8}}}
+    def test_returns_none_without_latency(self):
+        """No latency block at all → resolver fallback yields sigma=0 → None.
+
+        Post-dedup (canonical reader in model_resolver), a partial latency
+        block with only sigma is no longer rejected on mu-absent — the
+        resolver's flat-field fallback defaults missing mu to 0.0, which
+        is a legitimate log-mean. The defensive gate fires on sigma<=0
+        and prob<=0, not on mu-absence.
+        """
+        edge = {'p': {'forecast': {'mean': 0.8}}}
         assert read_edge_cohort_params(edge) is None
 
     def test_returns_none_without_sigma(self):

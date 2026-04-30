@@ -3,7 +3,7 @@
 ## Objective
 
 Implement the typed shared evidence merge layer designed in
-[`docs/current/project-bayes/73h-shared-evidence-merge-design.md`](../project-bayes/73h-shared-evidence-merge-design.md).
+[`docs/current/project-bayes/73i-shared-evidence-merge-design.md`](../project-bayes/73i-shared-evidence-merge-design.md) (renumbered 30-Apr-26 from 73h to 73i to disambiguate from `73h-v3-router-and-carrier-conditioning-forensic.md`).
 
 The immediate trigger is the Q4 defect on `synth-lat4`: under WP8-off, the legacy file supplement helper admits all bare `cohort(...)` daily points into the rate-conditioning role, double-counting from multiple anchor-rooted cohort objects. Reported response total of `n=71224, k=41700` is invalid for any role; correct E for `window_subject_helper` is `n=54182, k=32420` (snapshot window covered + file window uncovered, both cohort slices excluded).
 
@@ -152,7 +152,7 @@ Looking at `context-gate.py:was_read`: it matches receipts' cited paths against 
 ### Working-tree pre-existing (NOT my changes — be careful when committing)
 - [graph-editor/lib/api_handlers.py](../../../graph-editor/lib/api_handlers.py) — user removed the legacy supplement block from `handle_conditioned_forecast` (lines ~2364) and added `extra_conditioning_evidence=` to cohort_maturity_v3 (line 1717). My Stage 3b/Stage 4 edits sit on top of this.
 - [graph-editor/lib/runner/forecast_runtime.py](../../../graph-editor/lib/runner/forecast_runtime.py) — user's `DRIFT_FRACTION` → `PRIOR_PROPOSAL_SD_FACTOR` rename (2.0 → 1.0) at lines ~1295-1352 is unrelated to 73h; it's part of 73j IS-proposal work. My Stage 3a edits sit alongside this.
-- [docs/current/project-bayes/73h-shared-evidence-merge-design.md](../project-bayes/73h-shared-evidence-merge-design.md) — substantially expanded (377 → ~830 lines) with the five design points reflected before Stage 1 began.
+- [docs/current/project-bayes/73i-shared-evidence-merge-design.md](../project-bayes/73i-shared-evidence-merge-design.md) — substantially expanded (377 → ~830 lines) with the five design points reflected before Stage 1 began. (Renumbered 30-Apr-26 from 73h to 73i.)
 
 ### Read for context (Stage 2/3)
 - [docs/current/codebase/TOPOLOGY.md](../codebase/TOPOLOGY.md) — system map

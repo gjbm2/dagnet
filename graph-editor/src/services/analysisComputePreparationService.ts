@@ -111,6 +111,7 @@ async function runScenarioMaterialisation(
       workspace,
     },
   );
+
   return {
     graph: materialised.graph,
     notFullyMaterialised: materialised.notFullyMaterialised,

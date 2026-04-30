@@ -1,5 +1,29 @@
 /**
- * BayesPosteriorCard — posterior display for edge_info Model tab.
+ * PromotedModelCard — promoted-source view for the edge_info Model tab.
+ *
+ * Renders the *currently promoted* model from the L1.5/L2 promoted surfaces
+ * on the edge — `p.posterior` (Beta), `p.latency.posterior` (lognormal),
+ * `p.latency.{promoted_t95, promoted_path_t95}`. Source-agnostic by design:
+ * whatever the active selector resolves to is what this card displays. If
+ * the promoted surfaces are wrong/stale/empty, this card surfaces that
+ * defect rather than masking it via fallback to `model_vars[active]`.
+ *
+ * Bayesian-only diagnostic metadata (HDI, ess, rhat, fitted_at, fingerprint,
+ * ppc, delta_elpd) lives on `model_vars[bayesian].fit_diagnostics` /
+ * `quality` and is merged into the rendered view via
+ * `getProbabilityPosteriorView` / `getLatencyPosteriorView`. The merge is
+ * unconditional in the view builder so other consumers (forecast-quality
+ * bead, useBayesTrigger job report) see bayesian fit health regardless of
+ * promotion; this card gates HDI rows, the convergence footer, and the
+ * Reset priors / Delete history affordances on `view.source === 'bayesian'`
+ * locally so the rendered card describes only the *currently promoted*
+ * source. A header at the top of the card names that source explicitly.
+ *
+ * Per-source views (one card per `model_vars` entry, "what does each source
+ * believe") are handled by `ModelCard`, not this component.
+ *
+ * (Renamed 30-Apr-26 from `BayesPosteriorCard` — the old name predates
+ * posterior unification, when the surface was bayesian-only.)
  *
  * Uses CSS flex-wrap for responsive two-column (wide) / stacked (narrow) layout.
  * No grid lines — uses spacing and muted headers like the rest of the app.
@@ -7,7 +31,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
-import type { ProbabilityPosterior, LatencyPosterior } from '../../types';
+import type { ProbabilityPosteriorView, LatencyPosteriorView } from '../../utils/posteriorView';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel, freshnessColour } from '../../utils/freshnessDisplay';
 import GlossaryTooltip from '../GlossaryTooltip';
@@ -22,8 +46,12 @@ function fmt(v: number | null | undefined, dp = 4): string {
 }
 
 interface Props {
-  probability?: ProbabilityPosterior | null;
-  latency?: LatencyPosterior | null;
+  // Posterior unification plan §4 Step 4: callers pass merged views from
+  // `getProbabilityPosteriorView(edge.p)` / `getLatencyPosteriorView(edge.p)`
+  // so this component can read both source-agnostic surface data and
+  // bayesian-only fit diagnostics from a single object.
+  probability?: ProbabilityPosteriorView | null;
+  latency?: LatencyPosteriorView | null;
   /** Edge-level t95 point estimate (days) — from edge.p.latency.t95 */
   t95?: number | null;
   /** Path-level t95 point estimate (days) — from edge.p.latency.path_t95 */
@@ -35,9 +63,11 @@ interface Props {
   onDeleteHistory?: () => void;
 }
 
-export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme = 'dark', onResetPriors, onDeleteHistory }: Props) {
+export function PromotedModelCard({ probability, latency, t95, pathT95, theme = 'dark', onResetPriors, onDeleteHistory }: Props) {
   const post = probability;
   const lat = latency;
+  const activeSource = post?.source ?? lat?.source;
+  const isBayesian = activeSource === 'bayesian';
 
   const hasEdgeP = post?.alpha != null && post?.beta != null;
   const pa = (post as any)?.cohort_alpha;
@@ -56,9 +86,9 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
   // the posterior card answers "what does the model believe about this
   // parameter?", not "what observations might I see next?". Forecast
   // consumers read the predictive pair separately.
-  const edgePMean = hasEdgeP ? post!.alpha / (post!.alpha + post!.beta) : null;
+  const edgePMean = hasEdgeP ? post!.alpha! / (post!.alpha! + post!.beta!) : null;
   const edgePSd = hasEdgeP
-    ? Math.sqrt(post!.alpha * post!.beta / ((post!.alpha + post!.beta) ** 2 * (post!.alpha + post!.beta + 1)))
+    ? Math.sqrt(post!.alpha! * post!.beta! / ((post!.alpha! + post!.beta!) ** 2 * (post!.alpha! + post!.beta! + 1)))
     : null;
   const pathPMean = hasPathP ? pa / (pa + pb) : null;
   const pathPSd = hasPathP
@@ -66,16 +96,25 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
     : null;
 
   // ── Convergence footer ──
-  const tier = post ? computeQualityTier(post) : null;
+  // Bayesian-only: r̂, ESS, evidence grade, fitted_at all describe the
+  // bayesian fit. The merged view from getProbabilityPosteriorView includes
+  // these fields whenever model_vars[bayesian] exists (so other consumers —
+  // forecast-quality bead overlay, useBayesTrigger reporting — still see
+  // bayesian fit health regardless of promotion). The card itself describes
+  // the *currently promoted* model, so the footer is suppressed entirely
+  // when analytic is the active source.
+  const tier = (isBayesian && post) ? computeQualityTier(post) : null;
   const tierColour = tier ? qualityTierToColour(tier.tier, theme) : undefined;
   const footerParts: Array<{ text: string; colour?: string }> = [];
-  if (tier) footerParts.push({ text: qualityTierLabel(tier.tier), colour: tierColour });
-  if (post?.rhat != null) footerParts.push({ text: `r̂ ${post.rhat.toFixed(4)}` });
-  if (post?.ess != null) footerParts.push({ text: `ESS ${Math.round(post.ess)}` });
-  if (post?.evidence_grade != null) footerParts.push({ text: `${post.evidence_grade}/3` });
-  if (post?.fitted_at) {
-    const rel = formatRelativeTime(post.fitted_at);
-    footerParts.push({ text: rel ?? post.fitted_at, colour: freshnessColour(getFreshnessLevel(post.fitted_at), theme) });
+  if (isBayesian) {
+    if (tier) footerParts.push({ text: qualityTierLabel(tier.tier), colour: tierColour });
+    if (post?.rhat != null) footerParts.push({ text: `r̂ ${post.rhat.toFixed(4)}` });
+    if (post?.ess != null) footerParts.push({ text: `ESS ${Math.round(post.ess)}` });
+    if (post?.evidence_grade != null) footerParts.push({ text: `${post.evidence_grade}/3` });
+    if (post?.fitted_at) {
+      const rel = formatRelativeTime(post.fitted_at);
+      footerParts.push({ text: rel ?? post.fitted_at, colour: freshnessColour(getFreshnessLevel(post.fitted_at), theme) });
+    }
   }
   // LOO-ELPD model adequacy (doc 32): raw numbers suppressed from
   // headline footer — they're uninterpretable to business users.
@@ -105,10 +144,14 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
   // ── Build column content ──
   // Doc 61: reporting surfaces use bare (epistemic) HDI, not the predictive
   // variant. The card shows the model's belief about the rate parameter.
-  const edgeHdiLo = post?.hdi_lower;
-  const edgeHdiHi = post?.hdi_upper;
-  const pathHdiLo = (post as any)?.cohort_hdi_lower;
-  const pathHdiHi = (post as any)?.cohort_hdi_upper;
+  // HDI rows are bayesian-only — they come from `model_vars[bayesian]
+  // .fit_diagnostics` via the merged view. The view always includes them
+  // when a bayesian fit exists; render them only when bayesian is the
+  // currently promoted source so the card describes the *active* model.
+  const edgeHdiLo = isBayesian ? post?.hdi_lower : undefined;
+  const edgeHdiHi = isBayesian ? post?.hdi_upper : undefined;
+  const pathHdiLo = isBayesian ? (post as any)?.cohort_hdi_lower : undefined;
+  const pathHdiHi = isBayesian ? (post as any)?.cohort_hdi_upper : undefined;
 
   const edgeProbRows = hasEdgeP ? (
     <>
@@ -126,13 +169,15 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
 
   // Doc 61: all reporting ± are epistemic (bare names) so there is no
   // mixed-flavour surface to annotate. Footnote retired.
+  // HDI rows below (onset_hdi_*, hdi_t95_*) come from the bayesian latency
+  // fit_diagnostics. Same gating rationale as the probability HDI above.
   const edgeLatRows = hasEdgeLat ? (
     <>
       <Row label="onset" term="onset" value={`${fmt(lat!.onset_delta_days ?? lat!.onset_mean, 1)}d${lat!.onset_sd != null ? ` ± ${fmt(lat!.onset_sd, 1)}d` : ''}`} />
-      {lat!.onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.onset_hdi_lower, 1)}d — ${fmt(lat!.onset_hdi_upper, 1)}d`} />}
+      {isBayesian && lat!.onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.onset_hdi_lower, 1)}d — ${fmt(lat!.onset_hdi_upper, 1)}d`} />}
       <Row label="μ" term="mu" value={`${fmt(lat!.mu_mean, 3)} ± ${fmt(lat!.mu_sd, 3)}`} />
       <Row label="σ" term="sigma" value={`${fmt(lat!.sigma_mean, 3)} ± ${fmt(lat!.sigma_sd, 3)}`} />
-      {lat!.hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt(lat!.hdi_t95_lower, 1)}d — ${fmt(lat!.hdi_t95_upper, 1)}d`} />}
+      {isBayesian && lat!.hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt(lat!.hdi_t95_lower, 1)}d — ${fmt(lat!.hdi_t95_upper, 1)}d`} />}
       {lat!.onset_mu_corr != null && <Row label="onset↔μ" term="onset-mu-corr" value={fmt(lat!.onset_mu_corr, 3)} />}
     </>
   ) : null;
@@ -140,10 +185,10 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
   const pathLatRows = hasPathLat ? (
     <>
       <Row label="onset" term="onset" value={`${fmt(lat!.path_onset_delta_days, 1)}d${lat!.path_onset_sd != null ? ` ± ${fmt(lat!.path_onset_sd, 1)}d` : ''}`} />
-      {lat!.path_onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.path_onset_hdi_lower, 1)}d — ${fmt(lat!.path_onset_hdi_upper, 1)}d`} />}
+      {isBayesian && lat!.path_onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.path_onset_hdi_lower, 1)}d — ${fmt(lat!.path_onset_hdi_upper, 1)}d`} />}
       <Row label="μ" term="mu" value={`${fmt(lat!.path_mu_mean, 3)} ± ${fmt(lat!.path_mu_sd, 3)}`} />
       <Row label="σ" term="sigma" value={`${fmt(lat!.path_sigma_mean, 3)} ± ${fmt(lat!.path_sigma_sd, 3)}`} />
-      {(lat as any)?.path_hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt((lat as any).path_hdi_t95_lower, 1)}d — ${fmt((lat as any).path_hdi_t95_upper, 1)}d`} />}
+      {isBayesian && (lat as any)?.path_hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt((lat as any).path_hdi_t95_lower, 1)}d — ${fmt((lat as any).path_hdi_t95_upper, 1)}d`} />}
       {(lat as any)?.path_onset_mu_corr != null && <Row label="onset↔μ" term="onset-mu-corr" value={fmt((lat as any).path_onset_mu_corr, 3)} />}
     </>
   ) : null;
@@ -160,9 +205,17 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
     </div>
   ) : null;
 
+  // Path-curve scalar fallback: when path latency exists but no cohort Beta
+  // (analytic source produces a single rate, not separate window/cohort fits),
+  // use the edge probability for the path curve so the chart still draws both
+  // CDFs side-by-side. Mirrors the per-source ModelCard's behaviour.
+  const chartPathP = pathPMean ?? (hasPathLat ? edgePMean : null);
+  const chartPathPSd = pathPSd ?? (hasPathLat ? edgePSd : null);
+
   // ── Single responsive layout: flex-wrap gives two columns when wide, stacks when narrow ──
   return (
     <div style={{ padding: '4px 10px 6px' }}>
+      <PromotedSourceHeader source={activeSource} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px' }}>
         {/* Edge column */}
         <div style={{ flex: '1 1 150px', minWidth: 0 }}>
@@ -184,7 +237,7 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
         )}
       </div>
       {footer}
-      {(onResetPriors || onDeleteHistory) && (
+      {isBayesian && (onResetPriors || onDeleteHistory) && (
         <div style={{
           display: 'flex', gap: 12, padding: '4px 0 2px',
           fontSize: 10, lineHeight: '15px',
@@ -219,10 +272,35 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
         edgeP={edgePMean} edgeMu={lat?.mu_mean} edgeSigma={lat?.sigma_mean} edgeOnset={lat?.onset_delta_days ?? lat?.onset_mean}
         edgePSd={edgePSd} edgeMuSd={lat?.mu_sd} edgeSigmaSd={lat?.sigma_sd} edgeOnsetSd={lat?.onset_sd}
         edgeOnsetMuCorr={lat?.onset_mu_corr} edgeT95={t95}
-        pathP={pathPMean} pathMu={lat?.path_mu_mean} pathSigma={lat?.path_sigma_mean} pathOnset={lat?.path_onset_delta_days}
-        pathPSd={pathPSd} pathMuSd={lat?.path_mu_sd} pathSigmaSd={lat?.path_sigma_sd} pathOnsetSd={lat?.path_onset_sd}
+        pathP={chartPathP} pathMu={lat?.path_mu_mean} pathSigma={lat?.path_sigma_mean} pathOnset={lat?.path_onset_delta_days}
+        pathPSd={chartPathPSd} pathMuSd={lat?.path_mu_sd} pathSigmaSd={lat?.path_sigma_sd} pathOnsetSd={lat?.path_onset_sd}
         pathOnsetMuCorr={(lat as any)?.path_onset_mu_corr} pathT95={pathT95}
       />
+    </div>
+  );
+}
+
+// ── Promoted-source header ──────────────────────────────────────────────────
+//
+// Tells the reader at a glance which model_vars source is currently feeding
+// the promoted surfaces shown in the card. Reads from the merged view's
+// `source` field (set by getProbabilityPosteriorView / getLatencyPosteriorView
+// from p.forecast.source). When there is no resolvable active source —
+// e.g. a graph in transient state with no model_vars — the header degrades
+// to "No source promoted" so the absence is visible rather than silent.
+
+function PromotedSourceHeader({ source }: { source?: 'bayesian' | 'analytic' }) {
+  const label = source === 'bayesian' ? 'Bayesian' : source === 'analytic' ? 'Analytic' : 'No source promoted';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'baseline', gap: 6,
+      padding: '0 0 4px', marginBottom: 2,
+      fontSize: 10, color: 'var(--text-muted, #999)',
+    }}>
+      <span style={{
+        fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+      }}>Promoted</span>
+      <span style={{ fontSize: 11, color: 'var(--text-primary, #ddd)' }}>{label}</span>
     </div>
   );
 }

@@ -4,6 +4,8 @@ import {
   effectivePreference,
   promoteModelVars,
   applyPromotion,
+  buildAnalyticProbabilityBlock,
+  momentMatchAnalyticBeta,
 } from '../modelVarsResolution';
 import type { ModelVarsEntry, ProbabilityParam } from '../../types';
 
@@ -224,6 +226,131 @@ describe('promoteModelVars', () => {
   });
 });
 
+// ── buildAnalyticProbabilityBlock joint-consistency contract ────────────────
+//
+// Forensic audit 30-Apr-26 R3: pin the implicit invariant that
+// `model_vars[analytic].probability.{mean, stdev, alpha, beta}` are jointly
+// consistent — moment-matched from the same recency-weighted population so
+// (mean, stdev) and (α, β) describe the *same* Beta. The invariant is
+// maintained by code-path coincidence today (addEvidenceAndForecastScalars
+// produces both `mean = weighted_k/weighted_n` and
+// `stdev = sqrt(p(1-p)/N)` from the same population, and
+// `buildAnalyticProbabilityBlock` then moment-matches α/β from those).
+// A future change to either input source could violate it silently, so
+// this contract test pins:
+//
+//   mean ≈ alpha / (alpha + beta)
+//   stdev² ≈ alpha · beta / ((alpha+beta)² · (alpha+beta+1))
+//
+// to floating-point tolerance, plus the predictive pair when stdev_pred
+// is supplied.
+describe('buildAnalyticProbabilityBlock — (mean, stdev, α, β) joint consistency', () => {
+  it('emits α, β whose closed-form mean/SD round-trip to the input scalars', () => {
+    // Realistic shipped-to-delivered fixture: 71% conversion at moderate N.
+    const mean = 0.71;
+    const stdev = Math.sqrt(mean * (1 - mean) / 97);
+    const block = buildAnalyticProbabilityBlock(mean, stdev, { n_effective: 97 });
+
+    expect(block.alpha).toBeDefined();
+    expect(block.beta).toBeDefined();
+    const a = block.alpha!;
+    const b = block.beta!;
+    const sum = a + b;
+
+    // Closed-form mean from α/β agrees with the input mean.
+    expect(a / sum).toBeCloseTo(mean, 12);
+
+    // Closed-form Beta variance agrees with the input variance.
+    const expectedVar = stdev * stdev;
+    const closedVar = (a * b) / (sum * sum * (sum + 1));
+    expect(closedVar).toBeCloseTo(expectedVar, 12);
+  });
+
+  it('preserves the joint contract under the predictive pair', () => {
+    // Predictive overdispersion: stdev_pred > stdev (kappa-inflated).
+    const mean = 0.42;
+    const stdev = Math.sqrt(mean * (1 - mean) / 500);     // epistemic
+    const stdev_pred = Math.sqrt(mean * (1 - mean) / 50); // predictive (κ ≈ 9)
+    const block = buildAnalyticProbabilityBlock(mean, stdev, {
+      n_effective: 500,
+      stdev_pred,
+    });
+
+    // Epistemic block remains consistent.
+    expect(block.alpha! / (block.alpha! + block.beta!)).toBeCloseTo(mean, 12);
+    const epistemicSum = block.alpha! + block.beta!;
+    expect((block.alpha! * block.beta!) / (epistemicSum * epistemicSum * (epistemicSum + 1)))
+      .toBeCloseTo(stdev * stdev, 12);
+
+    // Predictive block consistent against (mean, stdev_pred).
+    expect(block.alpha_pred).toBeDefined();
+    expect(block.beta_pred).toBeDefined();
+    const predSum = block.alpha_pred! + block.beta_pred!;
+    expect(block.alpha_pred! / predSum).toBeCloseTo(mean, 12);
+    expect((block.alpha_pred! * block.beta_pred!) / (predSum * predSum * (predSum + 1)))
+      .toBeCloseTo(stdev_pred * stdev_pred, 12);
+
+    // Predictive concentration is smaller than epistemic (overdispersion → wider).
+    expect(predSum).toBeLessThan(epistemicSum);
+  });
+
+  it('emits no Beta shape (no α, no β) when moment-match is infeasible — does not fabricate inconsistent fields', () => {
+    // Mean at boundary — moment-match cannot produce a valid Beta.
+    const blockBoundary = buildAnalyticProbabilityBlock(0, 0.1);
+    expect(blockBoundary.alpha).toBeUndefined();
+    expect(blockBoundary.beta).toBeUndefined();
+    expect(blockBoundary.n_effective).toBeUndefined();
+    // Mean and stdev still emitted on the block (they're the inputs).
+    expect(blockBoundary.mean).toBe(0);
+    expect(blockBoundary.stdev).toBe(0.1);
+
+    // Variance ≥ mean·(1−mean) — Beta-impossible.
+    const blockOver = buildAnalyticProbabilityBlock(0.5, 0.5);
+    expect(blockOver.alpha).toBeUndefined();
+    expect(blockOver.beta).toBeUndefined();
+
+    // Zero stdev — degenerate (single-point belief).
+    const blockZero = buildAnalyticProbabilityBlock(0.5, 0);
+    expect(blockZero.alpha).toBeUndefined();
+    expect(blockZero.beta).toBeUndefined();
+  });
+
+  it('uses `weighted_n` opt over moment-match concentration when both are available', () => {
+    // Without override, n_effective comes from the moment-match concentration.
+    const mean = 0.3;
+    const stdev = 0.05;
+    const blockNoOverride = buildAnalyticProbabilityBlock(mean, stdev);
+    expect(blockNoOverride.n_effective).toBeDefined();
+    const matchedConcentration = blockNoOverride.n_effective!;
+
+    // When `n_effective` is supplied (e.g. weighted_n from FE topo), it is used
+    // verbatim. The Beta α, β are unchanged — the caller is asserting this
+    // entry's source mass for the doc 52 blend, not redefining the Beta shape.
+    const blockWithOverride = buildAnalyticProbabilityBlock(mean, stdev, {
+      n_effective: 250,
+    });
+    expect(blockWithOverride.n_effective).toBe(250);
+    expect(blockWithOverride.alpha).toBe(blockNoOverride.alpha);
+    expect(blockWithOverride.beta).toBe(blockNoOverride.beta);
+
+    // Sanity: matchedConcentration is a typical Pearson-shape value.
+    expect(matchedConcentration).toBeGreaterThan(0);
+  });
+
+  it('momentMatchAnalyticBeta agrees with buildAnalyticProbabilityBlock for the same inputs', () => {
+    // The block builder is a thin wrapper that calls momentMatchAnalyticBeta;
+    // pin the contract that the builder doesn't introduce its own derivation.
+    const mean = 0.6714;
+    const stdev = 0.0088;
+    const moments = momentMatchAnalyticBeta(mean, stdev);
+    const block = buildAnalyticProbabilityBlock(mean, stdev);
+
+    expect(block.alpha).toBe(moments.alpha);
+    expect(block.beta).toBe(moments.beta);
+    expect(block.n_effective).toBe(moments.n_effective);
+  });
+});
+
 // ── applyPromotion ──────────────────────────────────────────────────────────
 
 describe('applyPromotion', () => {
@@ -345,7 +472,13 @@ describe('applyPromotion', () => {
     expect(p.latency?.promoted_onset_delta_days).toBe(2.5);
   });
 
-  it('should not write latency when ProbabilityParam has no latency block', () => {
+  it('initialises p.latency on demand to project the latency posterior surface', () => {
+    // Posterior unification plan §3 / Step 5: p.latency.posterior is fully
+    // derived from the active bayesian source. When the source carries a
+    // latency posterior, applyPromotion initialises p.latency = {} and
+    // writes p.latency.posterior. Promoted scalar fields (mu, sigma, t95,
+    // promoted_*) are not written because there is no pre-existing
+    // p.latency input that would gate them.
     const p: ProbabilityParam = {
       mean: 0,
       stdev: 0,
@@ -356,7 +489,14 @@ describe('applyPromotion', () => {
 
     expect(source).toBe('bayesian');
     expect(p.mean).toBe(0); // unchanged — topo pass computes p.mean
-    expect(p.latency).toBeUndefined();
+    expect(p.latency).toBeDefined();
+    expect((p.latency as any).posterior).toBeDefined();
+    expect((p.latency as any).posterior.mu_mean).toBe(2.3);
+    expect((p.latency as any).posterior.sigma_mean).toBe(0.7);
+    // Promoted scalar fields are skipped because p.latency was absent
+    // pre-promotion (no t95 input to promote_* alongside).
+    expect((p.latency as any).mu).toBeUndefined();
+    expect((p.latency as any).promoted_t95).toBeUndefined();
   });
 });
 

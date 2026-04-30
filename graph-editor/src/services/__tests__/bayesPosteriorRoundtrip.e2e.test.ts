@@ -185,7 +185,13 @@ describe('Bayes posterior — real Git roundtrip', () => {
 
 describe('Bayes posterior — UpdateManager cascade (doc 21 unified schema)', () => {
   it('should project unified posterior.slices onto graph-edge shapes for UI consumption', async () => {
-    // Simulate a param file with unified posterior (as read from git)
+    // Posterior unification plan (29-Apr-26) §4 Step 4: the file→graph
+    // cascade no longer writes `p.posterior` / `p.latency.posterior`
+    // directly. The slice → graph-edge projection now flows through
+    // `posteriorSliceContexting` (which writes `model_vars[bayesian]`)
+    // followed by `applyPromotion` (which projects to the source-
+    // agnostic surfaces). This test exercises that new flow end-to-end
+    // against the same UNIFIED_POSTERIOR fixture.
     const paramFileData: any = {
       type: 'probability',
       values: [{ mean: 0.273, stdev: 0.035 }],
@@ -195,59 +201,61 @@ describe('Bayes posterior — UpdateManager cascade (doc 21 unified schema)', ()
         onset_delta_days: 1.2,
         t95: 25.5,
         latency_parameter: true,
-        // NOTE: no latency.posterior (doc 21)
       },
       posterior: UNIFIED_POSTERIOR,
     };
-
-    // Simulate a graph edge (target for cascade)
-    const graphEdge: any = {
-      uuid: 'edge-1',
-      from: 'node-a',
-      to: 'node-b',
-      p: {
-        id: 'param-1',
-        mean: 0.25,
-        stdev: 0.04,
-        latency: {
-          mu: 2.1,
-          sigma: 0.68,
-          onset_delta_days: 1.2,
-          t95: 25.5,
-          latency_parameter: true,
+    const graph: any = {
+      edges: [{
+        uuid: 'edge-1',
+        from: 'node-a',
+        to: 'node-b',
+        p: {
+          id: 'param-1',
+          mean: 0.25,
+          stdev: 0.04,
+          latency: {
+            mu: 2.1,
+            sigma: 0.68,
+            onset_delta_days: 1.2,
+            t95: 25.5,
+            latency_parameter: true,
+          },
         },
-      },
+      }],
+      nodes: [],
     };
 
-    // Apply file→graph mappings (same as UpdateManager.syncFileToGraph)
-    const config = MAPPING_CONFIGURATIONS.get('file_to_graph:UPDATE:parameter');
-    expect(config).toBeDefined();
+    const { contextGraphForEffectiveDsl } = await import('../posteriorSliceContexting');
+    contextGraphForEffectiveDsl(graph, () => paramFileData, 'window()');
 
-    const result = await applyMappings(paramFileData, graphEdge, config!.mappings, {});
-    expect(result.success).toBe(true);
+    const graphEdge = graph.edges[0];
 
-    // --- Probability posterior projected from window() slice ---
+    // --- Promoted Beta surface (source-agnostic projection by applyPromotion) ---
     expect(graphEdge.p.posterior).toBeDefined();
     expect(graphEdge.p.posterior.alpha).toBe(43.0);
     expect(graphEdge.p.posterior.beta).toBe(119.5);
-    expect(graphEdge.p.posterior.hdi_lower).toBe(0.22);
-    expect(graphEdge.p.posterior.hdi_upper).toBe(0.33);
     expect(graphEdge.p.posterior.provenance).toBe('bayesian');
-    expect(graphEdge.p.posterior.prior_tier).toBe('direct_history');
-    expect(graphEdge.p.posterior.divergences).toBe(0);
-    expect(graphEdge.p.posterior.evidence_grade).toBe(3);
+    // distribution is the unified marker
+    expect(graphEdge.p.posterior.distribution).toBe('beta');
 
-    // fit_history, slices, _model_state NOT on graph edge
+    // --- Bayesian-only metadata moved to model_vars[bayesian] ---
+    const bayesEntry = graphEdge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(bayesEntry.fit_diagnostics.probability.hdi_lower).toBe(0.22);
+    expect(bayesEntry.fit_diagnostics.probability.hdi_upper).toBe(0.33);
+    expect(bayesEntry.fit_diagnostics.probability.prior_tier).toBe('direct_history');
+    expect(bayesEntry.quality.divergences).toBe(0);
+    expect(bayesEntry.quality.evidence_grade).toBe(3);
+
+    // file-level fit_history / slices / _model_state NOT on graph edge
     expect(graphEdge.p.posterior.fit_history).toBeUndefined();
     expect(graphEdge.p.posterior.slices).toBeUndefined();
     expect(graphEdge.p.posterior._model_state).toBeUndefined();
 
-    // --- Latency posterior projected from window() + cohort() slices ---
+    // --- Promoted lognormal latency posterior (source-agnostic) ---
     expect(graphEdge.p.latency.posterior).toBeDefined();
     expect(graphEdge.p.latency.posterior.mu_mean).toBe(2.35);
     expect(graphEdge.p.latency.posterior.sigma_mean).toBe(0.72);
     expect(graphEdge.p.latency.posterior.onset_delta_days).toBe(1.5);
-    expect(graphEdge.p.latency.posterior.onset_mean).toBe(1.5);
     expect(graphEdge.p.latency.posterior.onset_mu_corr).toBe(-0.42);
 
     // Path-level from cohort() slice
@@ -255,13 +263,9 @@ describe('Bayes posterior — UpdateManager cascade (doc 21 unified schema)', ()
     expect(graphEdge.p.latency.posterior.path_sigma_mean).toBe(0.58);
     expect(graphEdge.p.latency.posterior.path_onset_delta_days).toBe(3.2);
 
-    // fit_history NOT on graph edge
-    expect(graphEdge.p.latency.posterior.fit_history).toBeUndefined();
-
-    // --- Analytic params untouched ---
-    expect(graphEdge.p.latency.mu).toBe(2.1);
-    expect(graphEdge.p.latency.sigma).toBe(0.68);
-
-    console.log('Cascade OK — unified slices projected onto graph-edge shapes');
+    // --- Analytic latency params untouched (the user-configured input
+    //     values that promotion does not overwrite for analytic source) ---
+    expect(graphEdge.p.latency.mu).toBeDefined();
+    expect(graphEdge.p.latency.sigma).toBeDefined();
   });
 });

@@ -636,15 +636,22 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
 
             // Per-edge quality breakdown (doc 13 §1.3) — check BEFORE
             // completing the operation so we can attach an action button.
+            //
+            // Posterior unification plan §4 Step 4: tier engine consumes
+            // the merged probability view (p.posterior + bayesian
+            // fit_diagnostics + quality), built per-edge from the
+            // source ledger.
             const { computeQualityTier } = await import('../utils/bayesQualityTier');
+            const { getProbabilityPosteriorView } = await import('../utils/posteriorView');
             const { getGraphStore } = await import('../contexts/GraphStoreContext');
             const store = getGraphStore(activeTab.fileId);
             const edges = store?.getState().graph?.edges || [];
             const failedEdges: string[] = [];
             const warnEdges: string[] = [];
             for (const edge of edges) {
-              if (!edge.p?.posterior) continue;
-              const edgeTier = computeQualityTier(edge.p.posterior);
+              if (!(edge.p as any)?.posterior) continue;
+              const edgeView = getProbabilityPosteriorView(edge.p as any);
+              const edgeTier = computeQualityTier(edgeView);
               const edgeName = edge.p?.id || edge.uuid || edge.id || '?';
               if (edgeTier.tier === 'failed') failedEdges.push(`${edgeName}: ${edgeTier.reason}`);
               else if (edgeTier.tier === 'warning') warnEdges.push(`${edgeName}: ${edgeTier.reason}`);

@@ -262,6 +262,19 @@ export function projectProbabilityPosterior(
       cohort_hdi_lower_pred: cohortSlice.hdi_lower_pred,
       cohort_hdi_upper_pred: cohortSlice.hdi_upper_pred,
     } : {}),
+    // LOO-ELPD model adequacy (doc 32) and PPC calibration (doc 38).
+    // Surfaced from the edge slice so the model_vars[bayesian].fit_diagnostics
+    // builder downstream can populate the popover badges. Without this, a DSL
+    // re-projection produces a model_vars entry that lacks LOO/PPC and the
+    // PromotedModelCard popover loses its model-adequacy rows until next refit.
+    // (Forensic audit 30-Apr-26 §8 Drop B1.)
+    ...(edgeSlice.delta_elpd != null ? { delta_elpd: edgeSlice.delta_elpd } : {}),
+    ...(edgeSlice.pareto_k_max != null ? { pareto_k_max: edgeSlice.pareto_k_max } : {}),
+    ...(edgeSlice.n_loo_obs != null ? { n_loo_obs: edgeSlice.n_loo_obs } : {}),
+    ...(edgeSlice.ppc_coverage_90 != null ? { ppc_coverage_90: edgeSlice.ppc_coverage_90 } : {}),
+    ...(edgeSlice.ppc_n_obs != null ? { ppc_n_obs: edgeSlice.ppc_n_obs } : {}),
+    ...(edgeSlice.ppc_traj_coverage_90 != null ? { ppc_traj_coverage_90: edgeSlice.ppc_traj_coverage_90 } : {}),
+    ...(edgeSlice.ppc_traj_n_obs != null ? { ppc_traj_n_obs: edgeSlice.ppc_traj_n_obs } : {}),
   };
 }
 
@@ -328,6 +341,16 @@ export function projectLatencyPosterior(
       ...(cohortSlice.onset_mu_corr != null ? { path_onset_mu_corr: cohortSlice.onset_mu_corr } : {}),
       path_provenance: cohortSlice.provenance,
     } : {}),
+    // LOO-ELPD (doc 32) and PPC trajectory calibration (doc 38) for the latency
+    // fit. Per-fit scalars — same values that land on the probability
+    // sub-block, but kept here so consumers reading just the latency posterior
+    // have access without needing to reach into the probability block.
+    // (Forensic audit 30-Apr-26 §8 Drop B2.)
+    ...(edgeSlice.delta_elpd != null ? { delta_elpd: edgeSlice.delta_elpd } : {}),
+    ...(edgeSlice.pareto_k_max != null ? { pareto_k_max: edgeSlice.pareto_k_max } : {}),
+    ...(edgeSlice.n_loo_obs != null ? { n_loo_obs: edgeSlice.n_loo_obs } : {}),
+    ...(edgeSlice.ppc_traj_coverage_90 != null ? { ppc_traj_coverage_90: edgeSlice.ppc_traj_coverage_90 } : {}),
+    ...(edgeSlice.ppc_traj_n_obs != null ? { ppc_traj_n_obs: edgeSlice.ppc_traj_n_obs } : {}),
   };
 }
 

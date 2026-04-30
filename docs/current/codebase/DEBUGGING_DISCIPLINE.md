@@ -19,6 +19,19 @@ If you found it, you own the investigation.
 
 A root cause is not "X is wrong" — it's "X is wrong **because** Y writes to Z without updating W". No **because** = symptom, not cause; your fix will be a patch. Consult `DIAGNOSTIC_PLAYBOOKS.md` for symptom checklists; `KNOWN_ANTI_PATTERNS.md` for prior failure patterns.
 
+## First Violated Object Gate (when the bug crosses a resolution chain)
+
+When the bug is a wrong number, label, scalar, or row produced at the end of a chain — resolution → projection → display, or fetch → enrichment → render, or compile → fit → publish — **name the earliest runtime object on that chain whose actual state contradicts the contract** before writing any patch. Patches downstream of that object are workarounds: they don't restore the contract, they paper over its violation, and the same shape will resurface next time the resolved object is consumed differently.
+
+The discipline:
+
+1. Write down the chain explicitly: each runtime object, in order, with the role it owns.
+2. For the failing query, capture the actual state of every object on the chain (not just the symptom).
+3. Walk the chain from upstream to downstream and find the first object whose state already contradicts an invariant (see `INVARIANTS.md`, especially I-45 / I-46) or the contract written down in step 1.
+4. The fix begins there. If you can't name that object, you don't yet know what's broken — keep tracing.
+
+This is the gate that catches "the chart row is wrong, let me adjust the chart row" thinking. The chart row is almost never the right place; it's where the symptom became visible. Worked example: the F14 cohort-forecast investigation, `docs/current/project-bayes/73g-general-purpose-f14-problem-and-invariants.md` — names the chain `population_root → carrier_to_x → subject_span → numerator_representation → p_conditioning_evidence → projection` and forbids any downstream projection patch unless the upstream object state is already proven correct.
+
 ## Recurring Defect = Multiple Code Paths
 
 Same defect reported twice after a "fix" → most likely cause: **multiple code paths performing the same operation**. Before debugging further:

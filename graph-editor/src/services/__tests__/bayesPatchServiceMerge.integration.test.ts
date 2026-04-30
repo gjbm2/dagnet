@@ -277,17 +277,24 @@ describe('bayesPatchService — graph edge projection (doc 21 §4.4)', () => {
     const graph = getDoc('graph-test');
     const edge = graph.edges[0];
 
-    // ProbabilityPosterior from window() slice
+    // Promoted Beta-shape probability surface from window() slice
+    // (posterior unification plan §3 — source-agnostic projection by
+    // applyPromotion). Bayesian-fit-only metadata (HDI, fitted_at,
+    // fingerprint) lives on model_vars[bayesian].fit_diagnostics, not
+    // on this surface — see assertions below.
     expect(edge.p.posterior).toBeDefined();
     expect(edge.p.posterior.alpha).toBe(43);
     expect(edge.p.posterior.beta).toBe(119.5);
-    expect(edge.p.posterior.hdi_lower).toBe(0.22);
     expect(edge.p.posterior.provenance).toBe('bayesian');
-    expect(edge.p.posterior.fitted_at).toBe('15-Mar-26');
 
     // Path-level from cohort()
     expect(edge.p.posterior.cohort_alpha).toBe(38);
     expect(edge.p.posterior.cohort_beta).toBe(112);
+
+    // Bayesian metadata moved to model_vars[bayesian].fit_diagnostics
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(bayesEntry.fit_diagnostics.probability.fitted_at).toBe('15-Mar-26');
+    expect(bayesEntry.fit_diagnostics.probability.hdi_lower).toBe(0.22);
 
     // No file-level internals on graph edge (doc 21 invariant 4/6)
     expect(edge.p.posterior.slices).toBeUndefined();
@@ -311,19 +318,26 @@ describe('bayesPatchService — graph edge projection (doc 21 §4.4)', () => {
     const graph = getDoc('graph-test');
     const lat = graph.edges[0].p.latency.posterior;
 
-    // Edge-level from window()
+    // Promoted lognormal latency posterior from window() slice
+    // (posterior unification plan §3 — projection by applyPromotion,
+    // field rename mu→mu_mean / sigma→sigma_mean). Bayesian-fit-only
+    // metadata (HDI bands on t95) lives on
+    // model_vars[bayesian].fit_diagnostics.latency.
     expect(lat).toBeDefined();
     expect(lat.mu_mean).toBe(2.35);
     expect(lat.sigma_mean).toBe(0.72);
     expect(lat.onset_delta_days).toBe(1.5);
     expect(lat.onset_mu_corr).toBe(-0.42);
-    expect(lat.hdi_t95_lower).toBe(18.5);
 
     // Path-level from cohort()
     expect(lat.path_mu_mean).toBe(2.81);
     expect(lat.path_sigma_mean).toBe(0.58);
     expect(lat.path_onset_delta_days).toBe(3.2);
-    expect(lat.path_hdi_t95_lower).toBe(28.4);
+
+    // HDI bands moved to fit_diagnostics.latency
+    const bayesEntry = graph.edges[0].p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(bayesEntry.fit_diagnostics.latency.hdi_t95_lower).toBe(18.5);
+    expect(bayesEntry.fit_diagnostics.latency.path_hdi_t95_lower).toBe(28.4);
   });
 });
 
@@ -421,26 +435,38 @@ async function seedGraphAndParam() {
 describe('bayesPatchService — predictive probability cascade (doc 49 §A.6)', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('should write predictive α/β + HDI from window() to graphEdge.p.posterior', async () => {
+  // Posterior unification plan §3 — predictive Beta α/β land on the
+  // promoted p.posterior (source-agnostic), HDI bands land on
+  // model_vars[bayesian].fit_diagnostics.probability (bayesian-only).
+
+  it('should write predictive α/β from window() to graphEdge.p.posterior', async () => {
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
-    const post = getDoc('graph-test').edges[0].p.posterior;
+    const edge = getDoc('graph-test').edges[0];
+    const post = edge.p.posterior;
     expect(post.alpha_pred).toBe(30);
     expect(post.beta_pred).toBe(80);
-    expect(post.hdi_lower_pred).toBe(0.18);
-    expect(post.hdi_upper_pred).toBe(0.38);
+
+    // Predictive HDI moved to fit_diagnostics
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(bayesEntry.fit_diagnostics.probability.hdi_lower_pred).toBe(0.18);
+    expect(bayesEntry.fit_diagnostics.probability.hdi_upper_pred).toBe(0.38);
   });
 
-  it('should write cohort predictive α/β + HDI from cohort() slice', async () => {
+  it('should write cohort predictive α/β from cohort() slice', async () => {
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
-    const post = getDoc('graph-test').edges[0].p.posterior;
+    const edge = getDoc('graph-test').edges[0];
+    const post = edge.p.posterior;
     expect(post.cohort_alpha_pred).toBe(25);
     expect(post.cohort_beta_pred).toBe(70);
-    expect(post.cohort_hdi_lower_pred).toBe(0.16);
-    expect(post.cohort_hdi_upper_pred).toBe(0.42);
+
+    // Cohort predictive HDI moved to fit_diagnostics
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(bayesEntry.fit_diagnostics.probability.cohort_hdi_lower_pred).toBe(0.16);
+    expect(bayesEntry.fit_diagnostics.probability.cohort_hdi_upper_pred).toBe(0.42);
   });
 
   it('should omit predictive fields when patch slice has no alpha_pred', async () => {
@@ -448,11 +474,13 @@ describe('bayesPatchService — predictive probability cascade (doc 49 §A.6)', 
     await seedGraphAndParam();
     await applyPatch(makePatch());
 
-    const post = getDoc('graph-test').edges[0].p.posterior;
+    const edge = getDoc('graph-test').edges[0];
+    const post = edge.p.posterior;
     expect(post.alpha_pred).toBeUndefined();
     expect(post.beta_pred).toBeUndefined();
-    expect(post.hdi_lower_pred).toBeUndefined();
     expect(post.cohort_alpha_pred).toBeUndefined();
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(bayesEntry.fit_diagnostics.probability.hdi_lower_pred).toBeUndefined();
   });
 
   it('should preserve epistemic α/β alongside predictive (not overwrite)', async () => {
@@ -472,12 +500,15 @@ describe('bayesPatchService — predictive probability cascade (doc 49 §A.6)', 
 describe('bayesPatchService — subset-conditioning mass cascade (doc 52 §14.3)', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('should write window_n_effective + cohort_n_effective to graphEdge.p.posterior', async () => {
+  it('should write n_effective + cohort_n_effective to graphEdge.p.posterior', async () => {
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
+    // Posterior unification plan §9 — canonical name is `n_effective`
+    // (matches model_vars). `window_n_effective` exists as a legacy alias
+    // on the schema but the unified writer does not populate it.
     const post = getDoc('graph-test').edges[0].p.posterior;
-    expect(post.window_n_effective).toBe(4500);
+    expect(post.n_effective).toBe(4500);
     expect(post.cohort_n_effective).toBe(3200);
   });
 
@@ -486,6 +517,7 @@ describe('bayesPatchService — subset-conditioning mass cascade (doc 52 §14.3)
     await applyPatch(makePatch());
 
     const post = getDoc('graph-test').edges[0].p.posterior;
+    expect(post.n_effective).toBeUndefined();
     expect(post.window_n_effective).toBeUndefined();
     expect(post.cohort_n_effective).toBeUndefined();
   });
@@ -640,29 +672,32 @@ describe('bayesPatchService — model_vars cascade', () => {
 describe('bayesPatchService — cascade completeness meta-contract', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('graphEdge.p.posterior must carry every expected predictive + mass field', async () => {
+  // Posterior unification plan §3 — partition the cascade contract by surface:
+  //   p.posterior                                   → Beta-shape only (source-agnostic)
+  //   p.latency.posterior                           → lognormal posterior values (source-agnostic)
+  //   model_vars[bayesian].fit_diagnostics          → bayesian-only metadata (HDI, fitted_at, …)
+
+  it('graphEdge.p.posterior must carry every expected Beta-shape field', async () => {
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
     const post = getDoc('graph-test').edges[0].p.posterior;
     const required = [
-      // Epistemic probability
-      'alpha', 'beta', 'hdi_lower', 'hdi_upper',
-      // Predictive probability (doc 49 §A.6)
-      'alpha_pred', 'beta_pred', 'hdi_lower_pred', 'hdi_upper_pred',
-      // Cohort epistemic
-      'cohort_alpha', 'cohort_beta', 'cohort_hdi_lower', 'cohort_hdi_upper',
-      // Cohort predictive
+      // Epistemic Beta (window family)
+      'alpha', 'beta',
+      // Predictive Beta (doc 49 §A.6, kappa-inflated)
+      'alpha_pred', 'beta_pred',
+      // Cohort epistemic + predictive
+      'cohort_alpha', 'cohort_beta',
       'cohort_alpha_pred', 'cohort_beta_pred',
-      'cohort_hdi_lower_pred', 'cohort_hdi_upper_pred',
-      // Subset-conditioning mass (doc 52 §14.3)
-      'window_n_effective', 'cohort_n_effective',
+      // Subset-conditioning mass (canonical name post-unification, plan §9)
+      'n_effective', 'cohort_n_effective',
     ];
     const missing = required.filter(k => post[k] === undefined);
     expect(missing).toEqual([]);
   });
 
-  it('graphEdge.p.latency.posterior must carry every expected dispersion field', async () => {
+  it('graphEdge.p.latency.posterior must carry every expected promoted-lognormal field', async () => {
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
@@ -670,16 +705,40 @@ describe('bayesPatchService — cascade completeness meta-contract', () => {
     const required = [
       // Edge-level (doc 61: bare = epistemic, _pred = predictive)
       'mu_mean', 'mu_sd', 'mu_sd_pred', 'sigma_mean', 'sigma_sd',
-      'onset_mean', 'onset_sd', 'onset_mu_corr',
-      'hdi_t95_lower', 'hdi_t95_upper',
+      'onset_delta_days', 'onset_sd', 'onset_mu_corr',
       // Path-level (no path-level predictive mechanism today)
       'path_mu_mean', 'path_mu_sd',
       'path_sigma_mean', 'path_sigma_sd',
       'path_onset_delta_days', 'path_onset_sd',
-      'path_hdi_t95_lower', 'path_hdi_t95_upper',
     ];
     const missing = required.filter(k => lat[k] === undefined);
     expect(missing).toEqual([]);
+  });
+
+  it('model_vars[bayesian].fit_diagnostics must carry every expected bayesian-only field', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const edge = getDoc('graph-test').edges[0];
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    const probDiag = bayesEntry.fit_diagnostics.probability;
+    const latDiag = bayesEntry.fit_diagnostics.latency;
+    const probRequired = [
+      'fitted_at', 'fingerprint', 'prior_tier',
+      'hdi_lower', 'hdi_upper',
+      'hdi_lower_pred', 'hdi_upper_pred',
+      'cohort_hdi_lower', 'cohort_hdi_upper',
+      'cohort_hdi_lower_pred', 'cohort_hdi_upper_pred',
+    ];
+    const probMissing = probRequired.filter(k => probDiag[k] === undefined);
+    expect(probMissing).toEqual([]);
+    const latRequired = [
+      'fitted_at', 'fingerprint', 'ess', 'rhat',
+      'hdi_t95_lower', 'hdi_t95_upper',
+      'path_hdi_t95_lower', 'path_hdi_t95_upper',
+    ];
+    const latMissing = latRequired.filter(k => latDiag[k] === undefined);
+    expect(latMissing).toEqual([]);
   });
 
   it('model_vars bayesian entry must carry every expected latency dispersion', async () => {

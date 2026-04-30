@@ -312,23 +312,31 @@ class TestModelVarsParity:
             schema_props, python_props, 'ModelVarsProbability'
         )
 
-    def test_model_vars_probability_no_predictive_fields(self):
-        """§3.9: analytic source must not carry alpha_pred / beta_pred /
-        cohort_alpha_pred / cohort_beta_pred — analytic has no
-        overdispersion model. The bayesian predictive shape lives on
-        p.posterior, not on model_vars[].probability."""
+    def test_model_vars_probability_includes_predictive_fields(self):
+        """Posterior unification plan (29-Apr-26) §3: predictive Beta-flavour
+        fields move from `p.posterior` onto the source ledger so that the
+        promoted `p.posterior` can carry them source-agnostically. The
+        bayesian patch writer populates these from the slice's predictive
+        shape; analytic populates them from `buildAnalyticProbabilityBlock`
+        when `stdev_pred` is supplied. All four must be present in both
+        schema and Pydantic."""
         items_def = self._items_def()
         prob_def = items_def['properties']['probability']
         schema_props = get_schema_properties(prob_def)
         python_props = get_pydantic_fields(ModelVarsProbability)
-        forbidden = {
+        required = {
             'alpha_pred', 'beta_pred',
             'cohort_alpha_pred', 'cohort_beta_pred',
         }
-        leaked = (schema_props | python_props) & forbidden
-        assert not leaked, (
-            f'§3.9 forbids predictive-flavour fields on '
-            f'model_vars[].probability; leaked: {sorted(leaked)}'
+        missing_schema = required - schema_props
+        missing_python = required - python_props
+        assert not missing_schema, (
+            f'predictive fields missing from schema model_vars[].probability: '
+            f'{sorted(missing_schema)}'
+        )
+        assert not missing_python, (
+            f'predictive fields missing from Pydantic ModelVarsProbability: '
+            f'{sorted(missing_python)}'
         )
 
     def test_model_vars_latency_field_parity(self):

@@ -651,15 +651,22 @@ export interface ModelVarsEntry {
     alpha?: number;             // >= 0
     beta?: number;              // >= 0
     n_effective?: number;       // >= 0  source mass behind window-family Beta shape
-    provenance?: string;        // e.g. 'analytic_window_baseline'
+    provenance?: string;        // e.g. 'analytic_window_baseline' / 'bayesian'
     // Cohort-family aggregate Beta shape (optional; present when cohort-family aggregate evidence available).
     cohort_alpha?: number;      // >= 0
     cohort_beta?: number;       // >= 0
     cohort_n_effective?: number;
     cohort_provenance?: string;
-    // NB: predictive fields (alpha_pred / beta_pred / cohort_alpha_pred / cohort_beta_pred)
-    // are intentionally NOT part of model_vars — analytic has no overdispersion model,
-    // and the bayesian predictive shape lives on p.posterior. See doc 73b §3.9.
+    // Predictive Beta flavour (posterior unification plan, 29-Apr-26 §3).
+    // Live on the source ledger so `p.posterior` (the promoted surface)
+    // can carry the predictive shape source-agnostically. The bayesian
+    // patch writer populates these from the slice's predictive shape;
+    // analytic gets them from `buildAnalyticProbabilityBlock` when an
+    // overdispersion estimator supplies `stdev_pred`.
+    alpha_pred?: number;
+    beta_pred?: number;
+    cohort_alpha_pred?: number;
+    cohort_beta_pred?: number;
   };
 
   latency?: {
@@ -686,6 +693,77 @@ export interface ModelVarsEntry {
 
   /** Bayesian-specific quality metadata (present only when source === 'bayesian') */
   quality?: ModelVarsQuality;
+
+  /**
+   * Bayesian fit diagnostics that are NOT promotion gate inputs (posterior
+   * unification plan, 29-Apr-26 §3). Sibling of `quality`; present only
+   * when `source === 'bayesian'`. `quality` carries gate inputs
+   * (`rhat`/`ess`/`divergences`/`evidence_grade`/`gate_passed`);
+   * `fit_diagnostics` carries everything else that previously lived on
+   * `p.posterior` / `p.latency.posterior` and is bayesian-only.
+   *
+   * Contract: this is FE-only — the param-pack extractor does not project
+   * `model_vars` onto the BE, so consumers that need this metadata read
+   * from the live graph or the parameter-file's `posterior`. See §6.5.
+   */
+  fit_diagnostics?: ModelVarsFitDiagnostics;
+}
+
+/** Bayesian fit diagnostics on `model_vars[bayesian]` (posterior unification plan §3).
+ *
+ * Two sibling sub-blocks: `probability` and `latency`. Today the bayes
+ * patch service writes both from a single fit pass, so `fitted_at` and
+ * `fingerprint` are usually identical across the two — kept under each
+ * sub-block for self-containment. PPC/LOO and HDI fields are tab-specific.
+ */
+export interface ModelVarsFitDiagnostics {
+  /** Bayesian metadata for the probability posterior (was on `p.posterior`). */
+  probability?: {
+    fitted_at?: string;
+    fingerprint?: string;
+    prior_tier?: 'direct_history' | 'trajectory_calibrated' | 'inherited' | 'sibling_pooled' | 'uninformative';
+    surprise_z?: number | null;
+    // HDI bands. Today written by the MCMC quantile path; closed-form
+    // from α/β is a future improvement (plan §9).
+    hdi_lower?: number;
+    hdi_upper?: number;
+    hdi_level?: number;
+    hdi_lower_pred?: number;
+    hdi_upper_pred?: number;
+    cohort_hdi_lower?: number;
+    cohort_hdi_upper?: number;
+    cohort_hdi_lower_pred?: number;
+    cohort_hdi_upper_pred?: number;
+    // LOO-ELPD (doc 32)
+    delta_elpd?: number | null;
+    pareto_k_max?: number | null;
+    n_loo_obs?: number | null;
+    // PPC calibration (doc 38)
+    ppc_coverage_90?: number | null;
+    ppc_n_obs?: number | null;
+    ppc_traj_coverage_90?: number | null;
+    ppc_traj_n_obs?: number | null;
+  };
+  /** Bayesian metadata for the latency posterior (was on `p.latency.posterior`). */
+  latency?: {
+    fitted_at?: string;
+    fingerprint?: string;
+    ess?: number;
+    rhat?: number;
+    // HDI bands on t95.
+    hdi_t95_lower?: number;
+    hdi_t95_upper?: number;
+    hdi_level?: number;
+    path_hdi_t95_lower?: number;
+    path_hdi_t95_upper?: number;
+    // LOO-ELPD specific to the latency fit.
+    delta_elpd?: number | null;
+    pareto_k_max?: number | null;
+    n_loo_obs?: number | null;
+    // PPC calibration on trajectory (doc 38).
+    ppc_traj_coverage_90?: number | null;
+    ppc_traj_n_obs?: number | null;
+  };
 }
 
 // ── Bayesian posterior types (doc 21: unified posterior schema) ──────────────
@@ -783,65 +861,54 @@ export interface Posterior {
 
 // ── Graph-edge posterior shapes (projected by cascade, consumed by UI) ───────
 
-/** Probability posterior summary on graph edge.
- *  Projected by the cascade from Posterior.slices. Edge-level fields from
- *  "window()" slice, path-level fields from "cohort()" slice. UI components
- *  (PosteriorIndicator, bayesQualityTier, ConversionEdge) consume this shape.
+/** Promoted probability posterior surface on graph edge (posterior unification plan §3).
+ *
+ *  Source-agnostic Beta-shape projection of the active `model_vars[*].probability`
+ *  entry. Written exclusively by `applyPromotion` from the resolved entry's
+ *  Beta shape (Step 2). Bayesian-fit-only metadata (HDI, ESS, Rhat, fitted_at,
+ *  PPC, LOO, prior_tier, …) lives on `model_vars[bayesian].fit_diagnostics`
+ *  / `quality`, not here.
+ *
+ *  `provenance` carries the active source's source-basis label. Vocabulary is
+ *  the union of analytic and bayesian strings — see plan §6.6.
+ *
+ *  Field rename note: the `window_n_effective` field is preserved alongside
+ *  `n_effective` for one cycle while consumers migrate; `n_effective` is the
+ *  canonical name (matches `model_vars[*].probability.n_effective`).
  */
 export interface ProbabilityPosterior {
   distribution: string;
-  // Epistemic — posterior on the true rate (doc 49 §A.6)
+  // Epistemic — posterior on the true rate
   alpha: number;
   beta: number;
-  hdi_lower: number;
-  hdi_upper: number;
-  hdi_level: number;
-  // Predictive — kappa-inflated (doc 49). Absent when kappa is absent.
+  // Predictive — kappa-inflated. Absent when overdispersion is absent.
   alpha_pred?: number;
   beta_pred?: number;
-  hdi_lower_pred?: number;
-  hdi_upper_pred?: number;
-  // Quality / provenance
-  ess: number;
-  rhat: number;
-  evidence_grade: number;
-  fitted_at: string;
-  fingerprint: string;
-  provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
-  divergences: number;
-  prior_tier: 'direct_history' | 'trajectory_calibrated' | 'inherited' | 'sibling_pooled' | 'uninformative';
-  surprise_z?: number | null;
-  // Cohort-mode probability posterior — from cohort() slice (epistemic)
+  // Source provenance (broad vocabulary post-unification — see §6.6)
+  provenance?: string;
+  // Cohort-family Beta shape — from cohort() slice when promoted source has it
   cohort_alpha?: number;
   cohort_beta?: number;
-  cohort_hdi_lower?: number;
-  cohort_hdi_upper?: number;
-  // Cohort-mode predictive (doc 49)
   cohort_alpha_pred?: number;
   cohort_beta_pred?: number;
-  cohort_hdi_lower_pred?: number;
-  cohort_hdi_upper_pred?: number;
-  cohort_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
-  // Subset-conditioning mass (doc 52 §14.3) — raw observation count
-  // used to fit each mode's posterior. Engine blends aggregate against
-  // conditioned output using r = m_S / m_G.
+  cohort_provenance?: string;
+  // Subset-conditioning mass (doc 52 §14.3). `n_effective` is the canonical
+  // window-family name; `window_n_effective` is preserved for one cycle.
+  n_effective?: number;
   window_n_effective?: number;
   cohort_n_effective?: number;
-  // LOO-ELPD model adequacy scoring (doc 32)
-  delta_elpd?: number | null;
-  pareto_k_max?: number | null;
-  n_loo_obs?: number | null;
-  // PPC calibration (doc 38)
-  ppc_coverage_90?: number | null;
-  ppc_n_obs?: number | null;
-  ppc_traj_coverage_90?: number | null;
-  ppc_traj_n_obs?: number | null;
 }
 
-/** Latency posterior summary on graph edge.
- *  Projected by the cascade from Posterior.slices. Edge-level fields from
- *  "window()" slice, path-level fields from "cohort()" slice. UI components
- *  consume this shape.
+/** Promoted latency posterior surface on graph edge (posterior unification plan §3).
+ *
+ *  Source-agnostic projection of the active `model_vars[*].latency` entry.
+ *  Written exclusively by `applyPromotion` (Step 2). Today only the bayesian
+ *  source produces a populated latency posterior; analytic leaves this empty
+ *  (promotion clears the field when the active entry has no latency posterior).
+ *
+ *  Bayesian-fit-only metadata (ESS, Rhat, fitted_at, fingerprint, HDI bands
+ *  on t95, PPC, LOO) lives on `model_vars[bayesian].fit_diagnostics.latency`,
+ *  not here.
  */
 export interface LatencyPosterior {
   distribution: string;
@@ -851,14 +918,7 @@ export interface LatencyPosterior {
   mu_sd_pred?: number;              // predictive (kappa_lat-inflated); absent when no kappa_lat
   sigma_mean: number;
   sigma_sd: number;                 // epistemic (no predictive mechanism)
-  hdi_t95_lower: number;
-  hdi_t95_upper: number;
-  hdi_level: number;
-  ess: number;
-  rhat: number;
-  fitted_at: string;
-  fingerprint: string;
-  provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
+  provenance?: string;
 
   // Edge-level onset posterior (Phase D.O)
   onset_mean?: number;
@@ -877,17 +937,8 @@ export interface LatencyPosterior {
   path_mu_sd_pred?: number;         // predictive; absent in current model (no path-level kappa_lat)
   path_sigma_mean?: number;
   path_sigma_sd?: number;
-  path_hdi_t95_lower?: number;
-  path_hdi_t95_upper?: number;
   path_onset_mu_corr?: number;
-  path_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
-  // LOO-ELPD model adequacy scoring (doc 32)
-  delta_elpd?: number | null;
-  pareto_k_max?: number | null;
-  n_loo_obs?: number | null;
-  // PPC calibration (doc 38)
-  ppc_traj_coverage_90?: number | null;
-  ppc_traj_n_obs?: number | null;
+  path_provenance?: string;
 }
 
 /** Quality metrics from a Bayesian fitting run */

@@ -82,7 +82,7 @@ export function resolveActiveModelVars(
 
 // ── Scalar promotion ────────────────────────────────────────────────────────
 
-/** Result of promoting a ModelVarsEntry to flat scalars. */
+/** Result of promoting a ModelVarsEntry to flat scalars + posterior surfaces. */
 export interface PromotionResult {
   mean: number;
   stdev: number;
@@ -97,28 +97,88 @@ export interface PromotionResult {
     path_onset_delta_days?: number;
     // Heuristic dispersion
     mu_sd?: number;
+    mu_sd_pred?: number;
     sigma_sd?: number;
     onset_sd?: number;
     onset_mu_corr?: number;
     path_mu_sd?: number;
+    path_mu_sd_pred?: number;
     path_sigma_sd?: number;
     path_onset_sd?: number;
+  };
+  /**
+   * Promoted Beta shape — projection of the resolved entry's
+   * `probability` block onto the source-agnostic surface that lands at
+   * `p.posterior` (posterior unification plan §3). Absent when the
+   * resolved entry has no valid Beta shape (analytic without a moment-
+   * match, or a degenerate stub).
+   */
+  posterior?: {
+    distribution: 'beta';
+    alpha?: number;
+    beta?: number;
+    alpha_pred?: number;
+    beta_pred?: number;
+    cohort_alpha?: number;
+    cohort_beta?: number;
+    cohort_alpha_pred?: number;
+    cohort_beta_pred?: number;
+    n_effective?: number;
+    cohort_n_effective?: number;
+    provenance?: string;
+    cohort_provenance?: string;
+  };
+  /**
+   * Promoted lognormal latency posterior — projection of the resolved
+   * entry's `latency` block. Absent when the resolved entry has no
+   * latency posterior (e.g. analytic). Field-name rename versus the
+   * source ledger: `mu → mu_mean`, `sigma → sigma_mean`, `path_* →
+   * path_*_mean` (plan §3).
+   */
+  latency_posterior?: {
+    distribution: 'lognormal';
+    mu_mean?: number;
+    mu_sd?: number;
+    mu_sd_pred?: number;
+    sigma_mean?: number;
+    sigma_sd?: number;
+    onset_delta_days?: number;
+    onset_sd?: number;
+    onset_mu_corr?: number;
+    path_mu_mean?: number;
+    path_mu_sd?: number;
+    path_mu_sd_pred?: number;
+    path_sigma_mean?: number;
+    path_sigma_sd?: number;
+    path_onset_delta_days?: number;
+    path_onset_sd?: number;
+    provenance?: string;
+    path_provenance?: string;
   };
   /** Which source was selected */
   activeSource: ModelVarsEntry['source'];
 }
 
 /**
- * Promote a resolved ModelVarsEntry to the flat scalar shape consumed
- * by the rest of the system.  Returns undefined when entry is undefined.
+ * Promote a resolved ModelVarsEntry to the flat scalar shape + posterior
+ * surfaces consumed by the rest of the system. Returns undefined when entry
+ * is undefined.
  */
 export function promoteModelVars(
   entry: ModelVarsEntry | undefined,
 ): PromotionResult | undefined {
   if (!entry) return undefined;
-  return {
-    mean: entry.probability.mean,
-    stdev: entry.probability.stdev,
+
+  const prob = entry.probability;
+  const probHasBeta =
+    prob.alpha !== undefined &&
+    Number.isFinite(prob.alpha) && (prob.alpha as number) > 0 &&
+    prob.beta !== undefined &&
+    Number.isFinite(prob.beta) && (prob.beta as number) > 0;
+
+  const result: PromotionResult = {
+    mean: prob.mean,
+    stdev: prob.stdev,
     latency: entry.latency
       ? {
           mu: entry.latency.mu,
@@ -130,24 +190,127 @@ export function promoteModelVars(
           path_t95: entry.latency.path_t95,
           path_onset_delta_days: entry.latency.path_onset_delta_days,
           mu_sd: entry.latency.mu_sd,
+          mu_sd_pred: (entry.latency as any).mu_sd_pred,
           sigma_sd: entry.latency.sigma_sd,
           onset_sd: entry.latency.onset_sd,
           onset_mu_corr: entry.latency.onset_mu_corr,
           path_mu_sd: entry.latency.path_mu_sd,
+          path_mu_sd_pred: (entry.latency as any).path_mu_sd_pred,
           path_sigma_sd: entry.latency.path_sigma_sd,
           path_onset_sd: entry.latency.path_onset_sd,
         }
       : undefined,
     activeSource: entry.source,
   };
+
+  // Posterior unification plan §3 — project the resolved entry's Beta
+  // shape onto the source-agnostic posterior surface.
+  if (probHasBeta) {
+    result.posterior = {
+      distribution: 'beta',
+      alpha: prob.alpha,
+      beta: prob.beta,
+      alpha_pred: (prob as any).alpha_pred,
+      beta_pred: (prob as any).beta_pred,
+      cohort_alpha: prob.cohort_alpha,
+      cohort_beta: prob.cohort_beta,
+      cohort_alpha_pred: (prob as any).cohort_alpha_pred,
+      cohort_beta_pred: (prob as any).cohort_beta_pred,
+      n_effective: prob.n_effective,
+      cohort_n_effective: prob.cohort_n_effective,
+      provenance: prob.provenance,
+      cohort_provenance: prob.cohort_provenance,
+    };
+  }
+
+  // Posterior unification plan §3 (latency v1.1, 30-Apr-26) — project the
+  // resolved entry's latency block onto p.latency.posterior source-
+  // agnostically, mirroring how `p.posterior` is projected from the rate
+  // Beta of any source. Field rename from source-ledger to posterior-
+  // surface: mu → mu_mean, sigma → sigma_mean, path_mu → path_mu_mean,
+  // path_sigma → path_sigma_mean.
+  //
+  // For bayesian the projected fields are MCMC posterior moments. For
+  // analytic they are point estimates with heuristic dispersion SDs from
+  // the FE topo dispersion model — semantically a degenerate posterior
+  // (Dirac on the point) widened by the heuristic SDs. The "posterior"
+  // surface is the promoted *lognormal latency* layer; the active
+  // source's view of that layer is what gets projected.
+  //
+  // Bayesian-only metadata (HDI, ess, rhat, fitted_at, fingerprint, ppc,
+  // delta_elpd) does NOT live here — it stays on
+  // `model_vars[bayesian].fit_diagnostics` and is read separately by the
+  // diagnostic popover.
+  const lat = entry.latency;
+  const latHasPosterior = lat != null
+    && typeof lat.mu === 'number' && Number.isFinite(lat.mu)
+    && typeof lat.sigma === 'number' && Number.isFinite(lat.sigma);
+  if (latHasPosterior && lat) {
+    result.latency_posterior = {
+      distribution: 'lognormal',
+      mu_mean: lat.mu,
+      mu_sd: lat.mu_sd,
+      mu_sd_pred: (lat as any).mu_sd_pred,
+      sigma_mean: lat.sigma,
+      sigma_sd: lat.sigma_sd,
+      onset_delta_days: lat.onset_delta_days,
+      onset_sd: lat.onset_sd,
+      onset_mu_corr: lat.onset_mu_corr,
+      path_mu_mean: lat.path_mu,
+      path_mu_sd: lat.path_mu_sd,
+      path_mu_sd_pred: (lat as any).path_mu_sd_pred,
+      path_sigma_mean: lat.path_sigma,
+      path_sigma_sd: lat.path_sigma_sd,
+      path_onset_delta_days: lat.path_onset_delta_days,
+      path_onset_sd: lat.path_onset_sd,
+      provenance: prob.provenance,
+      path_provenance: prob.cohort_provenance,
+    };
+  }
+
+  return result;
 }
 
 // ── Apply promotion to edge ─────────────────────────────────────────────────
 
 /**
- * Write promoted scalars onto an edge's ProbabilityParam and LatencyConfig.
- * Mutates the provided objects in place — intended to be called during the
+ * Clear all promoted surfaces on a ProbabilityParam (posterior unification
+ * plan §4 Step 2). Used when the resolver has nothing to promote — leaves
+ * the surfaces consistent with "no source selected" rather than letting
+ * stale projections persist from a prior promotion.
+ *
+ * `p.forecast.mean` and `p.forecast.stdev` are NOT cleared here when the
+ * forecast object exists from a non-promoted writer (the existing
+ * comment in applyPromotion warns against overwriting upstream writes
+ * with undefined). We only clear the source-label so downstream readers
+ * can detect "no active source" and the Beta / latency-posterior
+ * projections so they cannot be stale.
+ */
+function clearPromotedSurfaces(p: ProbabilityParam): void {
+  if (p.forecast) {
+    (p.forecast as any).source = undefined;
+  }
+  // Strip the promoted Beta shape — no source means no projection.
+  if ((p as any).posterior !== undefined) {
+    (p as any).posterior = undefined;
+  }
+  // Strip the promoted latency posterior.
+  if (p.latency && (p.latency as any).posterior !== undefined) {
+    (p.latency as any).posterior = undefined;
+  }
+}
+
+/**
+ * Write promoted scalars onto an edge's ProbabilityParam and LatencyConfig,
+ * plus the promoted posterior surfaces (`p.posterior` and
+ * `p.latency.posterior`) — posterior unification plan §3, Step 2.
+ *
+ * Mutates the provided objects in place; intended to be called during the
  * graph update cycle after resolution.
+ *
+ * Invariant: after this call, `p.posterior` and `p.latency.posterior`
+ * reflect the active selector exactly. They are never left stale from a
+ * prior promotion. When no entry resolves, they are cleared.
  *
  * Returns the active source (or undefined if nothing was promoted).
  */
@@ -158,7 +321,14 @@ export function applyPromotion(
   const pref = effectivePreference(p.model_source_preference, graphPref);
   const entry = resolveActiveModelVars(p.model_vars, pref);
   const result = promoteModelVars(entry);
-  if (!result) return undefined;
+  if (!result) {
+    // Posterior unification plan §4 Step 2(c) — no entry resolved.
+    // Clear the promoted surfaces so a previous promotion's projection
+    // does not survive across a model_vars mutation that dropped the
+    // source.
+    clearPromotedSurfaces(p);
+    return undefined;
+  }
 
   // Doc 73b §3.2 — narrow promoted probability surface
   // { mean, stdev, source }. applyPromotion is the only computer of these
@@ -204,6 +374,28 @@ export function applyPromotion(
     if (result.latency.path_mu_sd !== undefined) p.latency.promoted_path_mu_sd = result.latency.path_mu_sd;
     if (result.latency.path_sigma_sd !== undefined) p.latency.promoted_path_sigma_sd = result.latency.path_sigma_sd;
     if (result.latency.path_onset_sd !== undefined) p.latency.promoted_path_onset_sd = result.latency.path_onset_sd;
+  }
+
+  // Posterior unification plan §3, Step 2(a)/(b) — write the promoted Beta
+  // surface and the promoted latency posterior surface, OR clear them when
+  // the resolved entry has no Beta / no latency posterior. The single-writer
+  // invariant is: `p.posterior` and `p.latency.posterior` reflect the active
+  // selector after this call.
+  if (result.posterior) {
+    (p as any).posterior = result.posterior;
+  } else if ((p as any).posterior !== undefined) {
+    (p as any).posterior = undefined;
+  }
+  // p.latency.posterior is fully derived from the source ledger — initialise
+  // p.latency on demand when the resolved entry carries a latency posterior
+  // (matches the pre-refactor direct-write behaviour where the projection
+  // helper initialised pBlock.latency = {} before writing). When the resolved
+  // entry has no latency posterior, only clear if p.latency already exists.
+  if (result.latency_posterior) {
+    if (!p.latency) p.latency = {} as any;
+    (p.latency as any).posterior = result.latency_posterior;
+  } else if (p.latency && (p.latency as any).posterior !== undefined) {
+    (p.latency as any).posterior = undefined;
   }
 
   return result.activeSource;

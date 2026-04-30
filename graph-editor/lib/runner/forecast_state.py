@@ -150,6 +150,25 @@ def _weights_and_ess(
     return (weights, ess)
 
 
+def _cohort_binomial_log_likelihood(
+    p_draws: np.ndarray,
+    completeness_draws: np.ndarray,
+    n_i: float,
+    k_i: float,
+) -> np.ndarray:
+    """Per-draw log likelihood for single-retrieval Cohort evidence.
+
+    Completeness is conditional latency mass for eventual converters, so it
+    belongs in the success probability: k_i ~ Binomial(n_i, p_s * c_i_s).
+    The Binomial coefficient is omitted because it is constant across draws.
+    """
+    n_obs = max(float(n_i), 0.0)
+    k_obs = min(max(float(k_i), 0.0), n_obs)
+    c_clip = np.clip(completeness_draws, 0.0, 1.0)
+    p_effective = np.clip(p_draws * c_clip, 1e-15, 1 - 1e-15)
+    return k_obs * np.log(p_effective) + (n_obs - k_obs) * np.log1p(-p_effective)
+
+
 def compute_completeness_with_sd(
     age_days: float,
     latency: ResolvedLatency,
@@ -1147,25 +1166,15 @@ def compute_forecast_trajectory(
         _IS_TARGET_ESS = 20.0
         log_lik = np.zeros(S)
         for tau_i, n_i, k_i in _evidence:
-            E_i = np.zeros(S)
+            c_i = np.zeros(S)
             for s in range(S):
-                E_i[s] = float(n_i) * _compute_completeness_at_age(
+                c_i[s] = _compute_completeness_at_age(
                     float(tau_i),
                     float(mu_draws[s]),
                     float(sigma_draws[s]),
                     float(onset_draws[s]),
                 )
-            E_eff = np.maximum(E_i, float(k_i))
-            E_fail = E_eff - float(k_i)
-            mask = E_fail >= 1.0
-            if not mask.any():
-                continue
-            p_clip = np.clip(p_draws, 1e-15, 1 - 1e-15)
-            cohort_log_w = np.where(
-                mask,
-                float(k_i) * np.log(p_clip) + E_fail * np.log(1 - p_clip),
-                0.0,
-            )
+            cohort_log_w = _cohort_binomial_log_likelihood(p_draws, c_i, n_i, k_i)
             log_lik += cohort_log_w
             n_cohorts_conditioned += 1
 

@@ -1166,6 +1166,101 @@ def test_multihop_subject_span_is_not_last_edge_or_param_pack_scalar():
     )
 
 
+# ── 73h canary: v3 router fork on terminal latency_parameter ────────────────
+#
+# These tests exercise the architectural concern named in
+# `docs/current/project-bayes/73h-v3-router-and-carrier-conditioning-forensic.md`
+# §"Issue 1 — Top-level latency / non-latency router in v3" and §"Multi-hop
+# boundary".
+#
+# The v3 router at `cohort_forecast_v3.py:1071-1110` checks the TERMINAL edge's
+# `latency_parameter` flag. When the terminal edge is non-latent, the router
+# dispatches to `_non_latency_rows` — a closed-form Beta-Binomial path that
+# returns τ-flat rows (`rate: p_mean` constant across τ; see the row-builder
+# loop at `cohort_forecast_v3.py:273` onwards). For a multi-hop subject whose
+# upstream subject-span edges DO have real latency, the upstream span kernel
+# composition runs in `prepare_forecast_runtime_inputs` but is never consumed
+# by the row builder on the non-latent terminal branch.
+#
+# `cf-fix-deep-mixed` provides the canonical alternating-latency fixture
+# (T7 in doc 50 §5.1): 6-hop chain alternating non-latent / latent. The
+# subject `from(cf-fix-deep-d).to(cf-fix-deep-f)` has D→E latent and E→F
+# non-latent; its composed kernel reflects the D→E lognormal CDF, but the
+# router currently sees E→F's flag and routes to the closed-form path.
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_DEEP, enriched=True)
+def test_multihop_with_terminal_non_latency_window_must_honour_upstream_subject_latency():
+    """v3 router invariant — multi-hop window subject with non-latent terminal
+    edge must compose the subject span through ALL edges, not collapse to the
+    closed-form Beta-Binomial path on the terminal edge alone.
+
+    Topology (`cf-fix-deep-mixed`):
+        D → E   latent      (μ=2.3, σ=0.6, onset=2.0)
+        E → F   non-latent  (terminal)
+
+    Subject span composition: `K_DE ⊗ δ(0) = K_DE` (the non-latent terminal
+    contributes identity to convolution per `_edge_sub_probability_density`
+    at `span_kernel.py:108-113`). The window-mode τ-axis must therefore be
+    dominated by the D→E lognormal CDF.
+
+    Symptom of the v3 router fork: `model_midpoint` is τ-flat
+    (`_non_latency_rows` writes `rate: p_mean` at every τ).
+
+    73h §"Issue 1": canary for the terminal-edge fork. RED while the router
+    keys on `target_edge.p.latency.latency_parameter`; should turn green
+    when the σ_eff = 0 limit is allowed to emerge naturally from
+    `compute_forecast_trajectory` (73h §"Cross-cutting note: math foundation
+    already supports unification").
+    """
+    payload = _run_analyse_v3(
+        _DEEP,
+        "from(cf-fix-deep-d).to(cf-fix-deep-f).window(31-Oct-25:29-Apr-26)",
+    )
+    curve = _numeric_curve(payload, field="model_midpoint")
+    _assert_not_flat(
+        curve,
+        label=(
+            "from(cf-fix-deep-d).to(cf-fix-deep-f) window model_midpoint "
+            "must reflect upstream D→E latency despite non-latent terminal"
+        ),
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_DEEP, enriched=True)
+def test_multihop_with_terminal_non_latency_cohort_must_honour_upstream_subject_latency():
+    """v3 router invariant — same as the window-mode counterpart, in cohort
+    mode where the carrier composition is also active.
+
+    The router fork is mode-agnostic: both window and cohort dispatches at
+    `cohort_forecast_v3.py:1073` go to `_non_latency_rows` when the terminal
+    edge is non-latent. In cohort mode the upstream carrier (composed from
+    A→B→C→D, alternating non-latent / latent in `cf-fix-deep-mixed`) has
+    been built but the row builder ignores it on the non-latent branch.
+
+    73h §"Issue 1" + §"Multi-hop boundary". RED while the router forks on
+    terminal `latency_parameter`.
+    """
+    payload = _run_analyse_v3(
+        _DEEP,
+        "from(cf-fix-deep-d).to(cf-fix-deep-f).cohort(31-Oct-25:29-Apr-26)",
+    )
+    curve = _numeric_curve(payload, field="model_midpoint")
+    _assert_not_flat(
+        curve,
+        label=(
+            "from(cf-fix-deep-d).to(cf-fix-deep-f) cohort model_midpoint "
+            "must reflect subject-span composition despite non-latent terminal"
+        ),
+    )
+
+
 # ── CLI public parity canaries ──────────────────────────────────────────────
 
 @requires_db
@@ -1250,6 +1345,57 @@ def test_cli_identity_collapse_matches_window_across_public_surfaces():
             f"[{_LAT4_CD}] identity collapse failed for {name}: "
             f"window={window_value:.6f} identity={identity_value:.6f} delta={delta:.6f}"
         )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_LAT4, enriched=True)
+def test_analyse_cli_does_not_pre_run_graph_mutating_cf_for_needs_snapshots():
+    """Doc 73l Fix 1 acceptance: when the requested analysis itself needs
+    a BE call (`needsSnapshots` types — `conditioned_forecast`,
+    `cohort_maturity*`, registered runner-analyze types), the analyse CLI
+    must NOT run `aggregateAndPopulateGraph` upstream. That call would run
+    graph-mutating CF before `runPreparedAnalysis` dispatches its own CF,
+    feeding two CF passes a divergent graph state.
+
+    The deferral is observable via the analyse CLI's per-scenario log line.
+    The "Aggregating scenario" branch runs `aggregateAndPopulateGraph` (and
+    therefore the fetch-pipeline CF). The "materialisation deferred to
+    prepareAnalysisComputeInputs" branch is the post-Fix-1 path: scenario
+    is cloned, then `prepareAnalysisComputeInputs` →
+    `runScenarioMaterialisation` materialises with `skipConditionedForecast=true`,
+    and `runPreparedAnalysis` dispatches CF exactly once.
+    """
+    dsl = f"{_LAT4_CD}.window(29-Jan-26:29-Apr-26)"
+    # Bypass the daemon so we can capture the CLI's stderr cleanly. The
+    # daemon path returns parsed JSON only; stderr is discarded on success.
+    env = dict(os.environ, DAGNET_USE_DAEMON="0")
+    cmd = [
+        "bash", str(_ANALYSE_SH), _LAT4, dsl,
+        "--type", "conditioned_forecast",
+        "--no-cache", "--no-snapshot-cache", "--format", "json",
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        cwd=str(_REPO_ROOT), env=env, timeout=300,
+    )
+    assert result.returncode == 0, (
+        f"analyse.sh exited {result.returncode} for {_LAT4} / {dsl!r}\n"
+        f"stderr tail:\n{result.stderr[-2000:]}"
+    )
+
+    stderr = result.stderr
+    assert "materialisation deferred to prepareAnalysisComputeInputs" in stderr, (
+        "expected the analyse CLI to defer materialisation for "
+        "`conditioned_forecast` (needsSnapshots=true), but the deferral log "
+        f"line is absent.\nstderr tail:\n{stderr[-2000:]}"
+    )
+    assert "Aggregating scenario" not in stderr, (
+        "analyse CLI ran `aggregateAndPopulateGraph` for a needsSnapshots "
+        "analysis — this is the pre-Fix-1 path that 73l Fix 1 removed. "
+        f"The pre-CF call has come back.\nstderr tail:\n{stderr[-2000:]}"
+    )
 
 
 @pytest.mark.xfail(

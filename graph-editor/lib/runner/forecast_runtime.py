@@ -738,100 +738,13 @@ def order_subjects_topologically(
     return sorted(subjects, key=_subject_key)
 
 
-def read_edge_cohort_params(
-    edge: Dict[str, Any],
-) -> Optional[Dict[str, float]]:
-    """Extract cohort-level (a-anchored) Bayes params from a graph edge.
-
-    Returns a dict with keys {p, mu, sigma, onset} or None if the edge
-    lacks required parameters. May also include {alpha, beta, mu_sd,
-    sigma_sd, onset_sd, p_sd}.
-
-    Routes through `resolve_model_params(scope='path', temporal_mode='cohort')`
-    so the upstream-carrier construction sees the same promoted source
-    and quality gates as the rest of the engine (doc 73f F6 — was
-    previously a posterior-bypass that could diverge from the central
-    resolver on analytic-only fixtures). Doc 73f F16 removed the κ=200
-    fallback; when neither posterior nor analytic-mirror provides
-    α, β the resolver returns α=β=0.
-    """
-    from .model_resolver import resolve_model_params
-
-    resolved = resolve_model_params(edge, scope='path', temporal_mode='cohort')
-    if resolved is None:
-        return None
-
-    lat = resolved.latency  # path_latency if populated, else edge_latency
-    mu = lat.mu
-    sigma = lat.sigma
-    onset = lat.onset_delta_days
-
-    if not math.isfinite(mu):
-        return None
-    if not math.isfinite(sigma) or sigma <= 0:
-        return None
-
-    prob = resolved.p_mean
-    if not math.isfinite(prob) or prob <= 0:
-        return None
-
-    result: Dict[str, float] = {
-        'p': float(prob),
-        'mu': float(mu),
-        'sigma': float(sigma),
-        'onset': float(onset),
-    }
-
-    if resolved.alpha > 0 and resolved.beta > 0:
-        result['alpha'] = float(resolved.alpha)
-        result['beta'] = float(resolved.beta)
-
-    # Forecasting-consumer dispersion-field selection.
-    #
-    # This function feeds the upstream-carrier + span-prior machinery,
-    # which wants predictive (kappa_lat-inflated) parameter dispersion.
-    # The candidate ordering reflects what each source emits:
-    #   - Bayesian source: emits both `mu_sd` (epistemic) and
-    #     `mu_sd_pred` (predictive); we prefer `_pred` and the consumer
-    #     gets correctly-inflated predictive width.
-    #   - Analytic source: emits `mu_sd` only (epistemic, derived from
-    #     the t-posterior under a Jeffreys prior — see
-    #     docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md). The
-    #     analytic path has no kappa_lat so no predictive value is
-    #     emitted; falling through to the bare epistemic value is the
-    #     correct best-available behaviour. The downstream sweep will
-    #     under-state predictive width on analytic-source paths until a
-    #     principled kappa_lat estimate becomes available — accepted by
-    #     project specification.
-    # Path-level SDs fall back to edge-level SDs when not fitted, rather
-    # than silently dropping dispersion.
-    edge_lat = resolved.edge_latency
-
-    def _pick_sd(*candidates):
-        for c in candidates:
-            if c is not None and c > 0:
-                return float(c)
-        return None
-
-    mu_sd = _pick_sd(lat.mu_sd_pred, lat.mu_sd, edge_lat.mu_sd_pred, edge_lat.mu_sd)
-    if mu_sd is not None:
-        result['mu_sd'] = mu_sd
-    sigma_sd = _pick_sd(lat.sigma_sd, edge_lat.sigma_sd)
-    if sigma_sd is not None:
-        result['sigma_sd'] = sigma_sd
-    onset_sd = _pick_sd(lat.onset_sd, edge_lat.onset_sd)
-    if onset_sd is not None:
-        result['onset_sd'] = onset_sd
-
-    if 'alpha' in result and 'beta' in result:
-        a = result['alpha']
-        b = result['beta']
-        s = a + b
-        result['p_sd'] = float(math.sqrt(a * b / (s * s * (s + 1))))
-    elif resolved.p_sd and resolved.p_sd > 0:
-        result['p_sd'] = float(resolved.p_sd)
-
-    return result
+# Canonical implementation lives in model_resolver alongside resolve_model_params.
+# Re-exported here so existing
+# `from .forecast_runtime import read_edge_cohort_params` imports keep working
+# (and so monkeypatch.setattr(forecast_runtime, 'read_edge_cohort_params', ...)
+# in test_v2_v3_parity continues to redirect the local-namespace binding for
+# all internal callers).
+from .model_resolver import read_edge_cohort_params  # noqa: F401, E402
 
 
 def edge_has_semantic_latency(edge: Dict[str, Any]) -> bool:

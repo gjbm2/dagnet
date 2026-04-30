@@ -29,14 +29,16 @@ The rest of this doc details each subsystem, the pipeline sequence, the fields e
 
 | Field | Written by | Nature |
 |---|---|---|
-| `edge.p.model_vars[source='bayesian']` | Bayes compiler (offline) | Aggregate posterior from training corpus. Includes `probability.{alpha, beta, alpha_pred, beta_pred}` + latency block |
-| `edge.p.model_vars[source='analytic']` | FE topo pass | Query-scoped analytic fit (moments-based) |
+| `edge.p.model_vars[source='bayesian']` | Bayes compiler (offline) via `bayesPatchService.applyPatch` + `posteriorSliceContexting` for DSL re-projection | Aggregate posterior. Carries `probability.{alpha, beta, alpha_pred, beta_pred, cohort_*, n_effective, provenance}` + `latency` block + `quality` (gate inputs) + `fit_diagnostics.{probability, latency}` (bayesian-only metadata: HDI, ESS, fitted_at, prior_tier, PPC, LOO) |
+| `edge.p.model_vars[source='analytic']` | FE topo pass | Query-scoped analytic fit (moments-based). Same `probability.{alpha, beta, …}` shape as bayesian per the §3.9 mirror contract; no `fit_diagnostics` block |
+| `edge.p.posterior.*` | `applyPromotion` (single writer post-unification, 30-Apr-26) | Source-agnostic Beta projection from active `model_vars[*].probability` |
+| `edge.p.latency.posterior.*` | `applyPromotion` (single writer post-unification) | Source-agnostic lognormal projection from active `model_vars[*].latency`. Today only the bayesian source produces a populated latency posterior — analytic carries point estimates without posterior moments |
 | `edge.p.latency.{mu, sigma, t95, path_t95, path_mu, path_sigma, ...}` | Promoted from whichever model_vars source won `applyPromotion` | Latency fit scalars |
 | `edge.p.mean`, `edge.p.sd` | BE CF pass (when landed) / else FE topo-pass blend fallback | Conditioned asymptotic rate + SD |
 | `edge.p.latency.completeness` | BE CF pass (authoritative per doc 45) / else FE topo-pass CDF eval fallback | Cohort maturity at query ages |
 | `edge.p.latency.completeness_stdev` | BE CF pass | Conditioned uncertainty on completeness |
 | `edge.p.evidence.{mean, n, k}` | FE topo-pass evidence aggregation (from query-scoped snapshot counts) | Raw observed conversion data |
-| `edge.p.forecast.mean` | BE CF pass (same value as `p.mean` when CF landed) | Forecast asymptote (legacy field retained) |
+| `edge.p.forecast.{mean, stdev, source}` | `applyPromotion` (mean+stdev; `source` is the active source label) | Promoted scalar surface (doc 73b §3.2) |
 
 Key invariants:
 - A single field can be written by multiple subsystems — the authoritative writer depends on which pass has landed most recently and what promotion selects.
@@ -281,7 +283,7 @@ There is no single BE stats pass. On the live fetch path the BE runs one enrichm
 No — the **BE CF pass** does IS conditioning. The FE topo pass does analytic Fenton-Wilkinson composition plus a blended-mean fallback per edge. The sophisticated topological IS work lives in the CF pass.
 
 **Confusion 3: "p.posterior.alpha is query-scoped"**
-The field lives under `model_vars[source='bayesian'].probability.alpha`. When that source is promoted, it's accessible via `p.posterior.alpha`. It is **not query-scoped** — it's from the offline Bayes compiler fit. Query-scoped α/β per edge is `analytic`'s output, which is a Jeffreys-style posterior from scoped `total_k, total_n` (separate from Bayes).
+Post the 30-Apr-26 posterior unification: `p.posterior` is a source-agnostic projection of the active `model_vars[*].probability` entry, written exclusively by `applyPromotion`. When bayesian is the active source, `p.posterior.alpha` mirrors `model_vars[bayesian].probability.alpha` — an aggregate posterior from the offline Bayes compiler fit, **not** query-scoped. When analytic is the active source, `p.posterior.alpha` mirrors `model_vars[analytic].probability.alpha` — the §3.9 aggregate window-family Beta moment-matched from `(forecast_mean, forecast_stdev)` over the recency-weighted mature-day population, **also aggregate**, not query-scoped per the layer-isolation invariant. The historical D20 path that synthesised α/β from scoped `p.evidence.{n, k}` was retired in doc 73b Stage 2.
 
 **Confusion 4: "analysis runners trigger the BE CF pass"**
 They do not trigger the Stage 2 graph-enrichment CF pass. That pass is
@@ -333,14 +335,15 @@ unconditioned outputs pro-rata to `m_S / m_G`, with `n_effective`
 
 When you read a field, know who wrote it:
 
-- `edge.p.model_vars[source='bayesian'].*` → always and only the Bayes compiler (offline)
-- `edge.p.model_vars[source='analytic'].*` → FE topo pass (browser)
+- `edge.p.model_vars[source='bayesian'].*` → Bayes compiler (offline) → `bayesPatchService.applyPatch` writes the source ledger entry; `posteriorSliceContexting` re-projects on DSL change. Carries `probability` (Beta), `latency` (lognormal), `quality` (gate inputs), `fit_diagnostics` (bayesian-only metadata: HDI, fitted_at, prior_tier, PPC, LOO).
+- `edge.p.model_vars[source='analytic'].*` → FE topo pass (browser). Same `probability.{alpha, beta, …}` shape as bayesian.
+- `edge.p.posterior.*`, `edge.p.latency.posterior.*` → `applyPromotion` (single writer post-unification, 30-Apr-26). Source-agnostic projections of the active `model_vars[*]` entry. Cleared when no source resolves.
 - `edge.p.latency.mu, sigma, t95, ...` → promoted from whichever model_vars source is active (per `resolveActiveModelVars`)
 - `edge.p.evidence.{mean, n, k}` → FE topo-pass evidence aggregation (from scoped snapshot data)
 - `edge.p.mean, edge.p.sd` → BE CF pass when landed; else FE topo pass's blended fallback
 - `edge.p.latency.completeness` → BE CF pass when landed; else FE topo pass's CDF eval
 - `edge.p.latency.completeness_stdev` → BE CF pass
-- `edge.p.forecast.mean` → BE CF pass (same value as `p.mean` when CF landed); legacy field name retained
+- `edge.p.forecast.{mean, stdev, source}` → `applyPromotion` (the `source` label tracks the active source after promotion)
 
 ### Dispersion-field naming (doc 61)
 

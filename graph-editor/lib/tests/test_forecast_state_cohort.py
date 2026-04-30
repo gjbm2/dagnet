@@ -404,6 +404,35 @@ class TestScopeAndCarrierConsistency:
                 "Path+carrier gives lower completeness (double upstream lag)"
 
 
+class TestAggregateISLikelihood:
+    """73k regression: CF single-retrieval likelihood matches compiler form."""
+
+    def test_single_retrieval_completeness_lives_in_success_probability(self):
+        from runner.forecast_state import _cohort_binomial_log_likelihood
+
+        p_draws = np.array([0.2], dtype=float)
+        completeness_draws = np.array([0.5], dtype=float)
+
+        actual = _cohort_binomial_log_likelihood(
+            p_draws=p_draws,
+            completeness_draws=completeness_draws,
+            n_i=100.0,
+            k_i=10.0,
+        )[0]
+
+        compiler_form = (
+            10.0 * math.log(0.2 * 0.5)
+            + 90.0 * math.log1p(-(0.2 * 0.5))
+        )
+        effective_exposure_form = (
+            10.0 * math.log(0.2)
+            + 40.0 * math.log1p(-0.2)
+        )
+
+        assert actual == pytest.approx(compiler_form)
+        assert actual != pytest.approx(effective_exposure_form)
+
+
 class TestSubsetConditioningBlend:
     """Doc 52 §14 — engine-level subset-conditioning blend.
 

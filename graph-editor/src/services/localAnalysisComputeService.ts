@@ -7,7 +7,8 @@
  */
 
 import type { AnalysisResult, AnalysisResponse } from '../lib/graphComputeClient';
-import type { ConversionGraph, GraphNode, GraphEdge, ProbabilityPosterior, LatencyPosterior } from '../types';
+import type { ConversionGraph, GraphNode, GraphEdge } from '../types';
+import { getProbabilityPosteriorView, getLatencyPosteriorView } from '../utils/posteriorView';
 import { parseDSL } from '../lib/queryDSL';
 import { computeQualityTier, qualityTierLabel } from '../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel } from '../utils/freshnessDisplay';
@@ -548,42 +549,32 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
 
   // Build metadata for custom card rendering
   const latencyCdf = buildLatencyCdfMeta(edge);
-  const probPosterior = edge.p?.posterior as any;
-  const latPosterior = (edge.p?.latency as any)?.posterior || null;
+  // Posterior unification plan §4 Step 4: pass merged views to consumers
+  // so they have the source-agnostic Beta/lognormal surfaces plus
+  // bayesian-only diagnostics in one shape.
+  // Posterior unification plan §3, latency v1.1 (30-Apr-26): the promoted
+  // card reads the active source's projected surfaces directly so promotion
+  // gaps surface as visible defects rather than being papered over by
+  // model_vars[active] fallbacks.
+  //   - p.posterior         : promoted Beta (source-agnostic; written by applyPromotion)
+  //   - p.latency.posterior : promoted lognormal posterior (source-agnostic; written by applyPromotion)
+  //   - p.latency.promoted_t95 / promoted_path_t95 : promoted scalars (source-agnostic)
+  // Bayesian-only fit diagnostics for the popover are merged separately
+  // via the view utilities; the chart itself reads only promoted state.
+  const probView = getProbabilityPosteriorView(edge.p as any);
+  const latView = getLatencyPosteriorView(edge.p as any);
+  const probPosterior = (edge.p as any)?.posterior;
+  const latPosterior = ((edge.p as any)?.latency)?.posterior || null;
+  const promotedLat = edge.p?.latency as any;
 
-  // Build posteriors metadata — from Bayesian posterior if available,
-  // else from promoted model_vars latency (heuristic dispersion).
   let posteriorsMeta: Record<string, any> | undefined;
   if (probPosterior || latPosterior) {
-    // Bayesian posterior available
-    const bayesMv = (edge.p?.model_vars as any[])?.find((mv: any) => mv.source === 'bayesian');
     posteriorsMeta = {
-      probability: probPosterior || null,
-      latency: latPosterior,
+      probability: probView,
+      latency: latView,
       paramId: edge.p?.id || null,
-      t95: bayesMv?.latency?.t95,
-      path_t95: bayesMv?.latency?.path_t95,
-    };
-  } else if (edge.p?.latency?.mu != null && edge.p?.latency?.promoted_mu_sd != null) {
-    // No Bayesian posterior, but promoted model_vars with heuristic dispersion.
-    // Build a LatencyPosterior-shaped object from promoted fields.
-    const lat = edge.p.latency as any;
-    posteriorsMeta = {
-      probability: null,
-      latency: {
-        mu_mean: lat.mu, mu_sd: lat.promoted_mu_sd,
-        sigma_mean: lat.sigma, sigma_sd: lat.promoted_sigma_sd,
-        onset_delta_days: lat.promoted_onset_delta_days ?? lat.onset_delta_days,
-        onset_sd: lat.promoted_onset_sd,
-        onset_mu_corr: lat.promoted_onset_mu_corr,
-        path_mu_mean: lat.path_mu, path_mu_sd: lat.promoted_path_mu_sd,
-        path_sigma_mean: lat.path_sigma, path_sigma_sd: lat.promoted_path_sigma_sd,
-        path_onset_delta_days: lat.path_onset_delta_days,
-        path_onset_sd: lat.promoted_path_onset_sd,
-      },
-      paramId: edge.p?.id || null,
-      t95: lat.promoted_t95 ?? lat.t95,
-      path_t95: lat.promoted_path_t95 ?? lat.path_t95,
+      t95: promotedLat?.promoted_t95 ?? promotedLat?.t95,
+      path_t95: promotedLat?.promoted_path_t95 ?? promotedLat?.path_t95,
     };
   }
 
@@ -661,8 +652,8 @@ function buildEdgeForecastTab(
   edge: GraphEdge,
   graph: ConversionGraph,
 ): void {
-  const posterior: ProbabilityPosterior | undefined = edge.p?.posterior as ProbabilityPosterior | undefined;
-  const latPosterior: LatencyPosterior | undefined = (edge.p?.latency as any)?.posterior as LatencyPosterior | undefined;
+  const posterior: any = (edge.p as any)?.posterior;
+  const latPosterior: any = ((edge.p as any)?.latency)?.posterior;
 
   if (!posterior && !latPosterior) {
     data.push({
@@ -674,7 +665,7 @@ function buildEdgeForecastTab(
     return;
   }
 
-  // ── Forecast tab: rendered by BayesPosteriorCard via metadata ──
+  // ── Forecast tab: rendered by PromotedModelCard via metadata ──
   // Emit a placeholder row so the tab appears in the tab bar.
   // Fitted time is shown in the card's convergence footer — no separate Metadata section needed.
   if (posterior || latPosterior) {

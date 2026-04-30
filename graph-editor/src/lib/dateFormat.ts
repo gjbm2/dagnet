@@ -12,8 +12,18 @@
  * @returns Formatted date string
  */
 export function formatDateUK(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
-  
+  // d-MMM-yy strings must round-trip through parseUKDate (UTC midnight).
+  // `new Date("29-Apr-26")` parses as *local* midnight, so on a host running
+  // in a TZ ahead of UTC (e.g. BST) the UTC components drop a day, and
+  // formatDateUK("29-Apr-26") would return "28-Apr-26".
+  let d: Date;
+  if (typeof date === 'string') {
+    const datePart = date.split('T')[0];
+    d = isUKDate(datePart) ? parseUKDate(datePart) : new Date(date);
+  } else {
+    d = date;
+  }
+
   if (isNaN(d.getTime())) {
     throw new Error(`Invalid date: ${date}`);
   }

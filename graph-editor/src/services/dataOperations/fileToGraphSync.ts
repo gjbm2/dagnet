@@ -2007,6 +2007,7 @@ export async function getParameterFromFile(options: {
         // so latency has a home; promoteModelVars treats absent
         // probability as the degenerate "unfittable" case which is
         // correct for an edge that hasn't yet had a fresh fetch.
+        const { applyPromotion } = await import('../modelVarsResolution');
         const p = nextGraph.edges[edgeIndex].p as any;
         if (!p.model_vars) p.model_vars = [];
         const idx = p.model_vars.findIndex((v: any) => v.source === 'analytic');
@@ -2026,6 +2027,14 @@ export async function getParameterFromFile(options: {
         }
         if (idx >= 0) {
           p.model_vars[idx] = { ...p.model_vars[idx], latency: mergedLatency };
+          // Posterior unification plan §4 Step 0: any model_vars mutation
+          // must end with promotion so promoted scalars (and post-Step-2
+          // p.posterior / p.latency.posterior) reflect the new state. The
+          // probability-and-latency branch above already promotes; this
+          // latency-only branch was an asymmetry that left p.forecast.*
+          // and the promoted_* latency scalars stale on a parameter-file
+          // edit affecting only dispersion fields.
+          applyPromotion(p, nextGraph.model_source_preference);
         }
         // Note: when no analytic entry exists yet, we deliberately do
         // NOT create one from latency alone — without a probability

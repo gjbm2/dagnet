@@ -174,6 +174,250 @@ function _migrateManualSourceInPlace(data: any, filePath: string): boolean {
   return touched;
 }
 
+/**
+ * Posterior unification plan (29-Apr-26) §4 Step 9 — on-load migration.
+ *
+ * Pre-unification graphs carry the lopsided shape:
+ *   - `p.posterior` populated with the bayesian Beta + bayesian-fit-only
+ *     metadata (HDI, ESS, Rhat, fitted_at, prior_tier, …).
+ *   - `model_vars[bayesian].probability` carrying only `{mean, stdev}`
+ *     (slim — no Beta shape) plus `quality.gate_passed`.
+ *
+ * Post-unification, the source ledger is the source of truth: the
+ * bayesian Beta lives on `model_vars[bayesian].probability.{alpha, beta,
+ * alpha_pred, beta_pred, cohort_*}`, latency posterior values live on
+ * `model_vars[bayesian].latency.{mu, sigma, t95, ...}` (using the
+ * source-ledger naming convention — promotion renames to mu_mean / sigma_mean
+ * for the `p.latency.posterior` projection), and bayesian-only metadata
+ * lives on `model_vars[bayesian].fit_diagnostics.{probability, latency}`.
+ *
+ * Without this migration, opening a legacy graph produces a one-cycle
+ * blank state: the next promotion clears `p.posterior` because
+ * `model_vars[bayesian].probability` does not carry the Beta. After this
+ * migration runs, the source ledger carries the data and promotion works.
+ *
+ * Trigger: any edge with `p.posterior.alpha != null` and either no
+ * `model_vars[bayesian]` entry or the existing entry's
+ * `probability.alpha == null`. Idempotent: re-running on a migrated
+ * graph is a no-op.
+ *
+ * Persistence (plan §9): when this migration rewrites an edge, we set
+ * `isDirty: true` on the FileState so the migrated shape persists across
+ * save/reload. Without this, the migration runs every load but never
+ * makes it back to disk.
+ *
+ * Returns true when at least one edge was migrated.
+ */
+function _migrateBayesianPosteriorToSourceLedgerInPlace(data: any, filePath: string): boolean {
+  const edges = Array.isArray(data?.edges) ? data.edges : null;
+  if (!edges) return false;
+
+  let edgesMigrated = 0;
+  for (const edge of edges) {
+    const p = edge?.p;
+    if (!p || typeof p !== 'object') continue;
+    const oldPosterior: any = (p as any).posterior;
+    if (!oldPosterior || typeof oldPosterior !== 'object') continue;
+    const alpha = oldPosterior.alpha;
+    const beta = oldPosterior.beta;
+    if (typeof alpha !== 'number' || typeof beta !== 'number'
+        || !(alpha > 0) || !(beta > 0)) continue;
+
+    if (!Array.isArray(p.model_vars)) p.model_vars = [];
+    let bayesEntry: any = p.model_vars.find((v: any) => v?.source === 'bayesian');
+
+    // Skip when source ledger already carries the Beta (idempotent on
+    // already-migrated graphs).
+    if (bayesEntry?.probability?.alpha != null && bayesEntry?.probability?.beta != null) {
+      continue;
+    }
+
+    if (!bayesEntry) {
+      bayesEntry = {
+        source: 'bayesian',
+        source_at: oldPosterior.fitted_at ?? '',
+        probability: { mean: 0, stdev: 0 },
+      };
+      p.model_vars.push(bayesEntry);
+    }
+
+    // Rebuild the probability sub-block from the legacy posterior.
+    const sum = alpha + beta;
+    const mean = sum > 0 ? alpha / sum : 0;
+    const stdev = sum > 0
+      ? Math.sqrt((alpha * beta) / (sum * sum * (sum + 1)))
+      : 0;
+    bayesEntry.probability = {
+      mean,
+      stdev,
+      alpha,
+      beta,
+      provenance: oldPosterior.provenance ?? 'bayesian',
+    };
+    if (oldPosterior.alpha_pred != null) {
+      bayesEntry.probability.alpha_pred = oldPosterior.alpha_pred;
+      bayesEntry.probability.beta_pred = oldPosterior.beta_pred;
+    }
+    if (oldPosterior.cohort_alpha != null) {
+      bayesEntry.probability.cohort_alpha = oldPosterior.cohort_alpha;
+      bayesEntry.probability.cohort_beta = oldPosterior.cohort_beta;
+      bayesEntry.probability.cohort_provenance = oldPosterior.cohort_provenance ?? 'bayesian';
+    }
+    if (oldPosterior.cohort_alpha_pred != null) {
+      bayesEntry.probability.cohort_alpha_pred = oldPosterior.cohort_alpha_pred;
+      bayesEntry.probability.cohort_beta_pred = oldPosterior.cohort_beta_pred;
+    }
+    // n_effective canonical name (plan §9). Prefer the new name when
+    // present; fall back to the legacy `window_n_effective` alias.
+    if (oldPosterior.n_effective != null) {
+      bayesEntry.probability.n_effective = oldPosterior.n_effective;
+    } else if (oldPosterior.window_n_effective != null) {
+      bayesEntry.probability.n_effective = oldPosterior.window_n_effective;
+    }
+    if (oldPosterior.cohort_n_effective != null) {
+      bayesEntry.probability.cohort_n_effective = oldPosterior.cohort_n_effective;
+    }
+    if (typeof oldPosterior.source_at === 'string' && oldPosterior.source_at) {
+      bayesEntry.source_at = oldPosterior.source_at;
+    } else if (typeof oldPosterior.fitted_at === 'string' && oldPosterior.fitted_at) {
+      bayesEntry.source_at = oldPosterior.fitted_at;
+    }
+
+    // Latency sub-block — rebuild from `p.latency.posterior` (legacy
+    // projection). Field rename: mu_mean → mu, sigma_mean → sigma,
+    // path_*_mean → path_*. The promoted scalar surface
+    // (`p.latency.{mu, sigma, t95, …}`) survives unchanged for the
+    // analytic input contract.
+    const oldLatPost: any = (p.latency as any)?.posterior;
+    if (oldLatPost && typeof oldLatPost === 'object'
+        && typeof oldLatPost.mu_mean === 'number') {
+      const mu = oldLatPost.mu_mean;
+      const sigma = oldLatPost.sigma_mean ?? 0;
+      const onset = oldLatPost.onset_delta_days ?? oldLatPost.onset_mean ?? 0;
+      const lat: any = {
+        mu,
+        sigma,
+        t95: Math.exp(mu + 1.645 * sigma) + onset,
+        onset_delta_days: onset,
+      };
+      if (oldLatPost.mu_sd != null) lat.mu_sd = oldLatPost.mu_sd;
+      if (oldLatPost.mu_sd_pred != null) lat.mu_sd_pred = oldLatPost.mu_sd_pred;
+      if (oldLatPost.sigma_sd != null) lat.sigma_sd = oldLatPost.sigma_sd;
+      if (oldLatPost.onset_sd != null) lat.onset_sd = oldLatPost.onset_sd;
+      if (oldLatPost.onset_mu_corr != null) lat.onset_mu_corr = oldLatPost.onset_mu_corr;
+      if (typeof oldLatPost.path_mu_mean === 'number') {
+        lat.path_mu = oldLatPost.path_mu_mean;
+        lat.path_sigma = oldLatPost.path_sigma_mean ?? 0;
+        lat.path_t95 = Math.exp(lat.path_mu + 1.645 * lat.path_sigma) + (oldLatPost.path_onset_delta_days ?? 0);
+        lat.path_onset_delta_days = oldLatPost.path_onset_delta_days ?? 0;
+        if (oldLatPost.path_mu_sd != null) lat.path_mu_sd = oldLatPost.path_mu_sd;
+        if (oldLatPost.path_mu_sd_pred != null) lat.path_mu_sd_pred = oldLatPost.path_mu_sd_pred;
+        if (oldLatPost.path_sigma_sd != null) lat.path_sigma_sd = oldLatPost.path_sigma_sd;
+        if (oldLatPost.path_onset_sd != null) lat.path_onset_sd = oldLatPost.path_onset_sd;
+      }
+      bayesEntry.latency = lat;
+    }
+
+    // fit_diagnostics — the bayesian-only metadata that previously
+    // squatted on p.posterior / p.latency.posterior.
+    const probDiag: any = {};
+    if (oldPosterior.fitted_at) probDiag.fitted_at = oldPosterior.fitted_at;
+    if (oldPosterior.fingerprint) probDiag.fingerprint = oldPosterior.fingerprint;
+    if (oldPosterior.prior_tier) probDiag.prior_tier = oldPosterior.prior_tier;
+    if (oldPosterior.surprise_z != null) probDiag.surprise_z = oldPosterior.surprise_z;
+    if (oldPosterior.hdi_lower != null) {
+      probDiag.hdi_lower = oldPosterior.hdi_lower;
+      probDiag.hdi_upper = oldPosterior.hdi_upper;
+      probDiag.hdi_level = oldPosterior.hdi_level ?? 0.9;
+    }
+    if (oldPosterior.hdi_lower_pred != null) {
+      probDiag.hdi_lower_pred = oldPosterior.hdi_lower_pred;
+      probDiag.hdi_upper_pred = oldPosterior.hdi_upper_pred;
+    }
+    if (oldPosterior.cohort_hdi_lower != null) {
+      probDiag.cohort_hdi_lower = oldPosterior.cohort_hdi_lower;
+      probDiag.cohort_hdi_upper = oldPosterior.cohort_hdi_upper;
+    }
+    if (oldPosterior.cohort_hdi_lower_pred != null) {
+      probDiag.cohort_hdi_lower_pred = oldPosterior.cohort_hdi_lower_pred;
+      probDiag.cohort_hdi_upper_pred = oldPosterior.cohort_hdi_upper_pred;
+    }
+    if (oldPosterior.delta_elpd != null) probDiag.delta_elpd = oldPosterior.delta_elpd;
+    if (oldPosterior.pareto_k_max != null) probDiag.pareto_k_max = oldPosterior.pareto_k_max;
+    if (oldPosterior.n_loo_obs != null) probDiag.n_loo_obs = oldPosterior.n_loo_obs;
+    if (oldPosterior.ppc_coverage_90 != null) probDiag.ppc_coverage_90 = oldPosterior.ppc_coverage_90;
+    if (oldPosterior.ppc_n_obs != null) probDiag.ppc_n_obs = oldPosterior.ppc_n_obs;
+    if (oldPosterior.ppc_traj_coverage_90 != null) probDiag.ppc_traj_coverage_90 = oldPosterior.ppc_traj_coverage_90;
+    if (oldPosterior.ppc_traj_n_obs != null) probDiag.ppc_traj_n_obs = oldPosterior.ppc_traj_n_obs;
+
+    let latDiag: any | undefined;
+    if (oldLatPost && typeof oldLatPost === 'object') {
+      latDiag = {};
+      if (oldLatPost.fitted_at) latDiag.fitted_at = oldLatPost.fitted_at;
+      if (oldLatPost.fingerprint) latDiag.fingerprint = oldLatPost.fingerprint;
+      if (oldLatPost.ess != null) latDiag.ess = oldLatPost.ess;
+      if (oldLatPost.rhat != null) latDiag.rhat = oldLatPost.rhat;
+      if (oldLatPost.hdi_t95_lower != null) {
+        latDiag.hdi_t95_lower = oldLatPost.hdi_t95_lower;
+        latDiag.hdi_t95_upper = oldLatPost.hdi_t95_upper;
+        latDiag.hdi_level = oldLatPost.hdi_level ?? 0.9;
+      }
+      if (oldLatPost.path_hdi_t95_lower != null) {
+        latDiag.path_hdi_t95_lower = oldLatPost.path_hdi_t95_lower;
+        latDiag.path_hdi_t95_upper = oldLatPost.path_hdi_t95_upper;
+      }
+      if (oldLatPost.delta_elpd != null) latDiag.delta_elpd = oldLatPost.delta_elpd;
+      if (oldLatPost.pareto_k_max != null) latDiag.pareto_k_max = oldLatPost.pareto_k_max;
+      if (oldLatPost.n_loo_obs != null) latDiag.n_loo_obs = oldLatPost.n_loo_obs;
+      if (oldLatPost.ppc_traj_coverage_90 != null) latDiag.ppc_traj_coverage_90 = oldLatPost.ppc_traj_coverage_90;
+      if (oldLatPost.ppc_traj_n_obs != null) latDiag.ppc_traj_n_obs = oldLatPost.ppc_traj_n_obs;
+      if (Object.keys(latDiag).length === 0) latDiag = undefined;
+    }
+
+    bayesEntry.fit_diagnostics = {
+      probability: probDiag,
+      ...(latDiag ? { latency: latDiag } : {}),
+    };
+
+    // Carry forward the bayesian quality gate (rhat/ess/divergences)
+    // from the legacy posterior. Reporting surfaces gate the bayesian
+    // source on these fields.
+    if (!bayesEntry.quality) bayesEntry.quality = {};
+    if (oldPosterior.rhat != null && bayesEntry.quality.rhat == null) {
+      bayesEntry.quality.rhat = oldPosterior.rhat;
+    }
+    if (oldPosterior.ess != null && bayesEntry.quality.ess == null) {
+      bayesEntry.quality.ess = oldPosterior.ess;
+    }
+    if (oldPosterior.divergences != null && bayesEntry.quality.divergences == null) {
+      bayesEntry.quality.divergences = oldPosterior.divergences;
+    }
+    if (oldPosterior.evidence_grade != null && bayesEntry.quality.evidence_grade == null) {
+      bayesEntry.quality.evidence_grade = oldPosterior.evidence_grade;
+    }
+    // Conservative gate inference: legacy graphs without an explicit
+    // quality.gate_passed get gate_passed=true when the legacy
+    // posterior provenance is 'bayesian' (a successful MCMC fit). Other
+    // provenances ('pooled-fallback', 'point-estimate', 'skipped')
+    // imply degraded fits; gate_passed stays false. Setting this
+    // accurately matters because the next promotion uses gate_passed
+    // to decide whether to project the bayesian Beta onto p.posterior.
+    if (bayesEntry.quality.gate_passed == null) {
+      bayesEntry.quality.gate_passed = oldPosterior.provenance === 'bayesian';
+    }
+
+    edgesMigrated += 1;
+  }
+
+  if (edgesMigrated > 0) {
+    sessionLogService.info(
+      'workspace', 'POSTERIOR_UNIFICATION_MIGRATION',
+      `Migrated bayesian posterior shape from p.posterior → model_vars[bayesian] on ${edgesMigrated} edge${edgesMigrated === 1 ? '' : 's'} of ${filePath}`,
+    );
+  }
+  return edgesMigrated > 0;
+}
+
 export interface RemoteStatus {
   isAhead: boolean;
   filesChanged: number;
@@ -632,6 +876,18 @@ class WorkspaceService {
             // Doc 73b §6.7 / OP1 graceful-degrade: drop in-the-wild `manual`
             // model_vars entries and unpin `manual` selector preferences.
             _migrateManualSourceInPlace(data, treeItem.path);
+            // Posterior unification plan §9: snapshot the un-migrated
+            // shape BEFORE running the bayesian-posterior migration so
+            // we can use it as `originalData`. When the migration
+            // rewrites at least one edge, `data` carries the migrated
+            // shape and `originalData` carries the un-migrated shape;
+            // the dirty differ sees a real diff and the migrated shape
+            // persists on next save. This is the option-(b) mechanism
+            // from plan §9 (idempotent, dirty-via-real-diff).
+            const preMigrationSnapshot = structuredClone(data);
+            const posteriorMigrationRan = _migrateBayesianPosteriorToSourceLedgerInPlace(
+              data, treeItem.path,
+            );
 
             // Create FileState
           const fileName = treeItem.path.split('/').pop() || ''; // Get filename from path
@@ -666,9 +922,20 @@ class WorkspaceService {
             name: fileName,
             path: treeItem.path,
               data,
-              originalData: structuredClone(data),
-              isDirty: false,
-              isInitializing: true, // Allow editor normalization without marking dirty
+              // Posterior unification plan §9: when the bayesian-posterior
+              // migration rewrote at least one edge, use the un-migrated
+              // snapshot as `originalData` so the dirty differ sees a
+              // real diff and the migrated shape persists on next save.
+              // Otherwise use the (post-no-op-migrations) data, which
+              // matches the existing dispersion + manual-source absorption.
+              originalData: posteriorMigrationRan
+                ? preMigrationSnapshot
+                : structuredClone(data),
+              isDirty: posteriorMigrationRan,
+              // Skip the absorb-during-init phase when the §9 migration
+              // dirtied the file; we want the dirty marker to survive
+              // until the user saves.
+              isInitializing: !posteriorMigrationRan,
               source: {
                 repository,
               path: treeItem.path,

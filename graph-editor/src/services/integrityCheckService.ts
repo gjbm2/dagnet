@@ -1278,41 +1278,45 @@ export class IntegrityCheckService {
         } catch { /* parse failure — skip */ }
       }
 
-      // Per-edge quality checks
+      // Per-edge quality checks. Posterior unification plan §4 Step 4:
+      // rhat / ess / divergences moved off `edge.p.posterior` and live
+      // canonically on `edge.p.model_vars[bayesian].quality`.
       for (const edge of edges) {
-        const posterior = (edge as any).p?.posterior;
-        if (!posterior) continue;
+        const bayesEntry = ((edge as any).p?.model_vars as any[] | undefined)
+          ?.find((v) => v?.source === 'bayesian');
+        const quality = bayesEntry?.quality;
+        if (!quality) continue;
 
         const edgeLabel = (edge as any).p?.id || edge.id || 'unknown';
 
-        if (posterior.rhat != null && posterior.rhat > 1.1) {
+        if (quality.rhat != null && quality.rhat > 1.1) {
           issues.push({
             fileId: graphFileId,
             type: 'graph',
             severity: 'warning',
             category: 'operational',
-            field: `edge.${edgeLabel}.posterior.rhat`,
-            message: `Edge ${edgeLabel}: convergence issue (rhat ${posterior.rhat.toFixed(3)})`,
+            field: `edge.${edgeLabel}.model_vars[bayesian].quality.rhat`,
+            message: `Edge ${edgeLabel}: convergence issue (rhat ${quality.rhat.toFixed(3)})`,
           });
         }
-        if (posterior.ess != null && posterior.ess < 100) {
+        if (quality.ess != null && quality.ess < 100) {
           issues.push({
             fileId: graphFileId,
             type: 'graph',
             severity: 'warning',
             category: 'operational',
-            field: `edge.${edgeLabel}.posterior.ess`,
-            message: `Edge ${edgeLabel}: low ESS (${Math.round(posterior.ess)})`,
+            field: `edge.${edgeLabel}.model_vars[bayesian].quality.ess`,
+            message: `Edge ${edgeLabel}: low ESS (${Math.round(quality.ess)})`,
           });
         }
-        if (posterior.divergences != null && posterior.divergences > 0) {
+        if (quality.divergences != null && quality.divergences > 0) {
           issues.push({
             fileId: graphFileId,
             type: 'graph',
             severity: 'warning',
             category: 'operational',
-            field: `edge.${edgeLabel}.posterior.divergences`,
-            message: `Edge ${edgeLabel}: ${posterior.divergences} divergent transitions`,
+            field: `edge.${edgeLabel}.model_vars[bayesian].quality.divergences`,
+            message: `Edge ${edgeLabel}: ${quality.divergences} divergent transitions`,
           });
         }
       }

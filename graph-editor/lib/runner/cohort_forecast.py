@@ -26,6 +26,10 @@ _COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
 
 
 from .forecast_application import compute_completeness
+# Canonical implementation lives in model_resolver alongside resolve_model_params.
+# Re-exported here so existing `from .cohort_forecast import read_edge_cohort_params`
+# imports keep working.
+from .model_resolver import read_edge_cohort_params  # noqa: F401
 
 
 # ── x_provider: upstream arrival provider ─────────────────────────────
@@ -219,122 +223,6 @@ def forecast_rate(
 
 
 # ── Edge parameter extraction ──────────────────────────────────────────
-
-
-def read_edge_cohort_params(
-    edge: Dict[str, Any],
-) -> Optional[Dict[str, float]]:
-    """Extract cohort-level (a-anchored) Bayes params from a graph edge.
-
-    Returns a dict with keys {p, mu, sigma, onset} or None if the edge
-    lacks required parameters.
-
-    Prefers posterior values over flat fields.  For probability, prefers
-    cohort_alpha/cohort_beta (cohort-level) over alpha/beta (window-level).
-    """
-    p_obj = edge.get('p') or {}
-    latency = p_obj.get('latency') or {}
-    lat_post = latency.get('posterior') or {}
-    prob_post = p_obj.get('posterior') or {}
-
-    # Latency: prefer cohort path-level posterior, then edge posterior, then flat.
-    # Use _first_num to avoid Python `or` discarding valid 0.0 values.
-    def _first_num(*vals):
-        for v in vals:
-            if isinstance(v, (int, float)) and math.isfinite(v):
-                return v
-        return None
-
-    mu = _first_num(
-        lat_post.get('path_mu_mean'),
-        lat_post.get('mu_mean'),
-        latency.get('path_mu'),
-        latency.get('mu'))
-    sigma = _first_num(
-        lat_post.get('path_sigma_mean'),
-        lat_post.get('sigma_mean'),
-        latency.get('path_sigma'),
-        latency.get('sigma'))
-    onset = _first_num(
-        lat_post.get('path_onset_delta_days'),
-        lat_post.get('onset_delta_days'),
-        latency.get('path_onset_delta_days'),
-        latency.get('promoted_onset_delta_days'),
-        latency.get('onset_delta_days'))
-    if onset is None:
-        onset = 0.0
-
-    if not isinstance(mu, (int, float)) or not math.isfinite(mu):
-        return None
-    if not isinstance(sigma, (int, float)) or not math.isfinite(sigma) or sigma <= 0:
-        return None
-
-    # Probability: prefer cohort posterior, then window posterior, then forecast.
-    cohort_alpha = prob_post.get('cohort_alpha')
-    cohort_beta = prob_post.get('cohort_beta')
-    post_alpha = prob_post.get('alpha')
-    post_beta = prob_post.get('beta')
-    forecast = (p_obj.get('forecast') or {}).get('mean')
-
-    prob: Optional[float] = None
-    if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
-            and cohort_alpha > 0 and cohort_beta > 0):
-        prob = float(cohort_alpha) / (float(cohort_alpha) + float(cohort_beta))
-    elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
-            and post_alpha > 0 and post_beta > 0):
-        prob = float(post_alpha) / (float(post_alpha) + float(post_beta))
-    elif isinstance(forecast, (int, float)) and math.isfinite(forecast) and forecast > 0:
-        prob = float(forecast)
-
-    if prob is None or prob <= 0:
-        return None
-
-    # Alpha/beta for Bayesian upstream x-forecast (Phase 2).
-    # Prefer path-level (cohort) over window-level.
-    _alpha: Optional[float] = None
-    _beta: Optional[float] = None
-    if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
-            and cohort_alpha > 0 and cohort_beta > 0):
-        _alpha = float(cohort_alpha)
-        _beta = float(cohort_beta)
-    elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
-            and post_alpha > 0 and post_beta > 0):
-        _alpha = float(post_alpha)
-        _beta = float(post_beta)
-
-    result: Dict[str, float] = {
-        'p': float(prob),
-        'mu': float(mu),
-        'sigma': float(sigma),
-        'onset': float(onset) if isinstance(onset, (int, float)) else 0.0,
-    }
-    if _alpha is not None and _beta is not None:
-        result['alpha'] = _alpha
-        result['beta'] = _beta
-
-    # Posterior uncertainty (SDs) for stochastic upstream x (Phase 4).
-    # Prefer path-level SDs, then edge-level, from the posterior block.
-    # Doc 61: feeds forecasting machinery — read predictive mu_sd first
-    # with epistemic fallback. Kept in lockstep with the v3 copy in
-    # forecast_runtime.py until doc 56's retirement workstream deletes v1.
-    for _src_keys, _dst_key in [
-        (('path_mu_sd_pred', 'mu_sd_pred', 'path_mu_sd', 'mu_sd'), 'mu_sd'),
-        (('path_sigma_sd', 'sigma_sd'), 'sigma_sd'),
-        (('path_onset_sd', 'onset_sd'), 'onset_sd'),
-    ]:
-        if _dst_key not in result:
-            for _src_key in _src_keys:
-                _v = lat_post.get(_src_key)
-                if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
-                    result[_dst_key] = float(_v)
-                    break
-
-    # p uncertainty from alpha/beta (Beta posterior SD)
-    if 'p_sd' not in result and _alpha is not None and _beta is not None:
-        _s = _alpha + _beta
-        result['p_sd'] = float(math.sqrt(_alpha * _beta / (_s * _s * (_s + 1))))
-
-    return result
 
 
 # ── Graph topology helpers ─────────────────────────────────────────────

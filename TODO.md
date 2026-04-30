@@ -1,5 +1,26 @@
 # TODO
 
+Spark chart for FE model vars doens't align with cli tests or v3 curves...investigate....
+
+## GA blockers — outstanding serious defects (30-Apr-26)
+
+**Forecasting machinery**
+- **B.** Compliance test tracker — [73f](docs/current/project-bayes/73f-outside-in-cohort-engine-investigation.md)
+  - **Bi.** Problems with non-latency edges — [73h](docs/current/project-bayes/73h-v3-router-and-carrier-conditioning-forensic.md) — **needs development & review**
+  - **Bii.** Completeness parity drift — [73l](docs/current/project-bayes/73l-cli-completeness-parity-canary-drift.md) — **needs development & review**
+- **C.** Refresh may not trigger CF pass for all scenarios — no doc yet — **investigate**
+- **D.** Once FE vars flows tested, test Bayes vars flows properly — [modelvars audit 30-Apr-26](docs/current/modelvars-flow-forensic-audit-30-Apr-26.md) — **pending FE flow validation**
+
+**Nightly fetch**
+- **E.** Problematically slow — [daily-automation-audit 28-Feb-26](docs/current/daily-automation-audit-28-feb-26.md), [programme P2.11](docs/current/project-bayes/programme.md) — **needs instrumentation & optimisation**
+- **F.** Verify Bayes commission working in production — [programme P3.12 + P3.27](docs/current/project-bayes/programme.md) — **needs end-to-end production validation**
+
+**Bayes machinery**
+- **G.** More assurance on performance of sparse & contexted graphs — [programme P1.3 + P1.5 + P1.6 + P3.8](docs/current/project-bayes/programme.md) — **GA blocker on contexted production models (P1.5)**
+- **H.** Any remaining key Bayes compiler work — [programme.md](docs/current/project-bayes/programme.md) P1/P2/P3 register — **see programme owner queue**
+
+---
+
 ## General forecasting work
 
 - **Strip stale graph-edge fields left over from retired writers** (29-Apr-26)

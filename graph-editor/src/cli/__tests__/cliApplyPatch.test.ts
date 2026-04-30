@@ -228,16 +228,22 @@ describe('CLI --apply-patch (bayesPatchService via diskLoader)', () => {
     const edge = (graphFile!.data as any).edges.find((e: any) => e.p?.id === PARAM_ID);
     const post = edge.p.posterior;
 
+    // Posterior unification plan §3 — promoted Beta surface (source-agnostic).
     expect(post).toBeDefined();
     expect(post.distribution).toBe('beta');
     expect(post.alpha).toBe(WINDOW_ALPHA);
     expect(post.beta).toBe(WINDOW_BETA);
-    expect(post.hdi_lower).toBe(0.82);
-    expect(post.hdi_upper).toBe(0.94);
-    expect(post.ess).toBe(ESS);
-    expect(post.rhat).toBe(RHAT);
-    expect(post.fitted_at).toBe('2026-04-14T12:00:00Z');
     expect(post.provenance).toBe('test-synth');
+
+    // Bayesian-only metadata (HDI, ESS, Rhat, fitted_at) lives on
+    // model_vars[bayesian].fit_diagnostics, not on p.posterior.
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    const probDiag = bayesEntry.fit_diagnostics.probability;
+    expect(probDiag.hdi_lower).toBe(0.82);
+    expect(probDiag.hdi_upper).toBe(0.94);
+    expect(probDiag.fitted_at).toBe('2026-04-14T12:00:00Z');
+    expect(bayesEntry.quality.ess).toBe(ESS);
+    expect(bayesEntry.quality.rhat).toBe(RHAT);
   });
 
   it('should project cohort() path-level onto edge.p.posterior', () => {
@@ -247,8 +253,12 @@ describe('CLI --apply-patch (bayesPatchService via diskLoader)', () => {
 
     expect(post.cohort_alpha).toBe(COHORT_ALPHA);
     expect(post.cohort_beta).toBe(COHORT_BETA);
-    expect(post.cohort_hdi_lower).toBe(0.81);
-    expect(post.cohort_hdi_upper).toBe(0.93);
+
+    // Cohort HDI moved to fit_diagnostics
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    const probDiag = bayesEntry.fit_diagnostics.probability;
+    expect(probDiag.cohort_hdi_lower).toBe(0.81);
+    expect(probDiag.cohort_hdi_upper).toBe(0.93);
   });
 
   // ── Latency posterior on edge.p.latency.posterior ──────────────────
@@ -258,17 +268,22 @@ describe('CLI --apply-patch (bayesPatchService via diskLoader)', () => {
     const edge = (graphFile!.data as any).edges.find((e: any) => e.p?.id === PARAM_ID);
     const latPost = edge.p.latency.posterior;
 
+    // Posterior unification plan §3 — promoted lognormal posterior surface.
     expect(latPost).toBeDefined();
     expect(latPost.distribution).toBe('lognormal');
     expect(latPost.mu_mean).toBe(MU_MEAN);
     expect(latPost.mu_sd).toBe(MU_SD);
     expect(latPost.sigma_mean).toBe(SIGMA_MEAN);
     expect(latPost.sigma_sd).toBe(SIGMA_SD);
-    expect(latPost.onset_mean).toBe(ONSET_MEAN);
+    expect(latPost.onset_delta_days).toBe(ONSET_MEAN);
     expect(latPost.onset_sd).toBe(ONSET_SD);
     expect(latPost.onset_mu_corr).toBe(ONSET_MU_CORR);
-    expect(latPost.hdi_t95_lower).toBe(HDI_T95_LOWER);
-    expect(latPost.hdi_t95_upper).toBe(HDI_T95_UPPER);
+
+    // HDI bands on t95 moved to fit_diagnostics.latency
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    const latDiag = bayesEntry.fit_diagnostics.latency;
+    expect(latDiag.hdi_t95_lower).toBe(HDI_T95_LOWER);
+    expect(latDiag.hdi_t95_upper).toBe(HDI_T95_UPPER);
   });
 
   it('should project cohort() path-level latency onto edge.p.latency.posterior', () => {
@@ -279,8 +294,12 @@ describe('CLI --apply-patch (bayesPatchService via diskLoader)', () => {
     expect(latPost.path_mu_mean).toBe(COHORT_MU_MEAN);
     expect(latPost.path_sigma_mean).toBe(COHORT_SIGMA_MEAN);
     expect(latPost.path_onset_delta_days).toBe(COHORT_ONSET_MEAN);
-    expect(latPost.path_hdi_t95_lower).toBe(12.0);
-    expect(latPost.path_hdi_t95_upper).toBe(22.0);
+
+    // Path HDI moved to fit_diagnostics.latency
+    const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+    const latDiag = bayesEntry.fit_diagnostics.latency;
+    expect(latDiag.path_hdi_t95_lower).toBe(12.0);
+    expect(latDiag.path_hdi_t95_upper).toBe(22.0);
   });
 
   // ── Parameter file posterior ───────────────────────────────────────
@@ -519,7 +538,11 @@ describe('bootstrap() --bayes-vars end-to-end', () => {
       expect(flat[`e.${edgeKey}.p.latency.posterior.sigma_mean`]).toBe(SIGMA_MEAN);
       expect(flat[`e.${edgeKey}.p.posterior.alpha`]).toBe(WINDOW_ALPHA);
       expect(flat[`e.${edgeKey}.p.posterior.beta`]).toBe(WINDOW_BETA);
-      expect(flat[`e.${edgeKey}.p.posterior.fingerprint`]).toBe('e2e-fp');
+      // Posterior unification plan §3 — fingerprint moved to
+      // model_vars[bayesian].fit_diagnostics.probability and is no longer
+      // extracted onto the param pack (model_vars is FE-only). Verify
+      // directly on the model_vars entry instead.
+      expect(mv.fit_diagnostics.probability.fingerprint).toBe('e2e-fp');
     } finally {
       process.argv = savedArgv;
     }

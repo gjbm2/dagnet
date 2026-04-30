@@ -2186,24 +2186,28 @@ export class UpdateManager {
         // redirected to model_vars[analytic].latency.* and
         // model_vars[analytic].probability.mean. applyPromotion fans
         // them out at the end of the apply loop.
+        //
+        // Atomic replacement: producer's `undefined` for a promoted-block
+        // field means "this edge has no value here — clear any stale
+        // persisted scalar". Per-field `if (... !== undefined)` guards
+        // previously kept stale values so non-latency edges inherited
+        // pre-fix bogus path_mu/path_sigma/etc. forever.
         const al = analyticEntry.latency;
-        if (updLat.mu !== undefined) al.mu = updLat.mu;
-        if (updLat.sigma !== undefined) al.sigma = updLat.sigma;
-        if (updLat.promoted_onset_delta_days !== undefined) {
-          al.onset_delta_days = updLat.promoted_onset_delta_days;
-        }
-        if (updLat.path_mu !== undefined) al.path_mu = updLat.path_mu;
-        if (updLat.path_sigma !== undefined) al.path_sigma = updLat.path_sigma;
-        if (updLat.path_t95 !== undefined) al.path_t95 = updLat.path_t95;
-        if (updLat.path_onset_delta_days !== undefined) al.path_onset_delta_days = updLat.path_onset_delta_days;
+        al.mu = updLat.mu;
+        al.sigma = updLat.sigma;
+        al.onset_delta_days = updLat.promoted_onset_delta_days;
+        al.path_mu = updLat.path_mu;
+        al.path_sigma = updLat.path_sigma;
+        al.path_t95 = updLat.path_t95;
+        al.path_onset_delta_days = updLat.path_onset_delta_days;
         // Heuristic dispersion SDs (edge-level + path-level) — promoted via applyPromotion.
-        if (updLat.mu_sd !== undefined) al.mu_sd = updLat.mu_sd;
-        if (updLat.sigma_sd !== undefined) al.sigma_sd = updLat.sigma_sd;
-        if (updLat.onset_sd !== undefined) al.onset_sd = updLat.onset_sd;
-        if (updLat.onset_mu_corr !== undefined) al.onset_mu_corr = updLat.onset_mu_corr;
-        if (updLat.path_mu_sd !== undefined) al.path_mu_sd = updLat.path_mu_sd;
-        if (updLat.path_sigma_sd !== undefined) al.path_sigma_sd = updLat.path_sigma_sd;
-        if (updLat.path_onset_sd !== undefined) al.path_onset_sd = updLat.path_onset_sd;
+        al.mu_sd = updLat.mu_sd;
+        al.sigma_sd = updLat.sigma_sd;
+        al.onset_sd = updLat.onset_sd;
+        al.onset_mu_corr = updLat.onset_mu_corr;
+        al.path_mu_sd = updLat.path_mu_sd;
+        al.path_sigma_sd = updLat.path_sigma_sd;
+        al.path_onset_sd = updLat.path_onset_sd;
         // Promoted probability surface (§3.2): forecast.mean lands in
         // `model_vars[analytic].probability.mean`. applyPromotion fans
         // this out to `p.forecast.{mean, stdev, source}`.
@@ -2216,19 +2220,20 @@ export class UpdateManager {
         // (`conditional_p[i].p` — Stage 5 will audit). Keep legacy direct
         // writes so the fields land somewhere; promotion-via-model_vars
         // simply doesn't apply here.
-        if (updLat.mu !== undefined) targetP.latency.mu = updLat.mu;
-        if (updLat.sigma !== undefined) targetP.latency.sigma = updLat.sigma;
-        if (updLat.promoted_onset_delta_days !== undefined) {
-          targetP.latency.promoted_onset_delta_days = updLat.promoted_onset_delta_days;
-          if (writeHorizonsToGraph && targetP.latency.onset_delta_days_overridden !== true) {
-            targetP.latency.onset_delta_days = updLat.promoted_onset_delta_days;
-          }
+        //
+        // Atomic replacement (see analyticEntry branch above) for the
+        // promoted-block latency fields.
+        targetP.latency.mu = updLat.mu;
+        targetP.latency.sigma = updLat.sigma;
+        targetP.latency.promoted_onset_delta_days = updLat.promoted_onset_delta_days;
+        if (writeHorizonsToGraph
+            && updLat.promoted_onset_delta_days !== undefined
+            && targetP.latency.onset_delta_days_overridden !== true) {
+          targetP.latency.onset_delta_days = updLat.promoted_onset_delta_days;
         }
-        if (updLat.path_mu !== undefined) targetP.latency.path_mu = updLat.path_mu;
-        if (updLat.path_sigma !== undefined) targetP.latency.path_sigma = updLat.path_sigma;
-        if (updLat.path_onset_delta_days !== undefined) {
-          targetP.latency.path_onset_delta_days = updLat.path_onset_delta_days;
-        }
+        targetP.latency.path_mu = updLat.path_mu;
+        targetP.latency.path_sigma = updLat.path_sigma;
+        targetP.latency.path_onset_delta_days = updLat.path_onset_delta_days;
         if (update.forecast?.mean !== undefined) {
           if (!targetP.forecast) targetP.forecast = {};
           targetP.forecast.mean = update.forecast.mean;

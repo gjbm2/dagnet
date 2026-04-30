@@ -387,42 +387,30 @@ def resolve_model_params(
 
     # ── Probability ────────────────────────────────────────────────
     # In cohort mode, prefer cohort_alpha/cohort_beta — these are the
-    # posterior on this edge's rate estimated from cohort-mode evidence
-    # (anchor-anchored, path latency). In window mode, use alpha/beta
-    # (fitted from window-mode evidence). Both target the same rate
-    # (Y/X at this edge) but from different evidence sets.
+    # Posterior unification plan (29-Apr-26) §4 Step 7: read order is now
+    # `model_vars[promoted_source].probability` first, falling back to
+    # `posterior_block` only when the source ledger lookup fails. The
+    # source ledger is the source of truth post-unification; the live
+    # `p.posterior` is the promoted projection (single-writer:
+    # `applyPromotion`), so the two should always agree on freshly-
+    # promoted graphs. Reading the source first makes the resolver
+    # promotion-aware and matches the FE's `applyPromotion` semantics
+    # directly. The posterior fallback survives as a robustness measure
+    # for graphs that arrive un-promoted (older snapshots, share
+    # bundles, CLI graphs that bypass `applyPromotion`).
+    #
+    # Both `bayesian` and `analytic` sources carry the Beta shape on
+    # `probability.{alpha, beta, alpha_pred, beta_pred, cohort_alpha,
+    # cohort_beta, cohort_alpha_pred, cohort_beta_pred, n_effective,
+    # cohort_n_effective, provenance, cohort_provenance}` per the §3.9
+    # mirror contract.
     alpha = 0.0
     beta = 0.0
     p_mean = 0.0
-
-    # Cohort mode: prefer cohort-mode posterior when available
-    if temporal_mode == 'cohort':
-        cohort_alpha = posterior_block.get('cohort_alpha', 0) or 0
-        cohort_beta = posterior_block.get('cohort_beta', 0) or 0
-        if cohort_alpha > 0 and cohort_beta > 0:
-            alpha = float(cohort_alpha)
-            beta = float(cohort_beta)
-            p_mean = alpha / (alpha + beta)
-
-    # Fall back to edge-level posterior
-    if alpha <= 0 or beta <= 0:
-        post_alpha = posterior_block.get('alpha', 0) or 0
-        post_beta = posterior_block.get('beta', 0) or 0
-        if post_alpha > 0 and post_beta > 0:
-            alpha = float(post_alpha)
-            beta = float(post_beta)
-            p_mean = alpha / (alpha + beta)
-
-    # Doc 73b Stage 2 (§3.9 mirror contract): aggregate analytic source
-    # α/β. When the promoted source is `analytic`, read aggregate Beta
-    # shape from `model_vars[analytic].probability` rather than from
-    # the bayesian posterior (which is empty for analytic-only edges)
-    # or from scoped `p.evidence.{n, k}` (the §3.3.3 layer-isolation
-    # invariant: scoped current-answer fields must never seed an
-    # aggregate model prior). Cohort mode prefers cohort_*; window
-    # mode and cohort fallback prefer the window-family α/β.
     analytic_provenance: Optional[str] = None
-    if (alpha <= 0 or beta <= 0) and promoted_source == 'analytic':
+
+    # ── Step 1: read from the promoted source's ledger entry ─────────
+    if promoted_source:
         if temporal_mode == 'cohort':
             ca = _src.get('prob_cohort_alpha')
             cb = _src.get('prob_cohort_beta')
@@ -431,10 +419,11 @@ def resolve_model_params(
                 alpha = float(ca)
                 beta = float(cb)
                 p_mean = alpha / (alpha + beta)
-                analytic_provenance = (
-                    _src.get('prob_cohort_provenance')
-                    or 'analytic_cohort_baseline'
-                )
+                if promoted_source == 'analytic':
+                    analytic_provenance = (
+                        _src.get('prob_cohort_provenance')
+                        or 'analytic_cohort_baseline'
+                    )
         if alpha <= 0 or beta <= 0:
             wa = _src.get('prob_alpha')
             wb = _src.get('prob_beta')
@@ -443,10 +432,31 @@ def resolve_model_params(
                 alpha = float(wa)
                 beta = float(wb)
                 p_mean = alpha / (alpha + beta)
-                analytic_provenance = (
-                    _src.get('prob_provenance')
-                    or 'analytic_window_baseline'
-                )
+                if promoted_source == 'analytic':
+                    analytic_provenance = (
+                        _src.get('prob_provenance')
+                        or 'analytic_window_baseline'
+                    )
+
+    # ── Step 2: fall back to posterior_block ─────────────────────────
+    # Robustness for un-promoted graphs (older snapshots, share bundles,
+    # CLI graphs that bypass applyPromotion). On a freshly-promoted graph
+    # the values agree with the source-ledger reads above.
+    if temporal_mode == 'cohort' and (alpha <= 0 or beta <= 0):
+        cohort_alpha = posterior_block.get('cohort_alpha', 0) or 0
+        cohort_beta = posterior_block.get('cohort_beta', 0) or 0
+        if cohort_alpha > 0 and cohort_beta > 0:
+            alpha = float(cohort_alpha)
+            beta = float(cohort_beta)
+            p_mean = alpha / (alpha + beta)
+
+    if alpha <= 0 or beta <= 0:
+        post_alpha = posterior_block.get('alpha', 0) or 0
+        post_beta = posterior_block.get('beta', 0) or 0
+        if post_alpha > 0 and post_beta > 0:
+            alpha = float(post_alpha)
+            beta = float(post_beta)
+            p_mean = alpha / (alpha + beta)
 
     if p_mean == 0:
         # Doc 73b §3.9 mirror contract: the analytic source's
@@ -478,24 +488,14 @@ def resolve_model_params(
     # `addEvidenceAndForecastScalars` as `forecast_stdev` and
     # consumed by `buildAnalyticProbabilityBlock` upstream.
 
-    # Subset-conditioning mass (doc 52 §14.3). Pick the mode-appropriate
-    # n_effective from the source layer: bayesian posterior projection,
-    # or analytic source-layer mirror (doc 73b §3.9). The historical
-    # D20-detection heuristic that inferred n_effective from
-    # `p.evidence.n` is removed by Stage 2 — n_effective is now a
-    # source-layer field, never inferred from scoped current-answer
-    # evidence.
+    # Subset-conditioning mass (doc 52 §14.3). Posterior unification plan
+    # (29-Apr-26) §4 Step 7: read from the source ledger first, then fall
+    # back to `posterior_block` for un-promoted graphs. The canonical
+    # field name is `n_effective` (plan §9 rename); `window_n_effective`
+    # is preserved as a legacy alias on `posterior_block` for one cycle
+    # while consumers migrate.
     n_effective: Optional[float] = None
-    if promoted_source == 'bayesian':
-        if temporal_mode == 'cohort':
-            n_effective = posterior_block.get('cohort_n_effective')
-            if n_effective is None:
-                n_effective = posterior_block.get('window_n_effective')
-        else:
-            n_effective = posterior_block.get('window_n_effective')
-        if n_effective is not None:
-            n_effective = float(n_effective)
-    elif promoted_source == 'analytic':
+    if promoted_source:
         if temporal_mode == 'cohort':
             n_effective = _src.get('prob_cohort_n_effective')
             if n_effective is None:
@@ -506,6 +506,20 @@ def resolve_model_params(
             n_effective = float(n_effective)
         else:
             n_effective = None
+    if n_effective is None:
+        # Posterior fallback (un-promoted graphs).
+        if temporal_mode == 'cohort':
+            n_effective = posterior_block.get('cohort_n_effective')
+            if n_effective is None:
+                n_effective = posterior_block.get('n_effective')
+            if n_effective is None:
+                n_effective = posterior_block.get('window_n_effective')
+        else:
+            n_effective = posterior_block.get('n_effective')
+            if n_effective is None:
+                n_effective = posterior_block.get('window_n_effective')
+        if n_effective is not None:
+            n_effective = float(n_effective)
 
     # Predictive alpha/beta: prefer *_pred fields from the active source.
     #
@@ -515,25 +529,30 @@ def resolve_model_params(
     #   docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
     # Falls back to epistemic when no predictive value is available
     # (legacy fixtures, or sources still operating under the prior deferral).
+    # Read order (Forensic audit 30-Apr-26 R2):
+    #   1. model_vars[promoted_source].probability.{alpha_pred, beta_pred,
+    #      cohort_alpha_pred, cohort_beta_pred} — for both bayesian and
+    #      analytic. Both source families carry the predictive Beta on
+    #      `model_vars[*].probability` per the §3.9 mirror contract
+    #      (bayesian via bayesPatchService:362-376, analytic via
+    #      buildAnalyticProbabilityBlock when stdev_pred is supplied).
+    #
+    #      Previous code (a) read posterior_block first — inconsistent with
+    #      the latency / n_effective branches above, both already model_vars-
+    #      first post the 30-Apr-26 unification — and (b) only consulted the
+    #      source ledger for `promoted_source == 'analytic'`, so bayesian
+    #      predictive Beta on `model_vars[bayesian]` was never consulted.
+    #      This block aligns the predictive read with the rest of the
+    #      resolver.
+    #
+    #   2. posterior_block fallback — robustness for un-promoted graphs
+    #      (older snapshots, share bundles, CLI graphs that bypass
+    #      applyPromotion). On a freshly-promoted graph the values agree
+    #      with the source-ledger reads above.
     alpha_pred = alpha
     beta_pred = beta
-    # Cohort-mode predictive — bayesian posterior block first.
-    if temporal_mode == 'cohort':
-        _cp_a = posterior_block.get('cohort_alpha_pred', 0) or 0
-        _cp_b = posterior_block.get('cohort_beta_pred', 0) or 0
-        if _cp_a > 0 and _cp_b > 0:
-            alpha_pred = float(_cp_a)
-            beta_pred = float(_cp_b)
-    if alpha_pred == alpha and beta_pred == beta:
-        # No cohort predictive or window mode — try window-level predictive
-        # from bayesian posterior block.
-        _wp_a = posterior_block.get('alpha_pred', 0) or 0
-        _wp_b = posterior_block.get('beta_pred', 0) or 0
-        if _wp_a > 0 and _wp_b > 0:
-            alpha_pred = float(_wp_a)
-            beta_pred = float(_wp_b)
-    # Analytic-source predictive (Pearson chi-squared overdispersion).
-    if alpha_pred == alpha and beta_pred == beta and promoted_source == 'analytic':
+    # Step 1: source ledger for the promoted source (bayesian OR analytic).
+    if promoted_source:
         if temporal_mode == 'cohort':
             _ca_p = _src.get('prob_cohort_alpha_pred')
             _cb_p = _src.get('prob_cohort_beta_pred')
@@ -548,6 +567,19 @@ def resolve_model_params(
                     and float(_wa_p) > 0 and float(_wb_p) > 0):
                 alpha_pred = float(_wa_p)
                 beta_pred = float(_wb_p)
+    # Step 2: posterior_block fallback (un-promoted graphs).
+    if temporal_mode == 'cohort' and alpha_pred == alpha and beta_pred == beta:
+        _cp_a = posterior_block.get('cohort_alpha_pred', 0) or 0
+        _cp_b = posterior_block.get('cohort_beta_pred', 0) or 0
+        if _cp_a > 0 and _cp_b > 0:
+            alpha_pred = float(_cp_a)
+            beta_pred = float(_cp_b)
+    if alpha_pred == alpha and beta_pred == beta:
+        _wp_a = posterior_block.get('alpha_pred', 0) or 0
+        _wp_b = posterior_block.get('beta_pred', 0) or 0
+        if _wp_a > 0 and _wp_b > 0:
+            alpha_pred = float(_wp_a)
+            beta_pred = float(_wp_b)
 
     # p_sd from alpha/beta or from model_vars
     p_sd = 0.0
@@ -586,3 +618,89 @@ def resolve_model_params(
         evidence_retrieved_at=evidence_retrieved_at,
         source_curves=source_curves,
     )
+
+
+def read_edge_cohort_params(
+    edge: Dict[str, Any],
+    graph_preference: Optional[str] = None,
+) -> Optional[Dict[str, float]]:
+    """Extract cohort-level (a-anchored) Bayes params from a graph edge.
+
+    Returns a dict with keys {p, mu, sigma, onset} or None if the edge
+    lacks required parameters. May also include {alpha, beta, mu_sd,
+    sigma_sd, onset_sd, p_sd}.
+
+    Routes through `resolve_model_params(scope='path', temporal_mode='cohort')`
+    so the upstream-carrier construction sees the same promoted source
+    and quality gates as the rest of the engine — was previously a
+    posterior-bypass that could diverge from the central resolver on
+    analytic-only fixtures (doc 73f F6). `graph_preference` is opt-in
+    for callers; edge-level pin always wins per FE
+    `effectivePreference()` resolution. Doc 73f F16 removed the κ=200
+    fallback; when neither posterior nor analytic-mirror provides
+    α, β the resolver returns α=β=0.
+    """
+    resolved = resolve_model_params(
+        edge, scope='path', temporal_mode='cohort',
+        graph_preference=graph_preference,
+    )
+    if resolved is None:
+        return None
+
+    lat = resolved.latency  # path_latency if populated, else edge_latency
+    mu = lat.mu
+    sigma = lat.sigma
+    onset = lat.onset_delta_days
+
+    if not math.isfinite(mu):
+        return None
+    if not math.isfinite(sigma) or sigma <= 0:
+        return None
+
+    prob = resolved.p_mean
+    if not math.isfinite(prob) or prob <= 0:
+        return None
+
+    result: Dict[str, float] = {
+        'p': float(prob),
+        'mu': float(mu),
+        'sigma': float(sigma),
+        'onset': float(onset),
+    }
+
+    if resolved.alpha > 0 and resolved.beta > 0:
+        result['alpha'] = float(resolved.alpha)
+        result['beta'] = float(resolved.beta)
+
+    # Forecasting-consumer dispersion-field selection (doc 61).
+    # Predictive (kappa_lat-inflated) preferred for forecasting; epistemic
+    # fallback when no predictive value is available. Path-level SDs fall
+    # back to edge-level SDs when not fitted, rather than silently
+    # dropping dispersion. See EPISTEMIC_DISPERSION_DESIGN.md.
+    edge_lat = resolved.edge_latency
+
+    def _pick_sd(*candidates: Optional[float]) -> Optional[float]:
+        for c in candidates:
+            if c is not None and c > 0:
+                return float(c)
+        return None
+
+    mu_sd = _pick_sd(lat.mu_sd_pred, lat.mu_sd, edge_lat.mu_sd_pred, edge_lat.mu_sd)
+    if mu_sd is not None:
+        result['mu_sd'] = mu_sd
+    sigma_sd = _pick_sd(lat.sigma_sd, edge_lat.sigma_sd)
+    if sigma_sd is not None:
+        result['sigma_sd'] = sigma_sd
+    onset_sd = _pick_sd(lat.onset_sd, edge_lat.onset_sd)
+    if onset_sd is not None:
+        result['onset_sd'] = onset_sd
+
+    if 'alpha' in result and 'beta' in result:
+        a = result['alpha']
+        b = result['beta']
+        s = a + b
+        result['p_sd'] = float(math.sqrt(a * b / (s * s * (s + 1))))
+    elif resolved.p_sd and resolved.p_sd > 0:
+        result['p_sd'] = float(resolved.p_sd)
+
+    return result

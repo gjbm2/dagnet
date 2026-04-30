@@ -13,10 +13,10 @@ import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/wha
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '@/utils/bayesQualityTier';
+import { getProbabilityPosteriorView } from '@/utils/posteriorView';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
 import { useScenarioHighlight } from '../../contexts/ScenarioHighlightContext';
 import { depthToColour, formatPct, formatN } from '../../services/dataDepthService';
-import type { ProbabilityPosterior } from '@/types';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 import { useDecorationVisibility } from '../GraphCanvas';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -477,7 +477,14 @@ export default function ConversionEdge({
       e.uuid === lookupId || e.id === lookupId || `${e.from}->${e.to}` === lookupId
     );
     if (!edge) return 'none';
-    return `${edge.uuid}-${edge.p?.mean}-${edge.p?.stdev}-${edge.p?.evidence?.n}-${edge.p?.evidence?.k}-${edge.p?.evidence?.mean}-${edge.p?.latency?.completeness}-${edge.p?.posterior?.rhat}-${edge.p?.posterior?.fitted_at}`;
+    // Posterior unification plan §4 Step 4: rhat/fitted_at moved off
+    // p.posterior to model_vars[bayesian].quality / .fit_diagnostics.
+    // The memo key still needs to change when a fresh fit lands, so read
+    // from the new locations.
+    const bayesEntry = (edge.p?.model_vars as any[] | undefined)?.find((v) => v?.source === 'bayesian');
+    const bayesRhat = bayesEntry?.quality?.rhat;
+    const bayesFittedAt = bayesEntry?.fit_diagnostics?.probability?.fitted_at;
+    return `${edge.uuid}-${edge.p?.mean}-${edge.p?.stdev}-${edge.p?.evidence?.n}-${edge.p?.evidence?.k}-${edge.p?.evidence?.mean}-${edge.p?.latency?.completeness}-${bayesRhat}-${bayesFittedAt}`;
   }, [graph, lookupId, graph?.metadata?.updated_at]);
   
   const fullEdge = useMemo(() => {
@@ -684,8 +691,11 @@ export default function ConversionEdge({
 
   const qualityOverlayColour = useMemo(() => {
     if (viewOverlayMode === 'forecast-quality') {
-      const posterior = fullEdge?.p?.posterior as ProbabilityPosterior | undefined;
-      const tier = computeQualityTier(posterior);
+      // Posterior unification plan §4 Step 4: tier engine consumes the
+      // merged probability view (p.posterior + bayesian fit_diagnostics +
+      // quality), so build it here rather than passing the raw surface.
+      const view = getProbabilityPosteriorView(fullEdge?.p as any);
+      const tier = computeQualityTier(view);
       return qualityTierToColour(tier.tier, dark ? 'dark' : 'light');
     }
     if (viewOverlayMode === 'data-depth' && dataDepthScores) {
@@ -694,7 +704,7 @@ export default function ConversionEdge({
       return depthToColour(score?.depth ?? null, dark ? 'dark' : 'light');
     }
     return null;
-  }, [viewOverlayMode, fullEdge?.p?.posterior, fullEdge?.uuid, fullEdge?.id, dark, dataDepthScores]);
+  }, [viewOverlayMode, fullEdge?.p?.posterior, fullEdge?.p?.model_vars, fullEdge?.uuid, fullEdge?.id, dark, dataDepthScores]);
 
   // Edge colour logic: highlight/selection shading
   // Case/conditional edge colours now shown as markers, not full edge colouring

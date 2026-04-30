@@ -287,11 +287,11 @@ describe('edge_info tab decomposition', () => {
     const data = response.result!.data;
 
     // Forecast tab data is now a placeholder — actual rendering is via
-    // BayesPosteriorCard from result.metadata.posteriors
+    // PromotedModelCard from result.metadata.posteriors
     const forecastRows = data.filter((r: any) => r.tab === 'forecast');
     expect(forecastRows.length).toBeGreaterThan(0); // placeholder row exists
 
-    // Posteriors attached as metadata for BayesPosteriorCard
+    // Posteriors attached as metadata for PromotedModelCard
     const posteriors = (response.result as any).metadata?.posteriors;
     expect(posteriors).toBeDefined();
     expect(posteriors.probability).toBeDefined();

@@ -56,6 +56,7 @@ import {
 } from '../constants/latency';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
+import { EdgeDiagnostic, compactFitReason } from './feTopoEdgeDiagnostic';
 import { roundToDecimalPlaces } from '../utils/rounding';
 import { isUKDate, parseUKDate } from '../lib/dateFormat';
 import type { LagDistributionFit } from './lagDistributionUtils';
@@ -2072,10 +2073,25 @@ export function enhanceGraphLatencies(
     edgesWithLAG: 0,
     edgeValues: [],
   };
-  
+
   // For window-mode queries, use aggregateWindowData to process window slices.
   // For cohort-mode queries, use aggregateCohortData to process cohort slices.
   const isWindowMode = lagSliceSource === 'window';
+
+  // Per-fetch session-log parent operation. Per-edge breakdowns are added as
+  // debug-level children — they accumulate inside the parent and surface only
+  // when the user lowers `displayThreshold` to debug or trace. Trace level
+  // unlocks the full cascade-candidate and per-step blend math.
+  // See `feTopoEdgeDiagnostic.ts` for the record schema and format rules.
+  const feTopoOpId = sessionLogService.startOperation(
+    'info',
+    'graph',
+    'FE_TOPO_ENHANCE',
+    `FE topo enrichment (${lagSliceSource}-mode, ${graph.edges.length} edges)`,
+    { edgesAffected: graph.edges.map((e: any) => e.id ?? e.uuid).filter(Boolean) },
+  );
+  const feTopoDebugEnabled = sessionLogService.isLevelEnabled('debug');
+  const feTopoTraceEnabled = sessionLogService.isLevelEnabled('trace');
   
   console.log('[LAG_TOPO] enhanceGraphLatencies called with cohortWindow:', cohortWindow ? {
     start: cohortWindow.start.toISOString().split('T')[0],
@@ -2262,6 +2278,13 @@ export function enhanceGraphLatencies(
     for (const edge of outgoing) {
       const edgeId = getEdgeId(edge);
       result.edgesProcessed++;
+
+      // Per-edge diagnostic record. Allocated only when threshold is debug or
+      // below; sprinkle .set*() calls through the loop, emitted as one debug
+      // child at end-of-edge. See feTopoEdgeDiagnostic.ts.
+      const edgeDiag: EdgeDiagnostic | null = feTopoDebugEnabled
+        ? new EdgeDiagnostic(edgeId, nodeId, normalizeNodeRef(edge.to))
+        : null;
 
       // Get local latency enablement and path_t95 for classification
       const latencyEnabled = edge.p?.latency?.latency_parameter === true;
@@ -2670,6 +2693,11 @@ export function enhanceGraphLatencies(
         : cohortsScoped;
       let pathMu: number | undefined;
       let pathSigma: number | undefined;
+      // Track which fallback in the path_mu/path_sigma cascade fired. Read by
+      // the LAG_PATH_LATENCY_CANDIDATES session-log emission below so a user
+      // looking at a wrong-shape cohort spark curve can tell which branch
+      // produced the displayed lognormal.
+      let pathMuSource: 'unset' | 'anchor_empirical' | 'iterative_fw' | 'passthrough' | 'self_seed' = 'unset';
       // Path onset: DP sum of edge onsets along the path (deterministic shift, not FW).
       // Non-latency edges (latency_parameter !== true) are δ(0) per
       // cohort_latency_params.md §"When path_mu/path_sigma are meaningful":
@@ -2744,12 +2772,22 @@ export function enhanceGraphLatencies(
           );
 
           if (anchorLagCandidates.length > 0) {
-            const totalNForAnchor = anchorLagCandidates.reduce((sum, c) => sum + c.n, 0);
+            // Recency-weight on top of n-weight so the anchor lognormal shape
+            // tracks the *current* upstream behaviour rather than a calendar-
+            // mass-weighted composite of every cohort the dataset has ever
+            // seen. The path_t95 block above (lines ~2569-2586) already applies
+            // this exact weighting on the same pool; the asymmetry between
+            // recency-weighted t95 and non-recency-weighted (mu, sigma) was
+            // producing self-inconsistent path lognormals (horizon set by
+            // recent cohorts, shape set by historical mass) on the cohort
+            // spark curve.
+            const w = (c: any) => c.n * computeRecencyWeight(c.age ?? 0, MODEL.RECENCY_HALF_LIFE_DAYS);
+            const totalNForAnchor = anchorLagCandidates.reduce((sum, c) => sum + w(c), 0);
             const anchorMedianRaw =
-              anchorLagCandidates.reduce((sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
+              anchorLagCandidates.reduce((sum, c) => sum + w(c) * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
             const anchorMeanRaw =
               anchorLagCandidates.reduce(
-                (sum, c) => sum + c.n * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
+                (sum, c) => sum + w(c) * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
                 0
               ) / (totalNForAnchor || 1);
 
@@ -2775,6 +2813,7 @@ export function enhanceGraphLatencies(
             if (ayFit) {
               pathMu = ayFit.mu;
               pathSigma = ayFit.sigma;
+              pathMuSource = 'anchor_empirical';
               const ayMedianDays = Math.exp(ayFit.mu);
               const ayCdfParams = getCompletenessCdfParams(
                 {
@@ -2832,6 +2871,7 @@ export function enhanceGraphLatencies(
           if (combined) {
             pathMu = combined.mu;
             pathSigma = combined.sigma;
+            pathMuSource = 'iterative_fw';
           }
         }
       }
@@ -2840,6 +2880,7 @@ export function enhanceGraphLatencies(
       if (pathMu === undefined) {
         pathMu = nodePathMu.get(nodeId);
         pathSigma = nodePathSigma.get(nodeId);
+        if (pathMu !== undefined) pathMuSource = 'passthrough';
       }
       // Fallback (d): first edge from anchor — path IS the edge itself (cohort mode only).
       // Restricted to latency edges: a non-latency first edge from the anchor
@@ -2849,6 +2890,88 @@ export function enhanceGraphLatencies(
       if (pathMu === undefined && latencyEnabled && !isWindowMode && latencyStats.fit.mu !== undefined) {
         pathMu = latencyStats.completeness_cdf.mu;
         pathSigma = latencyStats.completeness_cdf.sigma;
+        pathMuSource = 'self_seed';
+      }
+
+      // ── Path-cascade candidate breakdown ──
+      //
+      // Compute every candidate the cascade *could* have produced — not just
+      // the one it picked — and stash on the per-edge diagnostic record. Emits
+      // when threshold is at trace; allocation gated by feTopoTraceEnabled so
+      // it's free at info/debug levels. Recomputed from the same inputs each
+      // branch consumes; idempotent and side-effect free.
+      if (edgeDiag && feTopoTraceEnabled) {
+        try {
+          const subjectFit = latencyStats.fit;
+          const upstreamMuForCand = nodePathMu.get(nodeId);
+          const upstreamSigmaForCand = nodePathSigma.get(nodeId);
+          const upstreamOnsetForCand = nodePathOnset.get(nodeId) ?? 0;
+
+          const candidates: import('./feTopoEdgeDiagnostic').PathCascadeCandidates = {};
+
+          // (a) anchor-empirical FW — recency × n weighting (matches the live cascade).
+          const eligible = cohortsForPathEstimate.filter((c: any) =>
+            c.n > 0 &&
+            typeof c.anchor_median_lag_days === 'number' &&
+            Number.isFinite(c.anchor_median_lag_days) &&
+            c.anchor_median_lag_days > 0
+          );
+          if (eligible.length > 0) {
+            const w = (c: any) => c.n * computeRecencyWeight(c.age ?? 0, MODEL.RECENCY_HALF_LIFE_DAYS);
+            const wTotal = eligible.reduce((s: number, c: any) => s + w(c), 0);
+            const aMed = eligible.reduce((s: number, c: any) => s + w(c) * (c.anchor_median_lag_days ?? 0), 0) / (wTotal || 1);
+            const aMean = eligible.reduce((s: number, c: any) => s + w(c) * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0), 0) / (wTotal || 1);
+            const aMedAdj = Math.max(0.01, aMed - upstreamOnsetForCand);
+            const aMeanAdj = Math.max(aMedAdj, aMean - upstreamOnsetForCand);
+            const aFit = fitLagDistribution(aMedAdj, aMeanAdj, wTotal, MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO);
+            const aFw = approximateLogNormalSumFit(aFit, subjectFit);
+            candidates.a_anchor_empirical = {
+              mu: aFw?.mu, sigma: aFw?.sigma, fit_ok: aFit.empirical_quality_ok,
+              anchor_median: aMed, anchor_mean: aMean, w_total: wTotal,
+            };
+          }
+
+          // (b) iterative-FW from upstream node-state.
+          if (upstreamMuForCand !== undefined && upstreamSigmaForCand !== undefined && Number.isFinite(subjectFit.mu)) {
+            const upstreamFit: LagDistributionFit = {
+              mu: upstreamMuForCand,
+              sigma: upstreamSigmaForCand,
+              empirical_quality_ok: true,
+              total_k: 1,
+            };
+            const bFw = approximateLogNormalSumFit(upstreamFit, subjectFit);
+            candidates.b_iterative_fw = {
+              mu: bFw?.mu, sigma: bFw?.sigma,
+              upstream_mu: upstreamMuForCand, upstream_sigma: upstreamSigmaForCand,
+              subject_mu: subjectFit.mu, subject_sigma: subjectFit.sigma,
+            };
+          }
+
+          // (c) pass-through and (d) self-seed are direct lookups.
+          if (upstreamMuForCand !== undefined || upstreamSigmaForCand !== undefined) {
+            candidates.c_passthrough = { mu: upstreamMuForCand, sigma: upstreamSigmaForCand };
+          }
+          if (Number.isFinite(latencyStats.completeness_cdf.mu)) {
+            candidates.d_self_seed = {
+              mu: latencyStats.completeness_cdf.mu,
+              sigma: latencyStats.completeness_cdf.sigma,
+            };
+          }
+
+          edgeDiag.setPathCascade(pathMuSource, candidates);
+        } catch (err) {
+          // Instrumentation must never break the pipeline.
+          sessionLogService.warning(
+            'graph',
+            'FE_TOPO_DIAG_ERROR',
+            `Failed to compute path-cascade candidates for edge ${edgeId}`,
+            err instanceof Error ? err.stack ?? err.message : String(err),
+            { edgeId } as any,
+          );
+        }
+      } else if (edgeDiag) {
+        // Debug level: chosen branch only, no candidate breakdown.
+        edgeDiag.setPathCascade(pathMuSource, {});
       }
       
       console.log('[LAG_TOPO_COMPUTED] stats:', {
@@ -2955,7 +3078,62 @@ export function enhanceGraphLatencies(
           })),
         },
       };
-      
+
+      // ── Per-edge diagnostic: model_vars-side fields ──
+      // Sigma source detection: when the fitted σ came back as the magic
+      // LATENCY_DEFAULT_SIGMA constant, the empirical fit didn't actually
+      // determine σ — one of the eight default-sigma fallback paths in
+      // fitLagDistribution fired. compactFitReason maps the failure-reason
+      // string to a short tag (e.g. 'mean_missing', 'ratio_too_low') so the
+      // user can correlate sigma=0.5 to *which* path produced it.
+      if (edgeDiag) {
+        const fit = latencyStats.fit;
+        const sigmaIsDefaulted = fit.sigma === LATENCY_DEFAULT_SIGMA;
+        const muIsFromDegenerateFit = !fit.empirical_quality_ok;
+        const fitReason = compactFitReason(fit.quality_failure_reason);
+
+        edgeDiag.setContext({
+          cohortsInPool: cohortsForPathEstimate.length,
+          isWindowMode,
+          latencyEnabled,
+          pathOnsetDays: pathOnset,
+        });
+
+        // probability (Step 1 — analytic source ledger)
+        edgeDiag.setProb('mean', edge.p?.forecast?.mean, 'weighted_aggregate');
+        edgeDiag.setProb('stdev', latencyStats.p_sd, 'weighted_aggregate');
+
+        // latency (edge X→Y) — sigma is the canary the user asked about
+        edgeDiag.setLat('mu', latencyStats.completeness_cdf.mu,
+          muIsFromDegenerateFit ? 'defaulted' : 'fitted',
+          muIsFromDegenerateFit ? fitReason : undefined);
+        edgeDiag.setLat('sigma', latencyStats.completeness_cdf.sigma,
+          sigmaIsDefaulted ? 'defaulted' : 'fitted',
+          sigmaIsDefaulted ? fitReason : undefined);
+        edgeDiag.setLat('onset_delta_days', edgeOnsetDeltaDays,
+          edgeOnsetDeltaDays !== undefined ? 'weighted_aggregate' : 'unknown');
+        edgeDiag.setLat('t95', latencyStats.t95,
+          completenessTailConstraintApplied ? 'pulled_to_t95' : 'fitted');
+        edgeDiag.setLat('completeness', completenessUsed, 'weighted_aggregate');
+
+        // path (A→Y) — values from the cascade above; cascade source set there
+        edgeDiag.setPath('path_mu', pathMu,
+          pathMuSource === 'unset' ? 'unknown'
+            : pathMuSource === 'anchor_empirical' ? 'cascade_anchor_empirical'
+            : pathMuSource === 'iterative_fw' ? 'cascade_iterative_fw'
+            : pathMuSource === 'passthrough' ? 'cascade_passthrough'
+            : pathMuSource === 'self_seed' ? 'cascade_self_seed'
+            : 'unknown');
+        edgeDiag.setPath('path_sigma', pathSigma,
+          pathMuSource === 'unset' ? 'unknown'
+            : pathMuSource === 'anchor_empirical' ? 'cascade_anchor_empirical'
+            : pathMuSource === 'iterative_fw' ? 'cascade_iterative_fw'
+            : pathMuSource === 'passthrough' ? 'cascade_passthrough'
+            : pathMuSource === 'self_seed' ? 'cascade_self_seed'
+            : 'unknown');
+        edgeDiag.setPath('path_onset_delta_days', pathOnset, 'weighted_aggregate');
+      }
+
       // Stash per-anchor-day fit evidence for parity diagnostic (gated).
       // Written directly to edge.p.latency so runParityComparison can read it.
       // Always stash fit evidence so parity diagnostic reflects the actual cohortsForFit used,
@@ -3272,6 +3450,12 @@ export function enhanceGraphLatencies(
             edgeLAGValues.debug.perDayCMin = Math.min(...weights.map(w => w.c));
             edgeLAGValues.debug.perDayCMax = Math.max(...weights.map(w => w.c));
           }
+          edgeDiag?.setBlend({
+            per_day_blend_used: true,
+            per_day_count: perDayResult.perDayWeights.length,
+            w_evidence: perDayResult.wEvidenceAgg,
+            completeness_pow: perDayResult.completenessAgg,
+          });
         } else {
           // Aggregate blend fallback — mirror the old weight calculation for logs.
           const completenessPower =
@@ -3295,6 +3479,15 @@ export function enhanceGraphLatencies(
           edgeLAGValues.debug.wEvidence = wEvidence;
           edgeLAGValues.debug.completenessForBlendWeight = completenessForBlendWeight;
           edgeLAGValues.debug.perDayBlendUsed = false;
+
+          edgeDiag?.setBlend({
+            per_day_blend_used: false,
+            lambda,
+            completeness_pow: completenessForBlendWeight,
+            n_eff: nEff,
+            m0_eff: m0Eff,
+            w_evidence: wEvidence,
+          });
         }
 
         if (bestWindowMeta) {
@@ -3318,6 +3511,11 @@ export function enhanceGraphLatencies(
       if (blendedMean !== undefined) {
         edgeLAGValues.blendedMean = blendedMean;
 
+        const blendMethod: 'canonical-blend' | 'evidence-fallback' | 'forecast-fallback' =
+          blendedMeanFromBlend !== undefined
+            ? 'canonical-blend'
+            : (forecastMeanIsFinite ? 'forecast-fallback' : 'evidence-fallback');
+
         console.log('[enhanceGraphLatencies] Computed forecast blend:', {
           edgeId,
           edgeUuid,
@@ -3328,8 +3526,30 @@ export function enhanceGraphLatencies(
           evidenceMeanUsedForBlend: (evidenceMeanForBlend ?? 0).toFixed(3),
           forecastMean: (forecastMean ?? 0).toFixed(3),
           blendedMean: blendedMean.toFixed(3),
-          blendMethod: blendedMeanFromBlend !== undefined ? 'canonical-blend' : 'evidence-fallback',
+          blendMethod,
         });
+
+        // Per-edge diagnostic: blend inputs + chosen output. Reuses the already-
+        // populated intermediate values from the per-day / aggregate branches.
+        edgeDiag?.setBlend({
+          m0: forecastMean,
+          n_baseline: nBaselineUsed,
+          evidence_mean: evidenceMeanForBlend,
+          evidence_n: nQueryForBlend,
+          evidence_k: edge.p?.evidence?.k,
+          completeness,
+          blended_mean: blendedMean,
+          blended_stdev: latencyStats.p_sd,
+          blend_method: blendMethod,
+        });
+        if (edgeDiag && edgeDiag.probability.mean) {
+          // The blended scalar is what actually lands on edge.p.mean — overwrite
+          // the Step-1 weighted-aggregate provenance with the Step-2 source.
+          edgeDiag.setProb('mean', blendedMean,
+            blendMethod === 'canonical-blend' ? 'evidence_blended'
+              : blendMethod === 'forecast-fallback' ? 'forecast_fallback'
+              : 'evidence_fallback');
+        }
       }
 
       // Update node path_t95 for target node (needed for downstream edges)
@@ -3375,6 +3595,22 @@ export function enhanceGraphLatencies(
         completeness: edgeLAGValues.latency.completeness,
         blendedMean: edgeLAGValues.blendedMean,
       });
+
+      // Emit per-edge diagnostic as a debug child of the FE_TOPO_ENHANCE op.
+      // Sub-threshold children accumulate in parent.children during the run
+      // and are stripped at endOperation; only surfaces when the user lowers
+      // displayThreshold to debug or trace.
+      if (edgeDiag) {
+        sessionLogService.addChild(
+          feTopoOpId,
+          'debug',
+          'FE_TOPO_EDGE',
+          edgeDiag.headline(),
+          edgeDiag.format(feTopoTraceEnabled),
+          { edgeId, fromNodeId, toNodeId } as any,
+        );
+      }
+
       result.edgeValues.push(edgeLAGValues);
       result.edgesWithLAG++;
       
@@ -3504,6 +3740,13 @@ export function enhanceGraphLatencies(
     edgesWithLAG: result.edgesWithLAG,
     edgeValuesCount: result.edgeValues.length,
   });
+
+  sessionLogService.endOperation(
+    feTopoOpId,
+    'success',
+    `FE topo: ${result.edgesProcessed} edges processed, ${result.edgesWithLAG} with LAG`,
+    { edgesProcessed: result.edgesProcessed, edgesWithLAG: result.edgesWithLAG } as any,
+  );
 
   return result;
 }

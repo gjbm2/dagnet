@@ -45,12 +45,202 @@ export interface ContextEdgesOptions {
 }
 
 /**
- * Re-project the in-schema posterior fields of a single `p` block from a
+ * Drop the bayesian model_vars entry from a `p` block (posterior unification
+ * plan §4 Step 5). Used on the "no slice / no fit" paths so that downstream
+ * `applyPromotion` falls back to analytic and clears `p.posterior` /
+ * `p.latency.posterior` per Step 2.
+ */
+function dropBayesianModelVar(pBlock: any): void {
+  if (!Array.isArray(pBlock.model_vars)) return;
+  const filtered = pBlock.model_vars.filter((e: any) => e?.source !== 'bayesian');
+  if (filtered.length === 0) {
+    delete pBlock.model_vars;
+  } else if (filtered.length !== pBlock.model_vars.length) {
+    pBlock.model_vars = filtered;
+  }
+}
+
+/**
+ * Reshape a projected probability/latency posterior pair (the graph-edge
+ * shapes that `projectProbabilityPosterior` / `projectLatencyPosterior`
+ * historically wrote directly onto `p.posterior` / `p.latency.posterior`)
+ * into the `model_vars[bayesian]` entry shape required after the posterior
+ * unification refactor (plan §3, Step 5).
+ *
+ * Conventions:
+ *   - probability sub-block carries the full Beta shape (window + cohort,
+ *     epistemic + predictive flavours) plus mean/stdev moments.
+ *   - latency sub-block uses the model_vars naming (`mu`, `sigma`,
+ *     `path_*`); promotion (Step 2) renames to mu_mean / sigma_mean
+ *     when projecting onto p.latency.posterior.
+ *   - quality carries the gate inputs (rhat / ess / divergences /
+ *     evidence_grade / gate_passed).
+ *   - fit_diagnostics carries everything bayesian-only that previously
+ *     lived on p.posterior / p.latency.posterior (HDI, fitted_at,
+ *     fingerprint, prior_tier, surprise_z, …).
+ */
+function buildBayesianModelVarFromSlice(
+  probProj: Record<string, any>,
+  latProj: Record<string, any> | undefined,
+  fittedAt: string,
+): ModelVarsEntry {
+  const alpha = probProj.alpha;
+  const beta = probProj.beta;
+  const sum = (alpha ?? 0) + (beta ?? 0);
+  const mean = sum > 0 ? alpha / sum : 0;
+  const stdev = sum > 0
+    ? Math.sqrt((alpha * beta) / (sum * sum * (sum + 1)))
+    : 0;
+
+  const probabilityBlock: any = {
+    mean,
+    stdev,
+    alpha,
+    beta,
+    provenance: probProj.provenance ?? 'bayesian',
+  };
+  if (probProj.window_n_effective != null) probabilityBlock.n_effective = probProj.window_n_effective;
+  if (probProj.alpha_pred != null) {
+    probabilityBlock.alpha_pred = probProj.alpha_pred;
+    probabilityBlock.beta_pred = probProj.beta_pred;
+  }
+  if (probProj.cohort_alpha != null) {
+    probabilityBlock.cohort_alpha = probProj.cohort_alpha;
+    probabilityBlock.cohort_beta = probProj.cohort_beta;
+    probabilityBlock.cohort_provenance = probProj.cohort_provenance ?? 'bayesian';
+  }
+  if (probProj.cohort_n_effective != null) {
+    probabilityBlock.cohort_n_effective = probProj.cohort_n_effective;
+  }
+  if (probProj.cohort_alpha_pred != null) {
+    probabilityBlock.cohort_alpha_pred = probProj.cohort_alpha_pred;
+    probabilityBlock.cohort_beta_pred = probProj.cohort_beta_pred;
+  }
+
+  let latencyBlock: any | undefined;
+  if (latProj && latProj.mu_mean != null) {
+    latencyBlock = {
+      mu: latProj.mu_mean,
+      sigma: latProj.sigma_mean,
+      t95: Math.exp(latProj.mu_mean + 1.645 * (latProj.sigma_mean ?? 0)) + (latProj.onset_delta_days ?? latProj.onset_mean ?? 0),
+      onset_delta_days: latProj.onset_delta_days ?? latProj.onset_mean ?? 0,
+    };
+    if (latProj.mu_sd != null) latencyBlock.mu_sd = latProj.mu_sd;
+    if (latProj.mu_sd_pred != null) latencyBlock.mu_sd_pred = latProj.mu_sd_pred;
+    if (latProj.sigma_sd != null) latencyBlock.sigma_sd = latProj.sigma_sd;
+    if (latProj.onset_sd != null) latencyBlock.onset_sd = latProj.onset_sd;
+    if (latProj.onset_mu_corr != null) latencyBlock.onset_mu_corr = latProj.onset_mu_corr;
+    if (latProj.path_mu_mean != null) {
+      latencyBlock.path_mu = latProj.path_mu_mean;
+      latencyBlock.path_sigma = latProj.path_sigma_mean;
+      latencyBlock.path_t95 = Math.exp(latProj.path_mu_mean + 1.645 * (latProj.path_sigma_mean ?? 0)) + (latProj.path_onset_delta_days ?? 0);
+      latencyBlock.path_onset_delta_days = latProj.path_onset_delta_days ?? 0;
+      if (latProj.path_mu_sd != null) latencyBlock.path_mu_sd = latProj.path_mu_sd;
+      if (latProj.path_mu_sd_pred != null) latencyBlock.path_mu_sd_pred = latProj.path_mu_sd_pred;
+      if (latProj.path_sigma_sd != null) latencyBlock.path_sigma_sd = latProj.path_sigma_sd;
+      if (latProj.path_onset_sd != null) latencyBlock.path_onset_sd = latProj.path_onset_sd;
+    }
+  }
+
+  const probDiag: any = {};
+  if (fittedAt) probDiag.fitted_at = fittedAt;
+  if (probProj.fingerprint) probDiag.fingerprint = probProj.fingerprint;
+  if (probProj.prior_tier) probDiag.prior_tier = probProj.prior_tier;
+  if (probProj.surprise_z != null) probDiag.surprise_z = probProj.surprise_z;
+  if (probProj.hdi_lower != null) {
+    probDiag.hdi_lower = probProj.hdi_lower;
+    probDiag.hdi_upper = probProj.hdi_upper;
+    probDiag.hdi_level = probProj.hdi_level ?? 0.9;
+  }
+  if (probProj.hdi_lower_pred != null) {
+    probDiag.hdi_lower_pred = probProj.hdi_lower_pred;
+    probDiag.hdi_upper_pred = probProj.hdi_upper_pred;
+  }
+  if (probProj.cohort_hdi_lower != null) {
+    probDiag.cohort_hdi_lower = probProj.cohort_hdi_lower;
+    probDiag.cohort_hdi_upper = probProj.cohort_hdi_upper;
+  }
+  if (probProj.cohort_hdi_lower_pred != null) {
+    probDiag.cohort_hdi_lower_pred = probProj.cohort_hdi_lower_pred;
+    probDiag.cohort_hdi_upper_pred = probProj.cohort_hdi_upper_pred;
+  }
+  // LOO-ELPD model adequacy (doc 32) and PPC calibration (doc 38). Mirrors
+  // bayesPatchService.applyPatch:435-447 so DSL re-projection produces the
+  // same fit_diagnostics shape as a fresh patch and the PromotedModelCard
+  // popover keeps its model-adequacy badges between fits.
+  // (Forensic audit 30-Apr-26 §8 Drop B1.)
+  if (probProj.delta_elpd != null) probDiag.delta_elpd = probProj.delta_elpd;
+  if (probProj.pareto_k_max != null) probDiag.pareto_k_max = probProj.pareto_k_max;
+  if (probProj.n_loo_obs != null) probDiag.n_loo_obs = probProj.n_loo_obs;
+  if (probProj.ppc_coverage_90 != null) probDiag.ppc_coverage_90 = probProj.ppc_coverage_90;
+  if (probProj.ppc_n_obs != null) probDiag.ppc_n_obs = probProj.ppc_n_obs;
+  if (probProj.ppc_traj_coverage_90 != null) probDiag.ppc_traj_coverage_90 = probProj.ppc_traj_coverage_90;
+  if (probProj.ppc_traj_n_obs != null) probDiag.ppc_traj_n_obs = probProj.ppc_traj_n_obs;
+
+  let latDiag: any | undefined;
+  if (latProj && latProj.mu_mean != null) {
+    latDiag = {};
+    if (fittedAt) latDiag.fitted_at = fittedAt;
+    if (latProj.fingerprint) latDiag.fingerprint = latProj.fingerprint;
+    if (latProj.ess != null) latDiag.ess = latProj.ess;
+    if (latProj.rhat != null) latDiag.rhat = latProj.rhat;
+    if (latProj.hdi_t95_lower != null) {
+      latDiag.hdi_t95_lower = latProj.hdi_t95_lower;
+      latDiag.hdi_t95_upper = latProj.hdi_t95_upper;
+      latDiag.hdi_level = latProj.hdi_level ?? 0.9;
+    }
+    if (latProj.path_hdi_t95_lower != null) {
+      latDiag.path_hdi_t95_lower = latProj.path_hdi_t95_lower;
+      latDiag.path_hdi_t95_upper = latProj.path_hdi_t95_upper;
+    }
+    // LOO-ELPD and PPC trajectory calibration for the latency fit. Same
+    // scalars as on the probability sub-block (one fit emits one LOO/PPC
+    // score), but mirrored here so consumers reading the latency popover
+    // can render its adequacy row independently. Mirrors
+    // bayesPatchService.applyPatch:466-474. (Forensic audit §8 Drop B2.)
+    if (latProj.delta_elpd != null) latDiag.delta_elpd = latProj.delta_elpd;
+    if (latProj.pareto_k_max != null) latDiag.pareto_k_max = latProj.pareto_k_max;
+    if (latProj.n_loo_obs != null) latDiag.n_loo_obs = latProj.n_loo_obs;
+    if (latProj.ppc_traj_coverage_90 != null) latDiag.ppc_traj_coverage_90 = latProj.ppc_traj_coverage_90;
+    if (latProj.ppc_traj_n_obs != null) latDiag.ppc_traj_n_obs = latProj.ppc_traj_n_obs;
+  }
+
+  return {
+    source: 'bayesian',
+    source_at: fittedAt,
+    probability: probabilityBlock,
+    ...(latencyBlock ? { latency: latencyBlock } : {}),
+    quality: {
+      rhat: probProj.rhat ?? 0,
+      ess: probProj.ess ?? 0,
+      divergences: probProj.divergences ?? 0,
+      evidence_grade: probProj.evidence_grade ?? 0,
+      gate_passed: liveSliceMeetsQualityGate(
+        { ess: probProj.ess, rhat: probProj.rhat, divergences: probProj.divergences },
+        latProj ? { ess: latProj.ess, rhat: latProj.rhat } : undefined,
+      ),
+    },
+    fit_diagnostics: {
+      probability: probDiag,
+      ...(latDiag ? { latency: latDiag } : {}),
+    },
+  };
+}
+
+/**
+ * Re-project the bayesian source ledger entry on a single `p` block from a
  * parameter file's `posterior.slices`, given the scenario's effective DSL.
  *
+ * Posterior unification plan §4 Step 5: this function used to write
+ * `p.posterior` and `p.latency.posterior` directly. Now it writes
+ * `model_vars[bayesian]` (full Beta + latency + fit_diagnostics) and lets
+ * `applyPromotion` (run by `syncBayesianAndPromote` further down) project
+ * to the source-agnostic surfaces.
+ *
  * Mutates the `p` block in place. When `posterior.slices` is absent on the
- * parameter file, clears `p.posterior` and `p.latency.posterior` so a
- * stale projection from a different DSL cannot persist.
+ * parameter file or the active DSL has no matching slice, drops the
+ * bayesian entry from `model_vars` so the next promotion falls back to
+ * analytic.
  *
  * If `effectiveDsl` includes `asat()`, resolves the historical posterior
  * via `resolveAsatPosterior` first; if no fit exists on or before the
@@ -71,13 +261,11 @@ function contextProbabilityBlock(
       : undefined;
 
   if (!fileposterior?.slices) {
-    // Parameter file carries no posterior slices — clear strictly per
-    // 73b §7.5 closure (decided 28-Apr-26). Same shape as the asat-no-fit
-    // branch below: when the source of truth cannot supply a slice, an
-    // existing in-schema projection from a prior DSL or file version
-    // must not persist on the edge.
-    pBlock.posterior = undefined;
-    if (pBlock.latency) pBlock.latency.posterior = undefined;
+    // Parameter file carries no posterior slices — drop the bayesian
+    // source ledger entry. The downstream applyPromotion (run by
+    // syncBayesianAndPromote) clears p.posterior / p.latency.posterior
+    // when no source has a Beta.
+    dropBayesianModelVar(pBlock);
     if (options.engorgeFitHistory) {
       pBlock._posteriorSlices = undefined;
     }
@@ -89,10 +277,9 @@ function contextProbabilityBlock(
     : fileposterior;
 
   if (!activePosterior) {
-    // asat() in effect, but no fit on or before the asat date — clear
+    // asat() in effect, but no fit on or before the asat date — drop
     // strictly per doc 27 §5.2 asat semantics.
-    pBlock.posterior = undefined;
-    if (pBlock.latency) pBlock.latency.posterior = undefined;
+    dropBayesianModelVar(pBlock);
     if (options.engorgeFitHistory) {
       pBlock._posteriorSlices = undefined;
     }
@@ -100,20 +287,18 @@ function contextProbabilityBlock(
   }
 
   const probResult = projectProbabilityPosterior(activePosterior, effectiveDsl);
-  if (probResult) {
-    pBlock.posterior = probResult;
-  } else {
-    pBlock.posterior = undefined;
-  }
-
   const latResult = projectLatencyPosterior(activePosterior, effectiveDsl);
-  if (latResult) {
-    if (!pBlock.latency || typeof pBlock.latency !== 'object') {
-      pBlock.latency = {};
-    }
-    pBlock.latency.posterior = latResult;
-  } else if (pBlock.latency) {
-    pBlock.latency.posterior = undefined;
+
+  if (probResult) {
+    const entry = buildBayesianModelVarFromSlice(
+      probResult,
+      latResult,
+      activePosterior.fitted_at,
+    );
+    upsertModelVars(pBlock, entry);
+  } else {
+    // No window slice matched the active DSL — drop the bayesian entry.
+    dropBayesianModelVar(pBlock);
   }
 
   if (options.engorgeFitHistory) {
@@ -164,11 +349,21 @@ export function contextGraphForEffectiveDsl(
     asatDate = null;
   }
 
+  // Posterior unification plan §4 Step 5: contextProbabilityBlock now
+  // writes model_vars[bayesian] (or drops it). Promotion is the only
+  // writer of p.posterior / p.latency.posterior — run it after the
+  // model_vars mutation so the request graph's posterior surfaces
+  // reflect the active source. Same data flow as the live-edge wrapper
+  // (contextLiveGraphForCurrentDsl), so request and live paths agree
+  // structurally.
+  const graphPref = (graph as any)?.model_source_preference;
+
   for (const edge of edges) {
     const baseParamId: string | undefined = edge?.p?.id;
     if (baseParamId) {
       const pf = resolveParameterFile(String(baseParamId));
       contextProbabilityBlock(edge.p, pf, effectiveDsl, asatDate, options);
+      if (edge.p) applyPromotion(edge.p, graphPref);
     }
 
     const conditionals = Array.isArray(edge?.conditional_p) ? edge.conditional_p : [];
@@ -177,6 +372,7 @@ export function contextGraphForEffectiveDsl(
       if (!condParamId) continue;
       const condPf = resolveParameterFile(String(condParamId));
       contextProbabilityBlock(cond.p, condPf, effectiveDsl, asatDate, options);
+      if (cond.p) applyPromotion(cond.p, graphPref);
     }
   }
 }
@@ -206,77 +402,19 @@ function liveSliceMeetsQualityGate(
 }
 
 /**
- * Build a `bayesian` ModelVarsEntry from the in-schema posterior the
- * contexting pass just projected onto a `p` block, upsert it, and then
- * run promotion. When the projection cleared the posterior (no slice
- * matched the new DSL), drop any stale bayesian entry so promotion
- * falls back to analytic instead of carrying a stale fit forward.
+ * Run promotion on a `p` block whose `model_vars[bayesian]` has just been
+ * (re-)written by `contextProbabilityBlock`.
  *
- * `applyPromotion` updates only the `bayesian` entry and the narrow
- * promoted surface; an existing `analytic` entry is left untouched
- * (`upsertModelVars` keys on `source`).
+ * Posterior unification plan §4 Step 5: this function used to derive
+ * `model_vars[bayesian]` from a freshly-projected `p.posterior` and then
+ * promote. The data flow has reversed — the upstream contexting now
+ * writes `model_vars[bayesian]` directly, so this function is just a
+ * promotion call. The wrapper is kept for symmetry with the old call
+ * sites and so a future evolution (e.g. logging, gate enforcement) has
+ * a single seam.
  */
 function syncBayesianAndPromote(p: any, graphPref: any): void {
   if (!p || typeof p !== 'object') return;
-  const post = p.posterior;
-  const latPost = p.latency && typeof p.latency === 'object' ? p.latency.posterior : undefined;
-  const hasUsablePosterior = !!post
-    && Number.isFinite(post.alpha)
-    && Number.isFinite(post.beta)
-    && (post.alpha + post.beta) > 0;
-
-  if (hasUsablePosterior) {
-    const sum = post.alpha + post.beta;
-    const probMean = post.alpha / sum;
-    const probStdev = Math.sqrt((post.alpha * post.beta) / (sum * sum * (sum + 1)));
-    const gatePassed = liveSliceMeetsQualityGate(
-      { ess: post.ess, rhat: post.rhat, divergences: post.divergences },
-      latPost ? { ess: latPost.ess, rhat: latPost.rhat } : undefined,
-    );
-
-    const entry: ModelVarsEntry = {
-      source: 'bayesian',
-      source_at: post.fitted_at,
-      probability: { mean: probMean, stdev: probStdev },
-      ...(latPost && Number.isFinite(latPost.mu_mean) ? {
-        latency: {
-          mu: latPost.mu_mean,
-          sigma: latPost.sigma_mean,
-          t95: Math.exp(latPost.mu_mean + 1.645 * (latPost.sigma_mean ?? 0)) + (latPost.onset_delta_days ?? latPost.onset_mean ?? 0),
-          onset_delta_days: latPost.onset_delta_days ?? latPost.onset_mean ?? 0,
-          ...(latPost.mu_sd !== undefined ? { mu_sd: latPost.mu_sd } : {}),
-          ...(latPost.sigma_sd !== undefined ? { sigma_sd: latPost.sigma_sd } : {}),
-          ...(latPost.onset_sd !== undefined ? { onset_sd: latPost.onset_sd } : {}),
-          ...(latPost.onset_mu_corr !== undefined ? { onset_mu_corr: latPost.onset_mu_corr } : {}),
-          ...(latPost.path_mu_mean !== undefined ? {
-            path_mu: latPost.path_mu_mean,
-            path_sigma: latPost.path_sigma_mean,
-            path_t95: Math.exp(latPost.path_mu_mean + 1.645 * (latPost.path_sigma_mean ?? 0)) + (latPost.path_onset_delta_days ?? 0),
-            path_onset_delta_days: latPost.path_onset_delta_days ?? 0,
-            ...(latPost.path_mu_sd !== undefined ? { path_mu_sd: latPost.path_mu_sd } : {}),
-            ...(latPost.path_sigma_sd !== undefined ? { path_sigma_sd: latPost.path_sigma_sd } : {}),
-            ...(latPost.path_onset_sd !== undefined ? { path_onset_sd: latPost.path_onset_sd } : {}),
-          } : {}),
-        },
-      } : {}),
-      quality: {
-        rhat: post.rhat ?? 0,
-        ess: post.ess ?? 0,
-        divergences: post.divergences ?? 0,
-        evidence_grade: post.evidence_grade ?? 0,
-        gate_passed: gatePassed,
-      },
-    };
-    upsertModelVars(p, entry);
-  } else if (Array.isArray(p.model_vars)) {
-    const filtered = p.model_vars.filter((e: any) => e?.source !== 'bayesian');
-    if (filtered.length === 0) {
-      delete p.model_vars;
-    } else if (filtered.length !== p.model_vars.length) {
-      p.model_vars = filtered;
-    }
-  }
-
   applyPromotion(p, graphPref);
 }
 

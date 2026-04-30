@@ -787,34 +787,21 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     // sync. Default DSL here is `''` (window() bare aggregate); the live
     // re-context overrides per active DSL.
     //
-    // The pre-73b "Flow G" stash that wrote the entire multi-context slice
-    // library to `p._posteriorSlices` has been removed (Stage 4(b), schema
-    // row S7a). Per-scenario request graphs and live-edge re-context now
-    // read the slice library directly from the parameter file via the
-    // shared helper in `posteriorSliceContexting.ts`, and BE consumers that
-    // need the multi-context view receive it as transient engorgement on
-    // the request-graph copy (doc 73b §3.2a (ii)). The schema entry, dead
-    // types, and remaining reader paths in `bayesPriorService.ts` are
-    // cleaned up in Stage 6 (S7b).
-    {
-      sourceField: 'posterior',
-      targetField: 'p.posterior',
-      condition: (source) => isProbType(source) && source.posterior?.slices !== undefined,
-      transform: (value: any) => {
-        if (!value || typeof value !== 'object' || !value.slices) return value;
-        return projectProbabilityPosterior(value, '');
-      },
-    },
-    // Latency posterior — projected from unified posterior.slices
-    {
-      sourceField: 'posterior',
-      targetField: 'p.latency.posterior',
-      condition: (source) => isProbType(source) && source.posterior?.slices !== undefined,
-      transform: (value: any) => {
-        if (!value || typeof value !== 'object' || !value.slices) return undefined;
-        return projectLatencyPosterior(value, '');
-      },
-    },
+    // Posterior unification plan (29-Apr-26) §4 Step 4: the two cascade
+    // entries that previously projected `posterior.slices` onto
+    // `p.posterior` and `p.latency.posterior` directly have been removed.
+    //
+    // Why: under unification, `p.posterior` and `p.latency.posterior` are
+    // single-writer surfaces written exclusively by `applyPromotion` from
+    // `model_vars[*]`. The bayesian source ledger entry is populated by
+    // `bayesPatchService.applyPatch` (fresh fits) and by
+    // `posteriorSliceContexting` (DSL change / file load); the cascade is
+    // no longer a writer of either projection.
+    //
+    // For legacy graphs that arrive with `p.posterior` populated but no
+    // `model_vars[bayesian]`, the on-load migration in `workspaceService`
+    // (plan §9 Step 9) copies the Beta shape onto the source ledger before
+    // the first promotion, preventing a one-cycle blank state.
 
     // LAG: Latency DATA fields (file → graph only, display-only)
     {

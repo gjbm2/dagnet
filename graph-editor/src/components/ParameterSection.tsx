@@ -14,6 +14,7 @@ import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { PRECISION_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
 import { PosteriorIndicator } from './shared/PosteriorIndicator';
+import { getProbabilityPosteriorView, getLatencyPosteriorView } from '../utils/posteriorView';
 import { ModelVarsCards } from './ModelVarsCards';
 import { resolveActiveModelVars, effectivePreference } from '../services/modelVarsResolution';
 import { resetPriorsForParam, deleteHistoryForParam } from '../services/bayesPriorService';
@@ -744,7 +745,7 @@ export function ParameterSection({
             {param?.posterior && (
               <div style={{ marginTop: '4px' }}>
                 <PosteriorIndicator
-                  posterior={param.posterior}
+                  posterior={getProbabilityPosteriorView(param as any)}
                   retrievedAt={param.evidence?.retrieved_at}
                   theme={theme === 'dark' ? 'dark' : 'light'}
                   activeSource={activeModelSource}
@@ -795,7 +796,7 @@ export function ParameterSection({
       {showLatency && !hasModelVars && (param?.latency?.latency_parameter === true) && param?.latency?.posterior && (
         <div style={{ marginBottom: '16px' }}>
           <PosteriorIndicator
-            posterior={param.latency.posterior as any}
+            posterior={getLatencyPosteriorView(param as any)}
             retrievedAt={param.evidence?.retrieved_at}
             theme={theme === 'dark' ? 'dark' : 'light'}
             activeSource={activeModelSource}

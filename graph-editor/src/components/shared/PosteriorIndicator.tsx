@@ -14,11 +14,15 @@ import ReactDOM from 'react-dom';
 import ReactECharts from 'echarts-for-react';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel, freshnessColour, type FreshnessLevel } from '../../utils/freshnessDisplay';
-import type { ProbabilityPosterior, LatencyPosterior, ModelSource } from '../../types';
+import type { ModelSource } from '../../types';
+import type { ProbabilityPosteriorView, LatencyPosteriorView } from '../../utils/posteriorView';
 import GlossaryTooltip from '../GlossaryTooltip';
 import './posterior-indicator.css';
 
-type Posterior = ProbabilityPosterior | LatencyPosterior;
+// Posterior unification plan §4 Step 4: PosteriorIndicator now consumes the
+// merged view (`p.posterior` + `model_vars[bayesian].fit_diagnostics` +
+// `quality`) so callers don't have to reach into multiple surfaces.
+type Posterior = ProbabilityPosteriorView | LatencyPosteriorView;
 
 interface PosteriorIndicatorProps {
   /** The posterior object (probability or latency). Null/undefined renders nothing. */
@@ -117,12 +121,14 @@ interface PosteriorDetailsProps {
 export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark', activeSource, t95, pathT95 }: PosteriorDetailsProps) {
   const tier = computeQualityTier(posterior);
   const colour = qualityTierToColour(tier.tier, theme);
-  const isProbability = 'evidence_grade' in posterior;
+  // Discriminator: probability views carry `alpha`/`beta`, latency views
+  // carry `mu_mean`/`sigma_mean`.
+  const isProbability = (posterior as ProbabilityPosteriorView).alpha != null;
 
   if (isProbability) {
-    return <ProbabilityPosteriorDetails posterior={posterior as ProbabilityPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} />;
+    return <ProbabilityPosteriorDetails posterior={posterior as ProbabilityPosteriorView} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} />;
   }
-  return <LatencyPosteriorDetails posterior={posterior as LatencyPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} t95={t95} pathT95={pathT95} />;
+  return <LatencyPosteriorDetails posterior={posterior as LatencyPosteriorView} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} t95={t95} pathT95={pathT95} />;
 }
 
 function SectionHeader({ label, theme }: { label: string; theme: 'light' | 'dark' }) {
@@ -136,10 +142,15 @@ function SectionHeader({ label, theme }: { label: string; theme: 'light' | 'dark
 }
 
 function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, activeSource }: {
-  posterior: ProbabilityPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
+  posterior: ProbabilityPosteriorView; tier: ReturnType<typeof computeQualityTier>; colour: string;
   retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: ModelSource | null;
 }) {
-  const a = posterior.alpha, b = posterior.beta;
+  const a = posterior.alpha;
+  const b = posterior.beta;
+  if (a == null || b == null) {
+    // Active source has no Beta (e.g. analytic without moment-match).
+    return null;
+  }
   const pMean = a / (a + b);
   const pSd = Math.sqrt(a * b / ((a + b) ** 2 * (a + b + 1)));
 
@@ -305,7 +316,7 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
 }
 
 function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, activeSource, t95, pathT95 }: {
-  posterior: LatencyPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
+  posterior: LatencyPosteriorView; tier: ReturnType<typeof computeQualityTier>; colour: string;
   retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: ModelSource | null;
   t95?: number | null; pathT95?: number | null;
 }) {
@@ -381,7 +392,7 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
         )}
 
         {/* ── t95 HDI ── */}
-        {posterior.hdi_t95_lower != null && (
+        {posterior.hdi_t95_lower != null && posterior.hdi_t95_upper != null && (
           <tr>
             <td className="posterior-details-label"><GlossaryTooltip term="t95-hdi">t95 HDI {fmtPct(posterior.hdi_level)}</GlossaryTooltip></td>
             <td className="posterior-details-value">
@@ -505,7 +516,7 @@ function erf(x: number): number {
   return sign * y;
 }
 
-function LatencyCdfSparkline({ posterior, theme = 'dark', t95, pathT95 }: { posterior: LatencyPosterior; theme?: 'light' | 'dark'; t95?: number | null; pathT95?: number | null }) {
+function LatencyCdfSparkline({ posterior, theme = 'dark', t95, pathT95 }: { posterior: LatencyPosteriorView; theme?: 'light' | 'dark'; t95?: number | null; pathT95?: number | null }) {
   const option = useMemo(() => {
     const edgeMu = posterior.mu_mean;
     const edgeSigma = posterior.sigma_mean;
@@ -514,6 +525,7 @@ function LatencyCdfSparkline({ posterior, theme = 'dark', t95, pathT95 }: { post
     const pathSigma = posterior.path_sigma_mean;
     const pathOnset = posterior.path_onset_delta_days ?? 0;
     const hasPath = pathMu != null && pathSigma != null;
+    if (edgeMu == null || edgeSigma == null) return null;
 
     const maxDays = Math.ceil(Math.max(t95 ?? 0, pathT95 ?? 0, 5));
     const steps = Math.min(maxDays, 80);
@@ -563,6 +575,7 @@ function LatencyCdfSparkline({ posterior, theme = 'dark', t95, pathT95 }: { post
     };
   }, [posterior, theme, t95, pathT95]);
 
+  if (!option) return null;
   return (
     <ReactECharts
       option={option}

@@ -1,15 +1,76 @@
 # 73f — Outside-in CLI cohort-engine investigation
 
-**Status**: Suite green — outside-in module is **33 passed / 1 xfailed**. The remaining xfail is `test_cli_single_hop_downstream_cohort_parity_and_admitted_provenance`, pinned to doc 60 Appendix A.1 (asserts post-WP8 cohort-admission provenance the engine cannot produce pre-WP8). The four previously-outstanding failures all closed on 29-Apr-26 evening:
+**Status (30-Apr-26)**: Suite re-baselined at **28 passed / 6 failed / 1 xfailed / 2 new red canaries** out of 37 tests. Full-suite run completed 30-Apr-26 morning, 6:31. The 6 failures + 2 canaries break into three workstreams:
 
-- `test_low_evidence_cohort_matches_factorised_convolution_oracle` — closed by the Option A subject-curve fix (subject_span_curve composed from `det_span_p × det_norm_cdf` in [`compute_cohort_maturity_rows_v3`](../../graph-editor/lib/runner/cohort_forecast_v3.py) and consumed by `build_cohort_evidence_from_frames` instead of wall-clock `raw_obs_y / raw_obs_x`). The carrier-theory hypothesis flagged in priority workplan #2 was correct: the prior wall-clock ratio entangled the A→X carrier delay and double-counted when convolved with arrival increments.
-- `test_low_evidence_single_hop_remains_near_unconditioned_oracle` — same fix; same root cause.
-- `test_parity_window_mature_high_evidence_p_mean` — closed by the per-cohort `data_retrieved_at` tau_max fix in [`build_cohort_evidence_from_frames`](../../graph-editor/lib/runner/cohort_forecast_v3.py) (sparse-snapshot scenarios no longer inflate observation age to today, so the IS likelihood stops treating stale rows as fully mature).
-- `test_parity_zero_evidence_cohort_returns_prior` — closed alongside the same evidence-binding work.
+- **WS1 — 73h (v3 router and carrier-conditioning)** — see [`73h-v3-router-and-carrier-conditioning-forensic.md`](73h-v3-router-and-carrier-conditioning-forensic.md). Carries Issue 1 (top-level latency / non-latency router fork in v3) and Issue 2 (carrier and subject sit on different evidence-conditioning machineries). Expected to resolve **3 existing failures + 2 new canaries + 1 partial**: see "Two open workstreams" section below.
+- **WS2 — 73k (aggregate-IS likelihood comment/code discrepancy)** — see [`73k-aggregate-is-likelihood-comment-code-discrepancy.md`](73k-aggregate-is-likelihood-comment-code-discrepancy.md). Carries the documented `Binomial(n_i, p × c_i)` vs implemented `Binomial(n_i × c_i, p)` discrepancy in the aggregate IS likelihood at `forecast_state.py:1166`. Investigation findings recorded; fix decision pending. Independent of WS1 but at the same architectural level (evidence binding per 73g invariant 6).
+- **Out of scope for both** — 2 of 6 existing failures (`test_cli_identity_collapse_matches_window_across_public_surfaces`, `test_cli_projection_parity_uses_last_row_saturation_not_arbitrary_tau_curve_point`) are 73g invariant 7 (projection re-deciding) — two-site completeness computation in FE `statisticalEnhancementService.ts:1301-1308` vs BE `forecast_state.py:1454-1470`. Need their own architectural decision.
 
-History below preserved for traceability. F10 fix, F14 Fix-A at the public p∞ surface, and the 28→29-Apr-26 predictive-Beta wiring fixes (Williams/Crowder MoM for analytic κ_pred + α_pred/β_pred propagation through `mc_span_cdfs`) are still load-bearing — those landed first and exposed the two FE/BE arithmetic mismatches that today's evidence-binding fixes then closed. D2 stays inside the dispersion-methodology tolerance (`_DISPERSION_METHODOLOGY_PARITY_TOL = 5e-3`).
+The 29-Apr-26 evening "33 passed / 1 xfailed" status was correct at the time. Subsequent investigation on 30-Apr-26 added the architectural concerns documented in 73h and 73k. The 6 existing failures listed below were not regressions from 29-Apr-26 — they are tests that passed under the earlier framing and now fail under the more rigorous framing introduced by working through 73h/73k mechanisms.
+
+**Pre-30-Apr-26 closures (preserved for traceability)**: F10 fix, F14 Fix-A at the public p∞ surface, the 28→29-Apr-26 predictive-Beta wiring fixes (Williams/Crowder MoM for analytic κ_pred + α_pred/β_pred propagation through `mc_span_cdfs`), the 29-Apr-26 evening Option A subject-curve fix, and the per-cohort `data_retrieved_at` tau_max fix all remain load-bearing. D2 stays inside the dispersion-methodology tolerance (`_DISPERSION_METHODOLOGY_PARITY_TOL = 5e-3`). Closures from 29-Apr-26 evening listed at the original location below for the change history.
+
 **Date opened**: 28-Apr-26
 **Canonical contract**: [`docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`](../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) (review pack 1 of 3)
+
+## Two open workstreams (30-Apr-26)
+
+### WS1 — 73h: v3 router and carrier-conditioning architectural concerns
+
+Tracks two architectural concerns surfaced while diagnosing the cohort_maturity v3 chart on `gm-rebuild-jan-26`. Both are candidate violations of 73g invariants 1 and 6.
+
+- **Issue 1**: top-level latency / non-latency router fork in `cohort_forecast_v3.py:1071-1110` produces parallel logic for a case 73g says should differ only by natural degeneration of the same objects.
+- **Issue 2**: carrier (Tier 1/2/3 dispatcher at `forecast_runtime.py:1495-1533`) and subject (IS reweight at `forecast_state.py:1095-1199`) use different evidence-conditioning machineries.
+
+**Tests this workstream is expected to resolve**:
+
+| Test | Mechanism | Fix surface |
+|---|---|---|
+| `test_multihop_with_terminal_non_latency_window_must_honour_upstream_subject_latency` (NEW, RED) | Router dispatches to `_non_latency_rows` on terminal-edge non-latency flag, ignoring upstream subject-span composition. Curve `model_midpoint` is τ-flat (`rel_var=0.00%`) on `cf-fix-deep-mixed` `from(d).to(f).window(...)`. | Issue 1 — retire the top-level fork; let σ_eff = 0 emerge naturally. |
+| `test_multihop_with_terminal_non_latency_cohort_must_honour_upstream_subject_latency` (NEW, RED) | Same as above in cohort mode. | Issue 1 — same fix. |
+| `test_single_hop_non_latent_upstream_collapses_to_window[fast]` | `enabled` gate at `forecast_runtime.py:965` is `reach > 0 and has_semantic_upstream_latency(...)`. With non-latent upstream, factorised-carrier branch dies; cohort obs_x falls behind window. | Issue 2 — widen the gate to `(cohort mode) AND (anchor != from_node) AND (reach > 0)`. Single-line semantic change; the δ(0)-carrier branch then fires and produces `obs_x = a_pop × reach`. |
+| `test_single_hop_non_latent_upstream_collapses_to_window[slow]` | Same as above. | Issue 2 — same fix. |
+| `test_cohort_frame_evidence_is_admitted_only_for_single_hop_anchor_override_case` | BE `cdf_arr` at `forecast_state.py:1047-1052` is built from edge-level `(μ, σ, onset)` only (comment: "Edge-level CDF only — no carrier convolution here"). Path-level params from carrier are never read. Test asserts ≥0.02 carrier-driven movement; observed 0.011. | Issue 2 — read `(path_mu, path_sigma, path_onset)` for `cdf_arr` when carrier is active. Localised fix at `forecast_state.py:1047-1052`. |
+| `test_v3_midline_at_saturation_converges_to_p` | Defect 1 (Pop D `int(remaining)` truncation) is **already fixed** at `forecast_state.py:745`; the apparent `binomial(int(remaining), q_late)` at `:752` is a deliberate `_ = loop_rng.binomial(...)` no-op for RNG-stream parity. Residual gap (midpoint 0.585 vs p_infinity 0.698, Δ = 0.113 vs tolerance 0.05) is Defect 2 (level confusion at rate-conditioning seam). | Issue 2 — Defect 2 is the same surface as Issue 2's "carrier-vs-subject conditioning machinery split"; whether the unification fixes Defect 2 specifically requires the instrumentation `cohort-maturity-v3-midline-collapse-investigation.md` calls for. **Partial.** |
+
+Total expected from WS1: **5 cleanly + 1 partial + 2 new canaries = 8 tests**.
+
+### WS2 — 73k: aggregate-IS likelihood comment / code discrepancy
+
+Tracks the documented vs implemented likelihood model in `compute_forecast_trajectory`'s aggregate IS step. The function comment at `forecast_state.py:1098` claims `y_i ~ Binomial(n_i, p × c_i)`. The code at `:1166` computes `Binomial(n_i × c_i, p)`. Same parametrisation only in the rare-event limit; produces different posteriors over `(p, μ, σ, onset)` outside it.
+
+**Tests this workstream is expected to resolve**: none of the currently-failing tests can be cleanly attributed to this discrepancy without per-test instrumentation. The 73k investigation calls for:
+
+1. Comment provenance via git blame.
+2. Doc 73f F14 attribution check (does the design doc state the likelihood as comment-form or code-form?).
+3. Recovery of pre-aggregate `_evaluate_cohort` from git history.
+4. Test coverage audit for likelihood-shape assertions.
+5. Synthetic numerical comparison with `c ∈ {0.3, 0.7}` to discriminate the two forms.
+6. Trace through to trajectory band consumers.
+
+WS2 is independent of WS1 and may turn out to affect the same low-level posterior shape the 73h §"Issue 2" unification touches. Until step 5 is run, the relationship between WS1 and WS2 is "co-located in the IS step but addressing different layers".
+
+**Tests this workstream might affect (speculative — needs step 5 confirmation)**: `test_low_evidence_cohort_matches_factorised_convolution_oracle` and `test_low_evidence_single_hop_remains_near_unconditioned_oracle` (both currently passing per the 29-Apr-26 Option A fix) are the most likely to surface a likelihood-shape mismatch if Step 5 reveals the comment-form is the intended model. Re-run after WS2 lands.
+
+### Out-of-scope failures (need their own architectural decision)
+
+- `test_cli_identity_collapse_matches_window_across_public_surfaces` — 73g invariant 7. Two-site completeness computation: FE `statisticalEnhancementService.ts:1301-1308` vs BE `forecast_state.py:1454-1470`. Architectural fix: project completeness once.
+- `test_cli_projection_parity_uses_last_row_saturation_not_arbitrary_tau_curve_point` — same architectural surface (Δ ≈ 0.062 against tolerance 1e-4).
+
+These are not addressed by WS1 or WS2. They are tracked here for visibility but need their own design decision (which surface owns completeness; the other reads).
+
+### Sequencing
+
+WS1 and WS2 are independent in their fix surfaces. Suggested sequencing:
+
+1. **WS1 first**, in two stages:
+   - Stage 1a: widen the `enabled` gate at `forecast_runtime.py:965` (closes 1, 2 of the existing failures and likely test 5).
+   - Stage 1b: read path-level params in `forecast_state.py:1047-1052` (closes 5 of the existing failures).
+   - Stage 1c: retire the top-level latency / non-latency router (closes the 2 new canaries; partial close on test 6).
+2. **WS2 next**: run the 73k investigation steps. If step 5 shows code-form is the intended model, the comment is updated and no behaviour change. If comment-form is intended, run the corrected likelihood and re-run all outside-in tests.
+3. **Out-of-scope** completeness two-site issue: separate architectural design (defer until 73g invariant 7 has its own forensic note).
+
+After WS1 stages 1a-1c land, expected outside-in score: **33-35 passed / 0-2 failed / 1 xfailed**, depending on whether test 6 closes from WS1 alone or requires the WS2 step plus instrumentation per `cohort-maturity-v3-midline-collapse-investigation.md`.
 
 ## Purpose
 
@@ -807,15 +868,74 @@ Evidence:
 
 **Implication for diagnosis**: every cohort assertion in the outside-in suite that passed prior to 73b §3.9 retirement was passing under the analytic-source path with the `alpha_beta_query_scoped` discriminator's True branch active. Post-retirement that path is gone (see F2). This puts the suite under stronger pressure than the pre-retirement code ever exercised.
 
-### F4 — Group 1 + post-73e ~1e-4 drifts: two independent sources
+### F4 — Group 1 + post-73e public-surface drift
 
-**Source A (Stage 6 / `alpha_beta_query_scoped` retirement).** [model_resolver.py:104](../../graph-editor/lib/runner/model_resolver.py#L104) returns `False` unconditionally; the docstring at [model_resolver.py:95-102](../../graph-editor/lib/runner/model_resolver.py#L95) confirms this is the post-Decision-13 contract. The pre-retirement True branch's conjugate-update short-circuit no longer fires; `_non_latency_rows` ([cohort_forecast_v3.py:114-161](../../graph-editor/lib/runner/cohort_forecast_v3.py#L114)) and the sweep's blend at [forecast_state.py:1671](../../graph-editor/lib/runner/forecast_state.py#L1671) now run uniformly even on no-evidence / subject-equivalent queries. Result: a small posterior shift on every test that previously rested on the True-branch shortcut.
+**Original Source A (Stage 6 / `alpha_beta_query_scoped` retirement).**
+[model_resolver.py:104](../../graph-editor/lib/runner/model_resolver.py#L104)
+returns `False` unconditionally; the docstring at
+[model_resolver.py:95-102](../../graph-editor/lib/runner/model_resolver.py#L95)
+confirms this is the post-Decision-13 contract. The pre-retirement True
+branch's conjugate-update short-circuit no longer fires; `_non_latency_rows`
+([cohort_forecast_v3.py:114-161](../../graph-editor/lib/runner/cohort_forecast_v3.py#L114))
+and the sweep's blend at
+[forecast_state.py:1671](../../graph-editor/lib/runner/forecast_state.py#L1671)
+now run uniformly even on no-evidence / subject-equivalent queries. Result:
+a small posterior shift on every test that previously rested on the
+True-branch shortcut.
 
-**Source B (73e Stage 5 item 7).** `paramPack` runs `aggregateAndPopulateGraph` ([paramPack.ts:125](../../graph-editor/src/cli/commands/paramPack.ts#L125)), whose comment at [paramPack.ts:134-138](../../graph-editor/src/cli/commands/paramPack.ts#L134) records that FE topo, BE topo, CF, promotion, and UpdateManager all run inside that call. `analyse` runs the same `aggregateAndPopulateGraph` ([analyse.ts:204](../../graph-editor/src/cli/commands/analyse.ts#L204)) **then additionally** calls `prepareAnalysisComputeInputs` ([analyse.ts:263](../../graph-editor/src/cli/commands/analyse.ts#L263)), which in turn invokes `runScenarioMaterialisation` ([analysisComputePreparationService.ts:87-119](../../graph-editor/src/services/analysisComputePreparationService.ts#L87)) — Stage 4(a) `recontextScenarioGraph` plus Stage 5 item 7 `materialiseScenarioFeTopo`. So `analyse` runs an extra recontext + FE-topo pass that pack does not. The pre-Stage-5-item-7 baseline had pack and analyse converging on FE-topo-equivalent captured scalars; the new pass shifts intermediate values by O(1e-4) for fixtures whose previous parity rested on that equivalence.
+**Original Source B (73e Stage 5 item 7) — amended.**
+`paramPack` runs `aggregateAndPopulateGraph`
+([paramPack.ts:125](../../graph-editor/src/cli/commands/paramPack.ts#L125)).
+`analyse` also runs `aggregateAndPopulateGraph`
+([analyse.ts:204](../../graph-editor/src/cli/commands/analyse.ts#L204)) and
+then enters `prepareAnalysisComputeInputs`
+([analyse.ts:263](../../graph-editor/src/cli/commands/analyse.ts#L263)).
+That means analyse runs graph-mutating CF before the requested BE analysis,
+then prepares a request graph and may call CF or cohort maturity again. This
+was initially framed as "extra materialisation pass non-idempotency". The
+corrected diagnosis is sharper: the first CF call can mutate the source layer
+because the fetch-pipeline fast-path response mapping writes CF `p_mean` into
+`forecast.mean`, and the LAG apply path copies that value into
+`model_vars[analytic].probability.mean`.
 
-The 10× spike on `cli_identity_collapse` (4.4e-4 → 4.79e-3 post-73e) is harder to attribute to either source alone. That test is `cohort(synth-lat4-c, c→d)` — the identity-collapse case — and the spike's appearance only post-73e suggests Source B's extra materialisation pass intersecting with the broader CF evidence-binding defect. Worth bisecting before tolerance-relaxing: if fixing F14 (and any residual F1 work) also brings this back inside 1e-4, the 10× jump was an echo of the same engine defect amplified by the materialisation pass.
+**Final outcome (30-Apr-26 evening).** Both canaries are now closed.
+The actual root cause was unrelated to either Source A, Source B, or the
+four 73l defects: it was a long-standing timezone bug in `formatDateUK` at
+[`src/lib/dateFormat.ts`](../../graph-editor/src/lib/dateFormat.ts).
+`new Date("29-Apr-26")` is parsed as *local* midnight; on a host running
+in a TZ ahead of UTC (e.g. BST during summer time) the UTC components
+returned by `getUTCDate()` drop a day, so `formatDateUK("29-Apr-26")`
+returned `"28-Apr-26"`. The canary traversed this code path because the
+analyse CLI routes its DSL through
+`composeScenarioDsl(augmentDSLWithConstraint('', recipeDsl), undefined)`,
+which calls `normalizeConstraintString` →
+`formatDateUK("d-MMM-yy")`. param-pack passes the user's DSL straight
+through to fetchItems without renormalisation, which is why the same
+parser path produced the right answer on one CLI surface and a one-day-shifted
+window end on the other. The bug only bites dates inside BST months when
+the host clock is in BST. See
+[`73l-cli-completeness-parity-canary-drift.md`](73l-cli-completeness-parity-canary-drift.md)
+for the full forensic walk.
 
-**Recommended fix direction (no fix taken yet)**: tolerance-relax the four steady ~4e-4 drifts in `test_cohort_factorised_outside_in.py:62` (`_P_MEAN_ABS_TOL` and the 1e-9 / 1e-6 inline tolerances) with a comment naming Sources A and B, but only after F14 and any residual F1 work are classified — to confirm the 10× spike on `cli_identity_collapse` collapses back. If it does, no further alignment is needed; if it doesn't, route param-pack through `runScenarioMaterialisation` as well so both surfaces produce the same materialised state.
+The four 73l defects (analyse-CLI no longer pre-runs graph-mutating CF;
+the fetch-pipeline fast-path no longer leaks `p_mean → forecast.mean →
+model_vars[analytic].probability.mean`; dispersion mapping realigned
+`p_sd → stdev_pred`, `p_sd_epistemic → stdev`; CF response → graph
+mapping consolidated through a single `extractCfEdgeWriteSpec` helper so
+the race fast path and direct slow path cannot drift) are also fully
+implemented in the working tree. Each defect was genuine layer-contract
+cleanup but secondary to the canary cause; together they close the
+re-emergence vector for the same class of bug. See 73l §"Status of the
+four 73l defects" for surface-by-surface detail and tests.
+
+Closed:
+
+- `test_cli_identity_collapse_matches_window_across_public_surfaces`
+- `test_cli_projection_parity_uses_last_row_saturation_not_arbitrary_tau_curve_point`
+
+A regression test for `formatDateUK` round-tripping d-MMM-yy strings across
+the BST/GMT boundary has been added in
+[`src/lib/__tests__/dateFormat.test.ts`](../../graph-editor/src/lib/__tests__/dateFormat.test.ts).
 
 ### F5 — `n_effective` missing → blend skips (dispersion only, ruled out as catastrophe)
 
@@ -1225,6 +1345,7 @@ Focused verification already run:
 - [73b-final-outstanding.md §3.8](73b-final-outstanding.md#38-playwright-regression--sharelivechart-distinct-scenario-graphs-post-73e) — Playwright regression. Different defect class (transport / share-restore), not engine. Stays in 73b.
 - [73b-final-outstanding.md §3.9](73b-final-outstanding.md#39-surprise-gauge-has-stopped-working-post-73e) — surprise gauge. Originally framed as a runner-analyze dispatch issue. Implementation log entry 8 closes the engine-codepath axis (the `cf_mode` `NameError` and the wrong-kernel binding); whether the §3.9 reproduction also covered an upstream dispatch surface is for the 73b owner to confirm before closing that ledger entry.
 - [60-forecast-adaptation-programme.md Appendix A](60-forecast-adaptation-programme.md#appendix-a-wp8-references--pinned-debt-awaiting-the-direct-cohort-path) — WP8 references ledger. Authoritative list of test xfails and behaviour pins that will be re-enabled when the flagged direct-`cohort()` rate-conditioning path lands. The surprise-gauge regime-selection xfail introduced by implementation log entry 8 sits there.
+- [73l-cli-completeness-parity-canary-drift.md](73l-cli-completeness-parity-canary-drift.md) — full forensic on the F4 Source B amplification (analyse-CLI second-pass non-idempotency). Owns the diagnosis and proposed fix sequencing for `test_cli_identity_collapse_matches_window_across_public_surfaces` and `test_cli_projection_parity_uses_last_row_saturation_not_arbitrary_tau_curve_point`.
 
 ---
 

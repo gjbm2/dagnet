@@ -197,26 +197,50 @@ async function runAnalyse() {
     return unique;
   };
 
+  // Doc 73l Fix 1 (30-Apr-26): when the requested analysis itself requires
+  // a BE call (`needsSnapshots` true — covers `conditioned_forecast`,
+  // `cohort_maturity*`, and registered runner-analyze types), skip the
+  // pre-analysis `aggregateAndPopulateGraph` call. `prepareAnalysisComputeInputs`
+  // → `runScenarioMaterialisation` does FE topo materialisation per scenario,
+  // and `runPreparedAnalysis` runs the requested BE analysis (CF for the
+  // conditioned_forecast case) once. Running CF here AND again under
+  // `runPreparedAnalysis` was the analyse-vs-pack canary divergence root
+  // cause: the first CF's authoritative L5 writes were overwritten by the
+  // materialisation pass's FE topo, so the second CF saw materially different
+  // inputs than the first.
+  //
+  // FE-only analyses (`graph_overview`, `node_info`, `edge_info`, …) still
+  // need a fully-aggregated graph for their local compute, so they keep the
+  // pre-aggregate path.
   for (let i = 0; i < scenarios.length; i++) {
     const spec = scenarios[i];
     const externalId = resolveExternalScenarioId(spec, i);
-    log.info(`Aggregating scenario '${spec.name}' (${spec.queryDsl}, mode: ${fetchMode})...`);
-    const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, spec.queryDsl, {
-      mode: fetchMode,
-      workspace,
-      scenarioId: externalId,
-      skipBackendCalls,
-    });
-    for (const w of warnings) {
-      log.warn(`[${spec.name}]: ${w}`);
+
+    let scenarioGraph: Graph;
+    if (needsSnapshots) {
+      log.info(`Preparing scenario '${spec.name}' (${spec.queryDsl}, mode: ${fetchMode}) — materialisation deferred to prepareAnalysisComputeInputs`);
+      scenarioGraph = structuredClone(bundle.graph) as Graph;
+    } else {
+      log.info(`Aggregating scenario '${spec.name}' (${spec.queryDsl}, mode: ${fetchMode})...`);
+      const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, spec.queryDsl, {
+        mode: fetchMode,
+        workspace,
+        scenarioId: externalId,
+        skipBackendCalls,
+      });
+      for (const w of warnings) {
+        log.warn(`[${spec.name}]: ${w}`);
+      }
+      scenarioGraph = populatedGraph;
     }
+
     scenarioEntries.push({
       id: externalId,
       name: spec.name,
       colour: spec.colour,
       visibilityMode: spec.visibilityMode,
       queryDsl: spec.queryDsl,
-      graph: populatedGraph,
+      graph: scenarioGraph,
     });
   }
 

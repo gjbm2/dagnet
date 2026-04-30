@@ -168,6 +168,8 @@ These are pure transforms — no DB queries, no MCMC. Their inputs come from the
 
 `model_resolver.py` is the single entry point for "give me the active probability and latency parameters for this edge in this scope and temporal_mode". Returns `ResolvedModelParams` with `alpha`, `beta`, `alpha_pred`, `beta_pred` and the latency block. The `alpha_beta_query_scoped` flag remains on the dataclass as a no-op (always `False`) post 73b Stage 6 retirement — once the discriminator that gated analytic edges through a separate no-update path. All forecast-engine calls flow through this.
 
+**Read order post-unification (30-Apr-26 §4 Step 7)**: the resolver reads `model_vars[promoted_source].probability` first and falls back to `posterior_block` only when the source-ledger lookup fails. The source ledger is the source of truth post-unification; the live `p.posterior` is the promoted projection (single-writer: `applyPromotion`), so the two should always agree on freshly-promoted graphs. The posterior fallback survives as a robustness measure for graphs that arrive un-promoted (older snapshots, share bundles, CLI graphs that bypass `applyPromotion`). The same reorder applies to the `n_effective` read; the canonical field name is `n_effective` (the legacy `window_n_effective` alias is preserved on `posterior_block` for one cycle while consumers migrate). See [`docs/current/posterior-unification-plan-29-Apr-26.md`](../posterior-unification-plan-29-Apr-26.md).
+
 `lag_model_fitter.py` handles `/api/lag/recompute-models` — recomputes per-edge latency fits from snapshot DB evidence on demand. Independent of the live forecast path.
 
 ## 9. Maintenance signposts

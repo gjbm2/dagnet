@@ -124,6 +124,7 @@ vi.mock('../rateLimitCountdownService', () => ({
 
 import {
   applyConditionedForecastToGraph,
+  extractCfEdgeWriteSpec,
   type ConditionedForecastEdgeResult,
   type ConditionedForecastScenarioResult,
 } from '../conditionedForecastService';
@@ -233,6 +234,166 @@ async function yieldMs(ms: number): Promise<void> {
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
+
+// Doc 73l Fix 2 (30-Apr-26): the CF response → write-spec projection is
+// shared between the race fast path (`mergeCfIntoFe` in fetchDataService)
+// and the direct-apply slow path (`applyConditionedForecastToGraph`). Both
+// paths now consume `extractCfEdgeWriteSpec`. These tests pin the spec's
+// validity gates and the resulting field selection so the two paths cannot
+// drift on what CF writes vs what gets dropped.
+describe('extractCfEdgeWriteSpec — canonical CF response projection', () => {
+  it('returns null when p_mean is missing or non-finite', () => {
+    expect(extractCfEdgeWriteSpec({ edge_uuid: 'e1', p_mean: null } as any)).toBeNull();
+    expect(extractCfEdgeWriteSpec({ edge_uuid: 'e1', p_mean: NaN } as any)).toBeNull();
+    expect(extractCfEdgeWriteSpec({ edge_uuid: 'e1', p_mean: Infinity } as any)).toBeNull();
+  });
+
+  it('projects CF p_mean onto blendedMean (not forecast.mean — L5 not L2)', () => {
+    const spec = extractCfEdgeWriteSpec({ edge_uuid: 'e1', p_mean: 0.42, p_sd: null } as any);
+    expect(spec?.blendedMean).toBe(0.42);
+    expect(spec).not.toHaveProperty('forecast');
+    expect(spec).not.toHaveProperty('forecast_mean');
+  });
+
+  it('maps p_sd → stdev_pred (predictive) and p_sd_epistemic → stdev (epistemic)', () => {
+    const spec = extractCfEdgeWriteSpec({
+      edge_uuid: 'e1', p_mean: 0.5, p_sd: 0.07, p_sd_epistemic: 0.04,
+    } as any);
+    expect(spec?.stdev_pred).toBe(0.07);
+    expect(spec?.stdev).toBe(0.04);
+  });
+
+  it('drops dispersion when negative or non-finite (validity gate)', () => {
+    const spec = extractCfEdgeWriteSpec({
+      edge_uuid: 'e1', p_mean: 0.5, p_sd: -0.1, p_sd_epistemic: NaN,
+    } as any);
+    expect(spec?.stdev_pred).toBeUndefined();
+    expect(spec?.stdev).toBeUndefined();
+  });
+
+  it('passes completeness through unchanged but drops non-finite values', () => {
+    const ok = extractCfEdgeWriteSpec({
+      edge_uuid: 'e1', p_mean: 0.5, completeness: 0.83, completeness_sd: 0.06,
+    } as any);
+    expect(ok?.completeness).toBe(0.83);
+    expect(ok?.completeness_stdev).toBe(0.06);
+    const dropped = extractCfEdgeWriteSpec({
+      edge_uuid: 'e1', p_mean: 0.5, completeness: NaN, completeness_sd: null,
+    } as any);
+    expect(dropped?.completeness).toBeUndefined();
+    expect(dropped?.completeness_stdev).toBeUndefined();
+  });
+
+  it('passes evidence n/k through, dropping negative or non-finite', () => {
+    const ok = extractCfEdgeWriteSpec({
+      edge_uuid: 'e1', p_mean: 0.5, evidence_n: 120, evidence_k: 48,
+    } as any);
+    expect(ok?.evidence_n).toBe(120);
+    expect(ok?.evidence_k).toBe(48);
+    const dropped = extractCfEdgeWriteSpec({
+      edge_uuid: 'e1', p_mean: 0.5, evidence_n: -5, evidence_k: NaN,
+    } as any);
+    expect(dropped?.evidence_n).toBeUndefined();
+    expect(dropped?.evidence_k).toBeUndefined();
+  });
+});
+
+describe('CF response mapping parity — race fast path vs direct slow path', () => {
+  // Doc 73l Fix 2 acceptance test: prove that the two CF response → graph
+  // mapping paths agree, given the same CF response, on every CF-owned
+  // field on the resulting graph edge. Output shapes differ by construction
+  // (race merges into EdgeLAGValues then UpdateManager; slow path
+  // constructs EdgeLAGValues directly from CF) but the per-edge CF writes
+  // must be identical. Drift here is the failure mode 73l names — both
+  // paths now share `extractCfEdgeWriteSpec`, this test pins the contract.
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfImpl = async () => [];
+    registerParamFile();
+    windowDsl();
+  });
+
+  afterEach(() => { vi.clearAllMocks(); });
+
+  it('race-fast and direct-apply produce identical CF-owned edge fields', async () => {
+    const cfResponse: ConditionedForecastScenarioResult[] = [
+      {
+        scenario_id: 'current',
+        success: true,
+        edges: [
+          {
+            edge_uuid: EDGE_ID,
+            p_mean: 0.66,
+            p_sd: 0.05,
+            p_sd_epistemic: 0.04,
+            completeness: 0.81,
+            completeness_sd: 0.07,
+            evidence_n: 200,
+            evidence_k: 132,
+          },
+        ],
+      },
+    ];
+
+    // Path A: race fast path. CF resolves before the 500ms deadline; the
+    // fast-path merger applies its result inline.
+    cfImpl = async () => cfResponse;
+    const graphA = latencyGraph();
+    let lastA: any = graphA;
+    await runStage2EnhancementsAndInboundN(
+      [fetchItem()], [fetchItem()], { mode: 'from-file' } as any,
+      graphA, (g: any) => { lastA = g; }, 'window(1-Nov-25:7-Nov-25)',
+    );
+    const edgeA = lastA.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
+
+    // Path B: direct apply. Run applyConditionedForecastToGraph on the
+    // post-FE-topo graph (without going through the race), with the same
+    // CF response.
+    cfImpl = async () => [];
+    const graphPreCf = latencyGraph();
+    let lastPreCf: any = graphPreCf;
+    await runStage2EnhancementsAndInboundN(
+      [fetchItem()], [fetchItem()], { mode: 'from-file' } as any,
+      graphPreCf, (g: any) => { lastPreCf = g; }, 'window(1-Nov-25:7-Nov-25)',
+    );
+    const graphB = applyConditionedForecastToGraph(lastPreCf, cfResponse);
+    const edgeB = graphB.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
+
+    // CF-owned fields must agree across the two paths.
+    expect(edgeA.p.mean).toBeCloseTo(edgeB.p.mean, 5);
+    expect(edgeA.p.mean).toBeCloseTo(0.66, 5);
+
+    expect(edgeA.p.stdev).toBeCloseTo(edgeB.p.stdev, 5);
+    expect(edgeA.p.stdev).toBeCloseTo(0.04, 5);
+
+    expect(edgeA.p.stdev_pred).toBeCloseTo(edgeB.p.stdev_pred, 5);
+    expect(edgeA.p.stdev_pred).toBeCloseTo(0.05, 5);
+
+    expect(edgeA.p.latency.completeness).toBeCloseTo(edgeB.p.latency.completeness, 5);
+    expect(edgeA.p.latency.completeness).toBeCloseTo(0.81, 5);
+
+    expect(edgeA.p.latency.completeness_stdev).toBeCloseTo(edgeB.p.latency.completeness_stdev, 5);
+
+    expect(edgeA.p.evidence.n).toBe(edgeB.p.evidence.n);
+    expect(edgeA.p.evidence.n).toBe(200);
+    expect(edgeA.p.evidence.k).toBe(edgeB.p.evidence.k);
+    expect(edgeA.p.evidence.k).toBe(132);
+
+    // Layer contract: neither path may write CF p_mean into the source
+    // ledger or promoted baseline.
+    const analyticA = (edgeA.p.model_vars || []).find((mv: any) => mv?.source === 'analytic');
+    const analyticB = (edgeB.p.model_vars || []).find((mv: any) => mv?.source === 'analytic');
+    if (analyticA && analyticB) {
+      expect(analyticA.probability.mean).toBeCloseTo(analyticB.probability.mean, 5);
+      expect(analyticA.probability.mean).not.toBeCloseTo(0.66, 5);
+    }
+    if (typeof edgeA.p.forecast?.mean === 'number' && typeof edgeB.p.forecast?.mean === 'number') {
+      expect(edgeA.p.forecast.mean).toBeCloseTo(edgeB.p.forecast.mean, 5);
+      expect(edgeA.p.forecast.mean).not.toBeCloseTo(0.66, 5);
+    }
+  });
+});
 
 describe('CF owns completeness on the graph path (FE authority contract)', () => {
   beforeEach(() => {
@@ -370,6 +531,9 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
   // ── 3. End-to-end: CF completeness lands via the Stage-2 pipeline ───
 
   it('CF fast path: edge completeness is CF value (not FE topo CDF value)', async () => {
+    // Doc 73l Fix 4 (30-Apr-26): the fast path now mirrors the canonical
+    // direct-path dispersion split (`p_sd → stdev_pred`, `p_sd_epistemic →
+    // stdev`) that `applyConditionedForecastToGraph` has always honoured.
     cfImpl = async () => [
       {
         scenario_id: 'current',
@@ -378,7 +542,8 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
           {
             edge_uuid: EDGE_ID,
             p_mean: 0.77,
-            p_sd: 0.04,
+            p_sd: 0.05,            // predictive (kappa-inflated)
+            p_sd_epistemic: 0.04,  // epistemic
             completeness: 0.88,
             completeness_sd: 0.06,
             evidence_n: 120,
@@ -400,10 +565,73 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
     // CF's completeness (0.88) must win — FE's CDF-based value would
     // be whatever enhanceGraphLatencies computed, NOT 0.88.
     expect(edge.p.latency.completeness).toBeCloseTo(0.88, 5);
-    expect(edge.p.stdev).toBeCloseTo(0.04, 5);
+    expect(edge.p.stdev).toBeCloseTo(0.04, 5);       // p_sd_epistemic → p.stdev
+    expect(edge.p.stdev_pred).toBeCloseTo(0.05, 5);  // p_sd → p.stdev_pred
     expect(edge.p.evidence.n).toBe(120);
     expect(edge.p.evidence.k).toBe(48);
     expect(edge.p.evidence.mean).toBeCloseTo(0.5, 5);
+  });
+
+  it('CF fast path: does NOT leak p_mean into p.forecast.mean or model_vars[analytic].probability.mean', async () => {
+    // Doc 73l Fix 3 (30-Apr-26): the fast-path merge previously wrote
+    // CF `p_mean` onto `forecast.mean`, which `UpdateManager.applyBatchLAGValues`
+    // then propagated to `model_vars[analytic].probability.mean`.
+    // `applyPromotion` later fanned that contaminated value back out to
+    // `p.forecast.mean`. The chain was the analyse-vs-pack canary divergence
+    // root cause: CF #1 corrupting CF #2's analytic prior on the analyse path.
+    cfImpl = async () => [
+      {
+        scenario_id: 'current',
+        success: true,
+        edges: [
+          {
+            edge_uuid: EDGE_ID,
+            p_mean: 0.77,           // CF current-answer rate posterior
+            p_sd: 0.05,
+            p_sd_epistemic: 0.04,
+            completeness: 0.88,
+            completeness_sd: 0.06,
+            evidence_n: 120,
+            evidence_k: 48,
+          },
+        ],
+      },
+    ];
+    const graph = latencyGraph();
+    // Pin a baseline analytic source mean different from CF's p_mean so the
+    // assertion is meaningful: if the leak persists, this gets overwritten.
+    graph.edges[0].p.model_vars[0].probability.mean = 0.5;
+
+    let lastGraph: any = graph;
+    const setGraph = (g: any) => { lastGraph = g; };
+
+    await runStage2EnhancementsAndInboundN(
+      [fetchItem()], [fetchItem()], { mode: 'from-file' } as any,
+      graph, setGraph, 'window(1-Nov-25:7-Nov-25)',
+    );
+
+    const edge = lastGraph.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
+
+    // L5 current-answer: CF p_mean lands on edge.p.mean via blendedMean.
+    expect(edge.p.mean).toBeCloseTo(0.77, 5);
+
+    // L1 source ledger: model_vars[analytic].probability.mean MUST NOT be
+    // mutated by the CF response. It stays at the analytic baseline (0.5),
+    // not the CF current answer (0.77).
+    const analyticEntry = (edge.p.model_vars || []).find((mv: any) => mv?.source === 'analytic');
+    expect(analyticEntry).toBeDefined();
+    expect(analyticEntry.probability.mean).toBeCloseTo(0.5, 5);
+    expect(analyticEntry.probability.mean).not.toBeCloseTo(0.77, 5);
+
+    // L2 promoted baseline: p.forecast.mean is the projection from
+    // model_vars[analytic].probability.mean via applyPromotion. With the
+    // analytic source uncontaminated, the promoted forecast.mean must
+    // not equal CF's p_mean either. (FE topo Step 1 / promotion writes the
+    // baseline; CF is barred from this layer per doc 73b §3.2 Stage 4(c)
+    // and doc 45 §FE-authority.)
+    if (typeof edge.p.forecast?.mean === 'number') {
+      expect(edge.p.forecast.mean).not.toBeCloseTo(0.77, 5);
+    }
   });
 
   it('CF slow path: edge completeness becomes CF value after subsequent-overwrite .then() fires', async () => {

@@ -54,11 +54,11 @@ Scenario param packs are thinner again. They are not mini parameter files and no
 From edges:
 
 - `p.mean`, `p.stdev`
-- `p.posterior.*` — Bayesian probability posterior (`alpha`, `beta`, HDI bounds, `ess`, `rhat`, `fitted_at`, `fingerprint`, `provenance`, cohort-slice variants). Populated by `bayesPatchService.applyPatch` when a `.bayes-vars.json` sidecar lands.
+- `p.posterior.*` — Promoted Beta-shape probability surface (source-agnostic post-unification, 30-Apr-26). Carries `distribution`, `alpha`, `beta`, `alpha_pred`, `beta_pred`, cohort-family equivalents, `n_effective`, `cohort_n_effective`, and `provenance` / `cohort_provenance`. Written exclusively by `applyPromotion` from the active `model_vars[*].probability` entry. Bayesian-fit-only metadata (HDI, ESS, rhat, fitted_at, prior_tier, PPC, LOO) lives on `model_vars[bayesian].fit_diagnostics` and `model_vars[bayesian].quality`, not here.
 - `p.evidence.*` (`mean`, `stdev`, `n`, `k`)
-- `p.forecast.*` (`mean`, `stdev`)
-- `p.latency.*` — LAG display fields (`completeness`, `completeness_stdev`, `t95`, `path_t95`, `median_lag_days`) plus Bayesian promoted scalars (`mu`, `sigma`, `onset_delta_days`, `promoted_t95`, `promoted_*_sd`, `path_mu`, `path_sigma`, `promoted_path_t95`, etc.) written by the promotion cascade.
-- `p.latency.posterior.*` — full latency posterior block (`mu_mean`, `mu_sd`, `sigma_mean`, `sigma_sd`, `onset_*`, `hdi_t95_*`, path-level equivalents).
+- `p.forecast.*` (`mean`, `stdev`, `source`)
+- `p.latency.*` — LAG display fields (`completeness`, `completeness_stdev`, `t95`, `path_t95`, `median_lag_days`) plus Bayesian promoted scalars (`mu`, `sigma`, `onset_delta_days`, `promoted_t95`, `promoted_*_sd`, `path_mu`, `path_sigma`, `promoted_path_t95`, etc.) written by `applyPromotion`.
+- `p.latency.posterior.*` — Promoted lognormal latency posterior surface (source-agnostic). Carries `mu_mean`, `mu_sd`, `sigma_mean`, `sigma_sd`, `onset_delta_days`, `path_*` equivalents. Written exclusively by `applyPromotion` from `model_vars[bayesian].latency` (today only the bayesian source produces a populated latency posterior — analytic carries point estimates without posterior moments). HDI bands on t95 and bayesian-only metadata move to `model_vars[bayesian].fit_diagnostics.latency`.
 - `conditional_p` — same shape mirrored per condition.
 - `cost_gbp.*`, `labour_cost.*` (`mean`, `stdev`, `distribution`), `weight_default`.
 
@@ -68,7 +68,7 @@ These are projection fields. The extractor copies the active graph view, not the
 
 ### What's NOT extracted (internal config)
 
-Raw distribution knobs on the base probability (`distribution`, `min`, `max`, `alpha`, `beta` on `p` itself — distinct from `p.posterior.alpha/beta`), evidence retrieval metadata (`window_from/to`, `retrieved_at`, `source`), latency config (`latency_parameter`, `anchor_node_id`, `mean_lag_days`), the full Bayesian slice inventory (`posterior.slices` on the file object), the graph-side re-projection cache `p._posteriorSlices`, the full model-source ledger `p.model_vars`, model-source preference flags, `*_overridden` flags, and the graph-root `_bayes` metadata block.
+Raw distribution knobs on the base probability (`distribution`, `min`, `max`, `alpha`, `beta` on `p` itself — distinct from `p.posterior.alpha/beta`), evidence retrieval metadata (`window_from/to`, `retrieved_at`, `source`), latency config (`latency_parameter`, `anchor_node_id`, `mean_lag_days`), the full Bayesian slice inventory (`posterior.slices` on the file object), the graph-side re-projection cache `p._posteriorSlices`, the full model-source ledger `p.model_vars` (FE-only post-unification — `model_vars[bayesian].fit_diagnostics` carries bayesian-only metadata that downstream BE consumers do not need), model-source preference flags, `*_overridden` flags, and the graph-root `_bayes` metadata block.
 
 ### Whitelist discipline
 
@@ -115,17 +115,28 @@ Model variables represent alternative probability estimates for a single edge. R
 
 ### Preference hierarchy
 
-1. `'manual'` -- user override (if present, wins)
-2. `'bayesian'` -- Bayesian posterior (if present AND gate_passed)
-3. `'analytic'` -- deterministic fitting (trusted default)
-4. `'best_available'` -- Bayesian if gated, else analytic (the default)
+1. `'bayesian'` — explicit pin: bayesian if present, else analytic fallback
+2. `'analytic'` — explicit pin: analytic only
+3. `'best_available'` — gated bayesian (if quality gate passes), else analytic (default)
+
+The `'manual'` preference value was retired in doc 73b §6.7. In-the-wild graphs carrying it are normalised to `best_available` by `_migrateManualSourceInPlace` at load time.
 
 ### Key functions
 
 - `resolveActiveModelVars(modelVars, preference)`: select winning entry
-- `promoteModelVars(entry)`: flatten to scalar mean/stdev/latency
+- `promoteModelVars(entry)`: flatten to scalar mean/stdev/latency plus the source-agnostic `posterior` (Beta) and `latency_posterior` (lognormal) projections
 - `effectivePreference(edgePref, graphPref)`: edge-level overrides graph-level
-- `applyPromotion(probabilityParam, graphPref)`: write promoted scalars onto edge
+- `applyPromotion(probabilityParam, graphPref)`: write promoted scalars and posterior surfaces onto edge. The single writer of `p.posterior` and `p.latency.posterior` post-unification (30-Apr-26 §4 Step 2). When no entry resolves, the `clearPromotedSurfaces` helper strips both surfaces so a stale projection from a prior promotion cannot survive a `model_vars` mutation.
+
+### Source ledger shape (post-unification)
+
+After the 30-Apr-26 posterior-unification refactor, both `model_vars[analytic]` and `model_vars[bayesian]` carry the full Beta shape on `probability.{alpha, beta, alpha_pred, beta_pred, n_effective, cohort_alpha, cohort_beta, cohort_alpha_pred, cohort_beta_pred, cohort_n_effective, provenance, cohort_provenance}` per the §3.9 mirror contract. The bayesian source additionally carries:
+
+- `quality.{rhat, ess, divergences, evidence_grade, gate_passed}` — promotion gate inputs.
+- `fit_diagnostics.probability.{fitted_at, fingerprint, prior_tier, surprise_z, hdi_*, delta_elpd, pareto_k_max, n_loo_obs, ppc_*}` — bayesian-only metadata that previously lived on `p.posterior`.
+- `fit_diagnostics.latency.{fitted_at, fingerprint, ess, rhat, hdi_t95_*, delta_elpd, pareto_k_max, n_loo_obs, ppc_traj_*}` — bayesian-only metadata that previously lived on `p.latency.posterior`.
+
+Reader components consume the merged view via `getProbabilityPosteriorView(p)` / `getLatencyPosteriorView(p)` from `src/utils/posteriorView.ts`, which fuses `p.posterior` + `model_vars[bayesian].fit_diagnostics` + `quality` into a single object the existing reader code can consume without reaching into multiple surfaces.
 
 ## Schema System
 

@@ -413,6 +413,22 @@ Step 10 (test pins + new tests): medium — seven new tests, ~ten updates, three
 
 Total: medium-sized refactor, ~one engineer-week including review and a parity-suite shake; add ~2 days for Step 0 if the implicit caller contracts in `bayesPriorService.ts` reveal additional surprises during the static call-graph walk. The user-visible payoff is the parity defect goes away; the architectural payoff is `p.posterior` is no longer source-conditional and the promotion invariant is no longer fragile.
 
+## Implementation progress
+
+<!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
+
+- [x] Step 0 — Promotion coverage prerequisites — completed 29-Apr-26
+- [x] Step 1 — Schema and type declarations — completed 30-Apr-26
+- [x] Step 2 — Extend `applyPromotion` to write the promoted Beta and latency posterior surfaces — completed 30-Apr-26
+- [x] Step 3 — Rewrite `bayesPatchService.applyPatch` projection — completed 30-Apr-26
+- [x] Step 4 — Migrate readers of bayesian-only metadata on `p.posterior` — completed 30-Apr-26
+- [x] Step 5 — Reverse `posteriorSliceContexting.syncBayesianAndPromote` — completed 30-Apr-26
+- [x] Step 6 — CF apply path — completed 30-Apr-26
+- [x] Step 7 — BE resolver simplification — completed 30-Apr-26
+- [x] Step 8 — Persistence — completed 30-Apr-26 (review-only, no code change required; round-trip semantics unchanged per plan §8)
+- [x] Step 9 — Migration / backwards compatibility — completed 30-Apr-26
+- [x] Step 10 — Test impact and new coverage — completed 30-Apr-26
+
 ## Critical files for implementation
 
 - `graph-editor/src/services/modelVarsResolution.ts` (Step 2)

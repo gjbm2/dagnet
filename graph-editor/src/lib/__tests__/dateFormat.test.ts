@@ -22,6 +22,30 @@ describe('Date Formatting (d-MMM-yy)', () => {
     it('should throw on invalid dates', () => {
       expect(() => formatDateUK('invalid')).toThrow('Invalid date');
     });
+
+    // Regression: a TZ ahead of UTC (e.g. BST) used to drop a day on
+    // d-MMM-yy round-trip because `new Date("29-Apr-26")` parsed as local
+    // midnight, then `getUTCDate()` returned the previous UTC day.
+    // formatDateUK("29-Apr-26") returned "28-Apr-26" on a BST host.
+    // The CLI analyse path went through normalizeConstraintString →
+    // formatDateUK; param-pack passed the DSL straight through, masking
+    // the bug. Failure manifested as the analyse-vs-pack completeness
+    // canary in test_cohort_factorised_outside_in.py drifting by ~22e-3.
+    // See docs/current/project-bayes/73l-cli-completeness-parity-canary-drift.md.
+    it('should round-trip d-MMM-yy strings without dropping a day in any TZ', () => {
+      // Sample dates across the BST/GMT boundary plus mid-year.
+      const samples = [
+        '1-Jan-26', '15-Jan-26', '29-Jan-26',
+        '15-Mar-26', '29-Mar-26', '30-Mar-26', // BST start ~ 29-Mar-26
+        '1-Apr-26', '15-Apr-26', '29-Apr-26', '30-Apr-26',
+        '15-Jul-26', '15-Sep-26',
+        '24-Oct-26', '25-Oct-26', '26-Oct-26', // BST end ~ 25-Oct-26
+        '1-Nov-26', '31-Dec-26',
+      ];
+      for (const s of samples) {
+        expect(formatDateUK(s)).toBe(s);
+      }
+    });
   });
   
   describe('parseUKDate', () => {

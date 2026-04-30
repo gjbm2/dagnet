@@ -20,7 +20,7 @@ import { objectTypeTheme, type ObjectType } from '../../theme/objectTypeTheme';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
 import { useGraphStoreOptional } from '../../contexts/GraphStoreContext';
 import { buildDataDepthInfoRows } from '../../services/dataDepthService';
-import { BayesPosteriorCard } from './BayesPosteriorCard';
+import { PromotedModelCard } from './PromotedModelCard';
 import { resetPriorsForParam, deleteHistoryForParam } from '../../services/bayesPriorService';
 import toast from 'react-hot-toast';
 import '../../styles/analysis-info-card.css';
@@ -165,11 +165,11 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
   const resolvedResetPriors = onResetPriors || (bayesParamId ? handleResetPriors : undefined);
   const resolvedDeleteHistory = onDeleteHistory || (bayesParamId ? handleDeleteHistory : undefined);
 
-  // Forecast kind with posterior metadata → BayesPosteriorCard
+  // Forecast kind with posterior metadata → PromotedModelCard
   if (effectiveKind === 'forecast' && posteriorsMeta) {
     return (
       <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
-        <BayesPosteriorCard probability={posteriorsMeta.probability} latency={posteriorsMeta.latency} t95={posteriorsMeta.t95} pathT95={posteriorsMeta.path_t95} onResetPriors={resolvedResetPriors} onDeleteHistory={resolvedDeleteHistory} />
+        <PromotedModelCard probability={posteriorsMeta.probability} latency={posteriorsMeta.latency} t95={posteriorsMeta.t95} pathT95={posteriorsMeta.path_t95} onResetPriors={resolvedResetPriors} onDeleteHistory={resolvedDeleteHistory} />
         {filteredSections.length > 0 && (
           <InfoTable sections={filteredSections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
         )}
