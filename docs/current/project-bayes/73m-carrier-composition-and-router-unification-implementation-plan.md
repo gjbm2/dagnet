@@ -103,35 +103,38 @@ Stop condition: these tests are red for the current implementation for the expec
 
 ## Stage 2 — Shared carrier composition primitive
 
-Stage 2 introduces one internal primitive for building a factorised `carrier_to_x` from the existing graph, anchor node, denominator node, temporal mode, and source preference.
+Stage 2 introduces one internal primitive for building a factorised `carrier_to_x` from an anchor node, denominator node, upstream topology, and a set of resolved transition primitives.
+
+For this plan, those transition primitives may still be resolved from the current model-resolver path. The primitive's contract, however, must not be "read raw edge fields and build a prior-only carrier". Its contract is "compose the transition objects supplied to it". Later work in `73n` can replace prior/source-layer transition primitives with posterior-conditioned transition primitives without changing the carrier composer again.
 
 The primitive owns:
 
-- topological reach from `A` to `X`;
-- span-kernel composition over the same `A -> X` topology;
+- topological reach from `A` to `X` by composing transition probabilities;
+- span-kernel composition over the same `A -> X` topology by composing transition timing objects;
 - conditional carrier CDF construction;
 - per-draw carrier CDF construction where MC draws are needed;
 - horizon adequacy diagnostics.
 
-The primitive must read per-edge resolved parameters through the same resolver path used by subject-span construction. It must not consume stale pre-composed `path_mu`, `path_sigma`, or `path_onset_delta_days` for live carrier construction.
+The primitive may be given per-edge resolved parameters from the same resolver path used by subject-span construction, but the resolver is not part of the primitive's core semantics. This distinction is deliberate: conditioned transition objects from `window(U-V)` evidence must be able to occupy the same input slot later. The primitive must not consume stale pre-composed `path_mu`, `path_sigma`, or `path_onset_delta_days` for live carrier construction.
 
-The primitive should return a structured carrier object that clearly separates reach, deterministic conditional CDF, MC conditional CDF, tier/provenance, and horizon diagnostics.
+The primitive should return a structured carrier object that clearly separates reach, deterministic conditional CDF, MC conditional CDF, transition-source provenance, and horizon diagnostics.
 
-For Phase 1, this primitive is a prior/composition primitive only. It must not select empirical observations, admit carrier evidence, or replace prior timing from observed arrivals. Those operations belong to 73n.
+For Phase 1, this primitive composes the transition objects it is given. It must not select empirical observations, admit a new carrier evidence role, or replace timing from observed arrivals. `73n` is responsible for resolving posterior-conditioned transition primitives from admitted `window(...)` evidence before carrier and subject construction.
 
 Stop condition: the primitive passes Stage 1 tests without being wired into all live callers, and it exposes carrier horizon diagnostics in a test-inspectable form.
 
 ## Stage 3 — Migrate all carrier construction sites together
 
-Stage 3 wires the shared carrier primitive into every live carrier construction site in one bounded change.
+Stage 3 wires the shared carrier primitive into every live v3-side carrier construction site in one bounded change.
 
-The three required sites are:
+Scope: v3 only. v2 (`cohort_maturity_v2`, the legacy `XProvider` and `build_x_provider_from_graph` in `cohort_forecast.py`, and the inline `XProvider` construction in `_handle_cohort_maturity_v2` at `api_handlers.py:1380`) is code-frozen and explicitly out of scope. The v2/v3 parity test (`test_v2_v3_parity.py`) must keep passing — that constraint is what fixes v2's behaviour in place.
+
+The two required v3 sites are:
 
 - `forecast_runtime.build_x_provider_from_graph`, including the 73h gate at `forecast_runtime.py:965`;
-- `forecast_state.build_node_arrival_cache`, the whole-graph carrier cache surface named in 73h at `forecast_state.py:363`;
-- the inline `XProvider` construction in `api_handlers.py`, named in 73h at `api_handlers.py:1380`.
+- `forecast_state.build_node_arrival_cache`, the whole-graph carrier cache surface named in 73h at `forecast_state.py:363` (current line 382; +19 line drift from the 73h citation, recorded in the Stage 0 baseline).
 
-Partial migration is not allowed. A partial migration would leave scoped CF, whole-graph CF, and cohort_maturity on different carrier contracts.
+Partial migration is not allowed. A partial migration would leave scoped CF, whole-graph CF, and cohort_maturity on different carrier contracts on the v3 stack.
 
 The enabled gate becomes semantic rather than latency-based:
 
@@ -140,9 +143,11 @@ The enabled gate becomes semantic rather than latency-based:
 - disabled for `cohort()` when `A = X`;
 - independent of whether the upstream chain has latency-bearing edges.
 
-Phase 1 must not introduce a new empirical carrier-conditioning path. Live Phase 1 carrier construction must use the composed prior carrier only. Legacy empirical Tier 2 must be disabled or quarantined behind an explicit flag that defaults off for Phase 1, because leaving it reachable preserves the Tier-flip discontinuity identified in 73h and confounds the Stage 7 test signal. Empirical carrier timing belongs to 73n's typed evidence role.
+This is a real semantic shift, not a no-op refactor. The current `forecast_runtime.build_x_provider_from_graph` gate at line 965 is `reach > 0 and has_semantic_upstream_latency(graph, anchor, x)` — Stage 3 must drop the `has_semantic_upstream_latency(...)` requirement entirely. Stage 1 contract tests must therefore include an all-non-latency `A != X` carrier case that the post-Stage-3 gate must accept.
 
-Stop condition: all three live sites report the same carrier reach and compatible conditional CDF shape for the same `A -> X` scope, and diagnostics identify the carrier CDF source as composed-prior rather than empirical evidence-conditioned.
+Phase 1 must not introduce a new empirical carrier-conditioning path. Live Phase 1 carrier construction must use composed transition primitives only. Initially those primitives may be prior/source-layer primitives; after `73n`, the same carrier construction should be fed posterior-conditioned primitives resolved from admitted `window(...)` evidence. Legacy empirical Tier 2 must be disabled or quarantined behind an explicit flag that defaults off for Phase 1, because leaving it reachable preserves the Tier-flip discontinuity identified in 73h and confounds the Stage 7 test signal. Empirical carrier timing is not the intended Phase 2 abstraction.
+
+Stop condition: both v3 sites report the same carrier reach and compatible conditional CDF shape for the same `A -> X` scope, the v2/v3 parity suite still passes, and diagnostics identify the carrier CDF source as composed transition primitives rather than empirical replacement.
 
 ## Stage 4 — Subject-span CDF ownership
 
@@ -223,19 +228,20 @@ If `test_v3_midline_at_saturation_converges_to_p` turns green, record it as an o
 
 If 73l parity tests remain red, do not treat that as failure of this plan. They are governed by the separate projection/response-mapping workstream.
 
-## Stage 8 — Phase 2 handoff
+## Stage 8 — Conditioned-primitive handoff
 
-After the scoped repair lands, hand off to `73n` with a short decision record for the remaining carrier evidence-conditioning question.
+After the scoped repair lands, hand off to `73n` with a short decision record for the remaining transition-conditioning question.
 
-That record should answer whether the system will:
+That record should answer how the system will:
 
-- extend IS-style conditioning to `carrier_to_x`;
-- keep empirical carrier shape as a separate, explicitly-labelled policy;
-- or leave carriers prior-only unless a separate admission rule selects empirical timing evidence.
+- resolve each parameterised transition primitive from admitted `window(U-V)` evidence;
+- derive unparameterised or residual transition primitives, for example through a reviewed `1 - sum(parameterised siblings)` policy;
+- feed those posterior-conditioned primitives into both `carrier_to_x` and `subject_span` composition;
+- retire or quarantine empirical carrier Tier 2 as a live conditioning mechanism.
 
-This decision should be made with fresh evidence after carrier composition and router unification are no longer confounding the tests.
+This decision should be made with fresh evidence after carrier composition and router unification are no longer confounding the tests. The key invariant for the handoff is that evidence binds to transition primitives; carriers and subjects are composed from those primitives rather than admitting separate raw evidence families.
 
-73h Issue 2 must not be marked fully closed at the end of 73m unless `73n` has also landed or a reviewed decision explicitly accepts a partial carrier-conditioning policy as the durable design.
+73h Issue 2 must not be marked fully closed at the end of 73m unless `73n` has also landed or a reviewed decision explicitly accepts prior-only transition primitives as the durable design.
 
 ## Review checklist
 
@@ -249,10 +255,25 @@ Before implementation starts, reviewers should be able to answer yes to all of t
 - Does the IS likelihood use a named evidence denominator and the matching subject/path completeness object?
 - Are all carrier construction sites migrated together?
 - Has a fresh call-site inventory verified the three named carrier sites are still complete?
-- Is full carrier evidence-conditioning explicitly out of scope for this implementation plan?
-- Is empirical carrier evidence-conditioning prevented from sneaking into Phase 1?
+- Is transition-primitive conditioning explicitly out of scope for this implementation plan?
+- Is empirical carrier replacement prevented from sneaking into Phase 1?
+- Is the Stage 2 primitive written as a composer of supplied transition primitives rather than as a prior-only edge-field reader?
 - Are 73l projection failures explicitly out of scope?
 - Are the carrier horizon thresholds numeric and enforced?
 - Is simple non-latency closed-form equivalence protected before the router is retired?
 - Are stop conditions strong enough to prevent a later stage from hiding an earlier semantic failure?
+
+## Implementation progress
+
+<!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
+
+- [x] Stage 0 — Confirmation and test classification — completed 30-Apr-26
+- [x] Stage 1 — Carrier object contract tests — completed 30-Apr-26
+- [x] Stage 2 — Shared carrier composition primitive — completed 30-Apr-26
+- [x] Stage 3 — Migrate all carrier construction sites together — completed 30-Apr-26
+- [x] Stage 4 — Subject-span CDF ownership — completed 30-Apr-26
+- [x] Stage 5 — Retire the v3 latency/non-latency router — completed 1-May-26
+- [x] Stage 6 — Projection and field audit — completed 1-May-26
+- [x] Stage 7 — Integration acceptance — completed 1-May-26
+- [x] Stage 8 — Phase 2 handoff — completed 1-May-26
 

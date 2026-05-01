@@ -77,13 +77,15 @@ export interface ChartFloatingIconProps {
   canvasZoom?: number;
   /** Initial anchor position. Defaults to 'top-right'. Use 'top' for always-visible pinned toolbar. */
   defaultAnchor?: Anchor;
+  /** Optional debug label so we can identify which chart instance this toolbar belongs to in logs. */
+  debugLabel?: string;
 }
 
 // Minimum screen-pixel width for the chart container before the toolbar is shown.
 // Below this the toolbar would dominate or overflow the visible chart area.
 const MIN_SCREEN_PX_FOR_TOOLBAR = 100;
 
-export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAnchor = 'top-right' }: ChartFloatingIconProps) {
+export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAnchor = 'top-right', debugLabel }: ChartFloatingIconProps) {
   const [anchor, setAnchor] = useState<Anchor>(defaultAnchor);
   const [drag, setDrag] = useState<{ x: number; y: number; snap: Anchor } | null>(null);
   const [hovered, setHovered] = useState(false);
@@ -104,13 +106,23 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAncho
 
   useLayoutEffect(() => {
     const el = containerRef.current;
+    if (debugLabel) {
+      console.log('[ToolbarDiag] ChartFloatingIcon useLayoutEffect', {
+        debugLabel,
+        elPresent: !!el,
+        elTag: el?.tagName,
+        elClass: el?.className,
+        offsetWidth: el?.offsetWidth,
+        offsetHeight: el?.offsetHeight,
+      });
+    }
     if (!el) return;
     const sync = () => setBox({ w: el.offsetWidth, h: el.offsetHeight });
     sync();
     const ro = new ResizeObserver(sync);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [containerRef]);
+  }, [containerRef, debugLabel]);
 
   const block = useCallback((e: React.SyntheticEvent) => { e.stopPropagation(); }, []);
 
@@ -201,7 +213,24 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAncho
   // Suppress toolbar when the chart is too small on screen (zoom × size).
   if (canvasZoom !== undefined) {
     const screenW = box.w * canvasZoom;
+    if (debugLabel) {
+      console.log('[ToolbarDiag] ChartFloatingIcon size-gate', {
+        debugLabel,
+        boxW: box.w,
+        boxH: box.h,
+        canvasZoom,
+        screenW,
+        threshold: MIN_SCREEN_PX_FOR_TOOLBAR,
+        suppressed: screenW < MIN_SCREEN_PX_FOR_TOOLBAR,
+      });
+    }
     if (screenW < MIN_SCREEN_PX_FOR_TOOLBAR) return null;
+  } else if (debugLabel) {
+    console.log('[ToolbarDiag] ChartFloatingIcon size-gate (canvasZoom=undef, no suppress)', {
+      debugLabel,
+      boxW: box.w,
+      boxH: box.h,
+    });
   }
 
   const zoomDiv = invScale ?? 1;

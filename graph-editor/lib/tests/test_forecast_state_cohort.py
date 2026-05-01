@@ -82,15 +82,17 @@ def _phase1_expected_carrier_mode(
 ) -> str:
     """Disposable Phase-1 oracle for carrier identity classification.
 
-    This deliberately tiny oracle exists to drive doc 66's witness tests.
-    It answers only the Phase-1 question: should `carrier_to_x` be the
-    identity, or a real upstream carrier?
+    Updated for 73m Stage 3: non-latent upstream chains are now active
+    carriers (with a Dirac-at-zero timing object) rather than collapsing
+    to identity. The only identity cases are window mode and A = X.
+    The ``upstream_segment_is_latent`` argument is retained for caller
+    legibility but no longer gates the answer.
     """
     if mode == 'window':
         return 'identity'
     if not anchor_node_id or anchor_node_id == query_from_node:
         return 'identity'
-    return 'upstream' if upstream_segment_is_latent else 'identity'
+    return 'upstream'
 
 
 def _node_id_map(graph):
@@ -672,8 +674,15 @@ class TestPreparedRuntimeBundle:
     @requires_db
     @requires_data_repo
     @requires_synth("synth-mirror-4step", enriched=True)
-    def test_phase1_non_latent_upstream_collapses_to_identity(self):
-        """Phase 1 witness: semantically instant upstream must collapse."""
+    def test_phase1_non_latent_upstream_produces_active_dirac_carrier(self):
+        """Stage 3 (73m): semantically instant upstream now produces an
+        ACTIVE carrier with a Dirac-at-zero timing object, not an
+        identity collapse. Pre-Stage-3 the gate required upstream
+        latency for an active carrier; post-Stage-3 the gate is
+        ``reach > 0 and A != X`` independent of latency, so the
+        non-latent A → X chain composes a Dirac carrier rather than
+        falling back to ``window`` semantics on the denominator.
+        """
         _, diag, x_provider = _build_phase1_runtime_bundle_for_graph(
             graph_name='synth-mirror-4step',
             mode='cohort',
@@ -684,8 +693,18 @@ class TestPreparedRuntimeBundle:
 
         assert x_provider is not None
         assert x_provider.reach > 0
-        assert x_provider.enabled is False
-        assert x_provider.upstream_params_list == []
+        assert x_provider.enabled is True
+        # The legacy upstream_params_list is built from edges immediately
+        # incoming to X via read_edge_cohort_params, which still rejects
+        # σ ≤ 0 — so for an all-non-latent chain this remains empty.
+        # The new carrier_to_x field carries the canonical composition.
+        assert x_provider.carrier_to_x is not None
+        assert x_provider.carrier_to_x.is_active
+        assert x_provider.carrier_to_x.diagnostics.has_latency_edge is False
+        # Dirac-at-zero: every τ has full conditional mass.
+        det_cdf = x_provider.carrier_to_x.deterministic_cdf
+        assert det_cdf is not None
+        assert float(det_cdf[0]) == pytest.approx(1.0, abs=1e-9)
         assert diag['population_root'] == 'm4-landing'
         assert diag['carrier_to_x']['mode'] == _phase1_expected_carrier_mode(
             mode='cohort',
@@ -693,7 +712,6 @@ class TestPreparedRuntimeBundle:
             query_from_node='m4-delegated',
             upstream_segment_is_latent=False,
         )
-        assert diag['carrier_to_x']['has_x_provider'] is False
 
     @requires_db
     @requires_data_repo

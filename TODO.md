@@ -6,7 +6,16 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
 
 **Forecasting machinery**
 - **B.** Compliance test tracker — [73f](docs/current/project-bayes/73f-outside-in-cohort-engine-investigation.md)
-  - **Bi.** Problems with non-latency edges — [73h](docs/current/project-bayes/73h-v3-router-and-carrier-conditioning-forensic.md) — **needs development & review**
+  - **Bi.** Problems with non-latency edges — Phase 1 closed by [73m](docs/current/project-bayes/73m-carrier-composition-and-router-unification-implementation-plan.md) (router unification + carrier composition, all 9 stages complete 1-May-26). Phase 2 (carrier evidence-conditioning, 73h Issue 2 surface 2) **open and owned by [73n](docs/current/project-bayes/73n-carrier-evidence-conditioning-implementation-plan.md)**. Stage record + AP58 finding + held-over tests: [73m-stage-0-baseline.md §§9-12](docs/current/project-bayes/73m-stage-0-baseline.md). 73n acceptance criteria below.
+    - **73n flip-to-green strict-xfails** (in `graph-editor/lib/tests/test_cohort_factorised_outside_in.py`, all carry precise `reason=` naming the AP58 fork in `build_cohort_evidence_from_frames` and 73n's primitive registry as the fix path; `strict=True` so XPASS surfaces as suite failure prompting marker removal):
+      1. `test_degenerate_identity_and_instant_carrier_oracles_reduce_to_subject_kernel` — instant-carrier τ=0 zero
+      2. `test_multihop_non_latent_upstream_collapse` — window vs cohort rate divergence at small τ
+      3. `test_single_hop_non_latent_upstream_collapses_to_window[from(synth-fo-gate).to(synth-fo-fast)]`
+      4. `test_single_hop_non_latent_upstream_collapses_to_window[from(synth-fo-gate).to(synth-fo-slow)]`
+    - **`_non_latency_rows` deletion** tagged for 73n's primitive-registry stage. Currently survives as the dev-only oracle for `test_subject_span_cdf_ownership.py::TestNonLatencyClosedFormEquivalence`. When 73n removes the AP58 fork, the four xfails flip green and `_non_latency_rows` + `test_non_latency_rows.py` should be deleted alongside.
+    - **Held-over Phase 1 observations** (NOT 73n acceptance criteria, separate workstreams):
+      - `test_v3_midline_at_saturation_converges_to_p` — Stage 1B observed side effect, not committed to closing in 73m. Investigation lives in [`cohort-maturity-v3-midline-collapse-investigation.md`](docs/current/project-bayes/cohort-maturity-v3-midline-collapse-investigation.md). Numerics: midpoint=0.5766, p_infinity_mean=0.6788, Δ=0.1022, tol=0.05.
+      - Two outside-in flakes pass in isolation but exhibit serial-state effects when run after other tests in the same pytest session: `test_cli_identity_collapse...`, `test_cli_projection_parity...`. Partly addressable by 73n's request-scoped primitive registry; full diagnosis is its own ticket.
 - **C.** Refresh may not trigger CF pass for all scenarios — no doc yet — **investigate**
 - **D.** Once FE vars flows tested, test Bayes vars flows properly — [modelvars audit 30-Apr-26](docs/current/modelvars-flow-forensic-audit-30-Apr-26.md) — **pending FE flow validation**
 - RETIRE v1, v2 cohortmaturity ++ all associated files

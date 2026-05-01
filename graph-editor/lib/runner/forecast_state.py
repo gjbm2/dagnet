@@ -385,45 +385,28 @@ def build_node_arrival_cache(
     max_tau: int = 400,
     num_draws: int = _COHORT_MC_DRAWS,
 ) -> Dict[str, NodeArrivalState]:
-    """Build per-node arrival cache by walking the graph in topo order.
+    """Build per-node arrival cache.
 
-    At each node, calls the v2 carrier hierarchy (Tier 1/2/3) to
-    compute the arrival CDF from upstream edges. The cache is keyed
-    by node UUID.
+    Stage 3 (73m): each non-anchor node's carrier comes from a single
+    call to ``compose_carrier_to_x(anchor_id → node_id)`` so the cached
+    CDF reflects the full A → node convolution rather than just the
+    immediate-incoming edges. The anchor itself remains a Dirac
+    delta-at-zero with reach 1.0.
 
-    The anchor node gets a delta arrival (instant, reach=1.0).
-    Each downstream node accumulates from its incoming edges.
-
-    This is the per-node cache described in doc 29 §3.1.
+    Cache keys are graph node identifiers (uuid where present; id
+    otherwise) — preserved from the prior implementation so existing
+    consumers (whole-graph CF, scoped CF, surprise-gauge per-node
+    arrival lookups) keep working.
     """
-    from .forecast_runtime import build_upstream_carrier, read_edge_cohort_params
+    from .carrier_composition import compose_carrier_to_x
 
     nodes = graph.get('nodes', [])
-    edges = graph.get('edges', [])
 
-    # Build adjacency
-    incoming: Dict[str, List[Dict]] = {}
-    for e in edges:
-        to_id = e.get('to', '')
-        if to_id not in incoming:
-            incoming[to_id] = []
-        incoming[to_id].append(e)
+    rng = np.random.default_rng(seed=42)
 
-    # Find all node IDs
-    node_ids = [n.get('uuid') or n.get('id', '') for n in nodes]
-
-    # Topo sort (Kahn's)
-    in_degree: Dict[str, int] = {nid: 0 for nid in node_ids}
-    for e in edges:
-        to_id = e.get('to', '')
-        in_degree[to_id] = in_degree.get(to_id, 0) + 1
-
-    queue = sorted([nid for nid in node_ids if in_degree.get(nid, 0) == 0])
-    if anchor_id and anchor_id not in queue:
-        queue.append(anchor_id)
-
-    # Anchor arrival: instant (delta), reach=1.0
-    # Deterministic CDF = [1.0, 1.0, ...] (everyone arrives at anchor instantly)
+    # Anchor arrival: instant (delta), reach=1.0.
+    # Deterministic CDF = [1.0, 1.0, ...] (everyone arrives at the anchor
+    # instantly by construction).
     anchor_cdf = [1.0] * (max_tau + 1)
     cache: Dict[str, NodeArrivalState] = {
         anchor_id: NodeArrivalState(
@@ -434,65 +417,42 @@ def build_node_arrival_cache(
         ),
     }
 
-    # Track reach per node
-    node_reach: Dict[str, float] = {anchor_id: 1.0}
-
-    rng = np.random.default_rng(seed=42)
-
-    visited = set()
-    while queue:
-        node_id = queue.pop(0)
-        if node_id in visited:
+    for node in nodes:
+        node_id = node.get('uuid') or node.get('id', '')
+        if not node_id or node_id == anchor_id:
             continue
-        visited.add(node_id)
 
-        # For non-anchor nodes: build carrier from incoming edges
-        if node_id != anchor_id and node_id in incoming:
-            inc_edges = incoming[node_id]
-            # Collect upstream params from incoming edges
-            upstream_params = []
-            for ie in inc_edges:
-                params = read_edge_cohort_params(ie)
-                if params:
-                    upstream_params.append(params)
+        carrier = compose_carrier_to_x(
+            graph=graph,
+            anchor_node_id=anchor_id,
+            denominator_node_id=node_id,
+            is_window=False,
+            max_tau=max_tau,
+            num_draws=num_draws,
+            rng=rng,
+        )
 
-            # Compute reach: sum of (upstream_reach × edge_p)
-            reach = 0.0
-            for ie in inc_edges:
-                from_id = ie.get('from', '')
-                edge_p = _resolve_edge_p(ie)
-                reach += node_reach.get(from_id, 0.0) * max(0, edge_p)
-            node_reach[node_id] = reach
-
-            if upstream_params and reach > 0:
-                det_cdf, mc_cdf, tier = build_upstream_carrier(
-                    upstream_params_list=upstream_params,
-                    upstream_obs=None,  # No per-cohort evidence at graph level
-                    cohort_list=[],     # No cohort list at graph level
-                    reach=reach,
-                    is_window=False,    # Cohort mode
-                    max_tau=max_tau,
-                    num_draws=num_draws,
-                    rng=rng,
-                )
-                cache[node_id] = NodeArrivalState(
-                    deterministic_cdf=det_cdf,
-                    mc_cdf=mc_cdf,
-                    reach=reach,
-                    tier=tier,
-                )
-            else:
-                cache[node_id] = NodeArrivalState(reach=reach, tier='none')
-        elif node_id != anchor_id:
-            cache[node_id] = NodeArrivalState(reach=0.0, tier='none')
-
-        # Advance topo sort
-        for e in edges:
-            if e.get('from', '') == node_id:
-                to_id = e.get('to', '')
-                in_degree[to_id] = in_degree.get(to_id, 0) - 1
-                if in_degree[to_id] <= 0 and to_id not in visited:
-                    queue.append(to_id)
+        if carrier.is_active:
+            det_cdf = (
+                carrier.deterministic_cdf.tolist()
+                if carrier.deterministic_cdf is not None
+                else None
+            )
+            mc_cdf = carrier.mc_cdf
+            cache[node_id] = NodeArrivalState(
+                deterministic_cdf=det_cdf,
+                mc_cdf=mc_cdf,
+                reach=carrier.reach,
+                tier=carrier.diagnostics.tier,
+            )
+        else:
+            # Identity / no-path / horizon-inadequate — surface tier so
+            # downstream consumers can distinguish "no upstream" from
+            # "horizon too small to compose safely".
+            cache[node_id] = NodeArrivalState(
+                reach=carrier.reach if carrier.is_identity else 0.0,
+                tier=carrier.diagnostics.tier,
+            )
 
     return cache
 
@@ -617,6 +577,68 @@ class ForecastTrajectory:
     blend_applied: bool = False
     blend_skip_reason: Optional[str] = None
     runtime_bundle_diag: Optional[Dict[str, Any]] = None
+    # Stage 4 (73m §"Stage 4") subject-span CDF ownership diagnostics.
+    # subject_span_source: which object supplied the per-draw CDF used by the
+    # sweep — 'prepared_mc' (mc_cdf_arr from the prepared subject-span draw
+    # matrix), 'prepared_det' (det_norm_cdf without per-draw variation), or
+    # 'edge_level' (recomputed from terminal-edge mu/sigma/onset).
+    # subject_probability_source: which object supplied the per-draw subject
+    # probability — 'span_level' (mc_p_s, the span-level p_XE) or
+    # 'edge_level' (drawn from resolved.alpha_pred/beta_pred).
+    # is_completeness_source: which object the IS-likelihood completeness
+    # actually consumed for binomial weighting — 'prepared_cdf_arr' or
+    # 'edge_level_recompute'. Equals subject_span_source for window/A=X;
+    # named separately because Phase 2 (73n) introduces a path_completeness
+    # object derived from carrier_to_x ⊗ subject_span that this slot will
+    # then label.
+    # evidence_denominator: which evidence-trial-count denominator the IS
+    # likelihood is interpreting — 'x_at_x' (denominator-at-X mass) or
+    # 'a_at_anchor' (anchor-population mass). Phase 1 always reports
+    # 'x_at_x'; Phase 2 (73n) is the surface that may flip this for active
+    # cohort(A!=X) evidence.
+    subject_span_source: Optional[str] = None
+    subject_probability_source: Optional[str] = None
+    is_completeness_source: Optional[str] = None
+    evidence_denominator: Optional[str] = None
+    # 73m §"Stage 6" projection-and-field-audit diagnostics. Stage 4 owns
+    # the subject-side / evidence-denominator labels above; Stage 6 adds the
+    # carrier-side / path-completeness / router-bypass parallels so the
+    # four 73h F14 forensic-trace questions can be answered from the
+    # trajectory return alone (without re-walking the runtime bundle).
+    #
+    # carrier_reach: scalar reach probability from anchor to X for the
+    # active carrier. None when no carrier object is constructed
+    # (window/A=X cases short-circuit to identity before composition).
+    # Pulled from PreparedCarrierToX.reach.
+    #
+    # carrier_cdf_source: provenance label for the carrier's conditional
+    # CDF — 'composed' (compose_carrier_to_x via composed transition
+    # primitives), 'identity' (no carrier; reach=1 trivial Dirac for
+    # window/A=X), 'horizon_inadequate' (composed but failed
+    # near-saturation contract), 'no_path' (anchor and X disconnected),
+    # 'empirical_tier_<tier>' (Phase-1-forbidden empirical-tier fallback,
+    # surfaces a 73m §"Stage 3" regression if it ever appears), None when
+    # no carrier object is constructed. 73n introduces
+    # posterior-conditioned transition primitives, which keep this label
+    # as 'composed'.
+    #
+    # path_completeness_source: which object supplied the joint A→end
+    # completeness consumed by the IS likelihood. Phase 1 reports
+    # 'subject_span_only' uniformly — there is no joint path-completeness
+    # object yet, so completeness on the X clock is the subject-span CDF.
+    # 73n introduces a joint object derived from carrier_to_x ⊗
+    # subject_span for active cohort(A!=X) evidence; the label will then
+    # expand to 'subject_span_only' | 'composed_path_completeness'.
+    #
+    # legacy_non_latency_router_bypassed: True post-73m Stage 5 — the v3
+    # latency/non-latency router fork was retired and all cohort_maturity
+    # v3 rows now flow through the trajectory engine. The diagnostic
+    # surfaces this so a forensic trace can assert "no closed-form
+    # shortcut was taken" without inspecting code paths.
+    carrier_reach: Optional[float] = None
+    carrier_cdf_source: Optional[str] = None
+    path_completeness_source: Optional[str] = None
+    legacy_non_latency_router_bypassed: bool = False
 
 
 # Default draw count for the sweep — same as v2's MC_SAMPLES.
@@ -629,6 +651,39 @@ _SWEEP_DRIFT_FRACTION = 0.20
 # existing seed=42 streams used for MC/IS so the permutation is
 # reproducible without perturbing anything else.
 _BLEND_SEED = 43
+
+
+def _stage_6_carrier_diagnostics(
+    runtime_bundle: Optional[PreparedForecastRuntimeBundle],
+) -> Tuple[Optional[float], Optional[str], str]:
+    """73m §"Stage 6" carrier-side diagnostic extraction.
+
+    Returns ``(carrier_reach, carrier_cdf_source, path_completeness_source)``
+    for the trajectory return. The labels follow the dataclass docstring on
+    ``ForecastTrajectory.carrier_*`` / ``path_completeness_source``.
+
+    Phase 1 always reports ``path_completeness_source='subject_span_only'``;
+    73n will expand to ``'subject_span_only' | 'composed_path_completeness'``
+    once the joint A→end completeness object lands.
+    """
+    if runtime_bundle is None or runtime_bundle.carrier_to_x is None:
+        return None, None, 'subject_span_only'
+    cx = runtime_bundle.carrier_to_x
+    if cx.mode == 'identity':
+        return cx.reach if cx.reach else None, 'identity', 'subject_span_only'
+    cdf_source: Optional[str] = None
+    xp = cx.x_provider
+    composed = getattr(xp, 'carrier_to_x', None) if xp is not None else None
+    if composed is not None:
+        diag = getattr(composed, 'diagnostics', None)
+        tier = str(getattr(diag, 'tier', '') or '')
+        cdf_source = tier or None
+    elif cx.from_node_arrival is not None:
+        emp_tier = str(getattr(cx.from_node_arrival, 'tier', '') or '')
+        cdf_source = f'empirical_tier_{emp_tier}' if emp_tier else 'empirical_unknown'
+    if cdf_source is None:
+        cdf_source = 'unresolved'
+    return cx.reach, cdf_source, 'subject_span_only'
 
 
 def _compute_blend_params(
@@ -995,9 +1050,32 @@ def compute_forecast_trajectory(
         print(_mc_msg)
         import sys; sys.stderr.write(_mc_msg + '\n')
 
-    if lat.sigma <= 0:
+    # 73m Stage 4: when the prepared runtime has composed a subject-span CDF
+    # (per-draw `mc_cdf_arr` or deterministic `det_norm_cdf`), the
+    # trajectory engine must consume that object — even when the resolved
+    # terminal-edge `lat.sigma` is zero (multi-hop spans whose terminal
+    # edge is non-latency, the upcoming Stage 5 router retirement). The
+    # legacy early return here was the 73h "computed and discarded"
+    # pattern: it dropped the prepared subject-span object whenever the
+    # terminal edge happened to lack latency. Only fall back to the empty
+    # trajectory when no prepared subject-span CDF is available.
+    if lat.sigma <= 0 and mc_cdf_arr is None and det_norm_cdf is None:
         empty = np.zeros((S, T))
-        return ForecastTrajectory(rate_draws=empty, model_rate_draws=empty)
+        _carrier_reach, _carrier_cdf_source, _path_completeness_source = (
+            _stage_6_carrier_diagnostics(runtime_bundle)
+        )
+        return ForecastTrajectory(
+            rate_draws=empty,
+            model_rate_draws=empty,
+            subject_span_source='edge_level',
+            subject_probability_source='edge_level',
+            is_completeness_source=None,
+            evidence_denominator='x_at_x',
+            carrier_reach=_carrier_reach,
+            carrier_cdf_source=_carrier_cdf_source,
+            path_completeness_source=_path_completeness_source,
+            legacy_non_latency_router_bypassed=True,
+        )
 
     # ── Draw from posterior ───────────────────────────────────────
     # Draw all params in one interleaved call, matching v2's mc_span_cdfs
@@ -1165,15 +1243,18 @@ def compute_forecast_trajectory(
     if _evidence:
         _IS_TARGET_ESS = 20.0
         log_lik = np.zeros(S)
+        # 73m Stage 4: per-draw IS likelihood completeness must come from the
+        # prepared subject-span draw matrix `cdf_arr`. In the no-`mc_cdf_arr`
+        # branch this is a no-op equivalence (cdf_arr was built from the same
+        # mu/sigma/onset draws). In the prepared-mc branch it is the actual
+        # fix: mu/sigma/onset draws there are constants (means), so the
+        # previous _compute_completeness_at_age recompute returned a constant
+        # per draw and silently discarded the per-draw span-level variation
+        # that mc_cdf_arr carries. Recomputing was the 73h "computed and
+        # discarded" pattern this plan §"Stage 4" forbids.
         for tau_i, n_i, k_i in _evidence:
-            c_i = np.zeros(S)
-            for s in range(S):
-                c_i[s] = _compute_completeness_at_age(
-                    float(tau_i),
-                    float(mu_draws[s]),
-                    float(sigma_draws[s]),
-                    float(onset_draws[s]),
-                )
+            _t_idx = min(int(tau_i), T - 1)
+            c_i = np.asarray(cdf_arr[:S, _t_idx], dtype=np.float64)
             cohort_log_w = _cohort_binomial_log_likelihood(p_draws, c_i, n_i, k_i)
             log_lik += cohort_log_w
             n_cohorts_conditioned += 1
@@ -1669,6 +1750,25 @@ def compute_forecast_trajectory(
     except Exception:
         pass
 
+    # 73m Stage 4: subject-span CDF ownership diagnostics. These label the
+    # objects the trajectory engine actually consumed for subject-side
+    # progression, subject probability, and IS likelihood completeness, so
+    # the test surfaces and forensic dumps can prove the prepared object
+    # was honoured rather than silently re-derived from terminal-edge
+    # parameters.
+    if mc_cdf_arr is not None:
+        _subject_span_source = 'prepared_mc'
+    elif det_norm_cdf is not None:
+        _subject_span_source = 'prepared_det'
+    else:
+        _subject_span_source = 'edge_level'
+    _subject_probability_source = 'span_level' if mc_p_s is not None else 'edge_level'
+    _is_completeness_source = 'prepared_cdf_arr'
+    _evidence_denominator = 'x_at_x'
+    _carrier_reach, _carrier_cdf_source, _path_completeness_source = (
+        _stage_6_carrier_diagnostics(runtime_bundle)
+    )
+
     return ForecastTrajectory(
         rate_draws=rate_draws_out,
         model_rate_draws=rate_model,
@@ -1694,4 +1794,12 @@ def compute_forecast_trajectory(
         blend_applied=bool(blend_info.get('applied')),
         blend_skip_reason=blend_info.get('skip_reason'),
         runtime_bundle_diag=serialise_runtime_bundle(runtime_bundle),
+        subject_span_source=_subject_span_source,
+        subject_probability_source=_subject_probability_source,
+        is_completeness_source=_is_completeness_source,
+        evidence_denominator=_evidence_denominator,
+        carrier_reach=_carrier_reach,
+        carrier_cdf_source=_carrier_cdf_source,
+        path_completeness_source=_path_completeness_source,
+        legacy_non_latency_router_bypassed=True,
     )

@@ -122,14 +122,15 @@ Both are inner kernels. **Analysis runners must not import them directly** — u
 |---|---|---|
 | `cohort_forecast.py` (1,638) | dev-only | Original cohort maturity row builder. Retained for back-comparison. |
 | `cohort_forecast_v2.py` (1,210) | dev-only | Intermediate. Closer to v3 but predates the closed-form non-latency path. |
-| `cohort_forecast_v3.py` (1,708) | **current** | Production row builder. Branches on `latency.latency_parameter` to either the closed-form Beta surface (`_non_latency_rows`) or the MC sweep via `compute_cohort_maturity_rows_v3`. |
+| `cohort_forecast_v3.py` (1,708) | **current** | Production row builder. Post-73m Stage 5 (1-May-26) all cohort_maturity v3 rows flow through the trajectory engine via `compute_cohort_maturity_rows_v3` → `compute_forecast_trajectory` per cohort. Structurally non-latency edges are natural degeneracies of the same span-kernel objects (σ=0 → Dirac-at-zero timing object), not a separate row path. |
 
 The `cohort_maturity` analysis type now routes to v3. v1/v2 are gated `devOnly: true` in `analysis_types.yaml`.
 
-**Routing inside v3** (anti-pattern 50 alarm):
-- Routing branch keys on `target_edge.p.latency.latency_parameter is True`, **not** on `sigma > 0` or any fitted scalar
-- Closed-form path (`_non_latency_rows`) handles non-latency edges with conjugate Beta posteriors. Post 73b Stage 6 (28-Apr-26) the conjugate update fires uniformly across all sources; the previously-discriminated "direct read" shortcut for analytic source has been retired
-- MC sweep path handles latency edges; reads frame-level evidence via `build_cohort_evidence_from_frames` and runs `compute_forecast_trajectory` per cohort
+**Unified row path inside v3** (post-73m Stage 5):
+
+- The legacy latency/non-latency router fork at `cohort_forecast_v3.py:1071-1110` was retired by 73m Stage 5. The fork keyed on `target_edge.p.latency.latency_parameter` and dispatched non-latency targets to a parallel closed-form Beta-Binomial row builder (`_non_latency_rows`). Per AP58 the fork was a copy of the resolution chain that drifted: it ignored the prepared subject-span object even when the composed span had upstream latency (the 73h "computed and discarded" surface). Stage 4 narrowed the σ≤0 early return in `forecast_state.py:992` so a prepared subject-span CDF is honoured even when the terminal edge has `sigma=0`; Stage 5 then deleted the router and let the trajectory path absorb the σ=0 limit naturally.
+- `_non_latency_rows` survives only as the dev-only oracle for the closed-form-equivalence test in `test_subject_span_cdf_ownership.py::TestNonLatencyClosedFormEquivalence`. Deletion is tagged for 73n's primitive-registry stage.
+- The trajectory engine reads frame-level evidence via `build_cohort_evidence_from_frames`. **Open AP58 caveat**: that function still contains a fork on the count axis (`is_window`-gated population fallback at `cohort_forecast_v3.py:750-769` running in parallel with the specialised carrier-projection rebuild at `:775-803`), surfaced by 73m Stage 5 unification and pinned by four strict-xfailed tests. Resolution belongs to 73n; see KNOWN_ANTI_PATTERNS AP58 "Outstanding instance" note and `73m-stage-0-baseline.md §§9-12`.
 
 ## 5. The span-kernel sub-cluster (multi-hop cohort maturity)
 
@@ -177,9 +178,10 @@ These are pure transforms — no DB queries, no MCMC. Their inputs come from the
 When working in this cluster:
 
 - **New analysis runner** → start in `analysis_types.yaml`, then `runners.py`, then update FE registry per [adding-analysis-types.md](adding-analysis-types.md). Do not invent a new forecast path — use `handle_conditioned_forecast` for forecast-backed analyses.
-- **New forecast-engine field** → add to `ForecastSummary` / `CohortForecastAtEval` / `ForecastTrajectory` in `forecast_state.py`, then through `compute_forecast_summary`/`_trajectory`, then expose via `handle_conditioned_forecast` in `api_handlers.py`. See anti-pattern 14 for how to avoid silent drops in `_build_unified_slices`.
+- **New forecast-engine field** → add to `ForecastSummary` / `CohortForecastAtEval` / `ForecastTrajectory` in `forecast_state.py`, then through `compute_forecast_summary`/`_trajectory`, then expose via `handle_conditioned_forecast` in `api_handlers.py`. See anti-pattern 14 for how to avoid silent drops in `_build_unified_slices`. Post-73m Stage 6, `ForecastTrajectory` carries diagnostic fields naming the source of each load-bearing object: `subject_span_source`, `subject_probability_source`, `is_completeness_source`, `evidence_denominator` (Stage 4); `carrier_reach`, `carrier_cdf_source`, `path_completeness_source`, `legacy_non_latency_router_bypassed` (Stage 6); plus `runtime_bundle_diag` carrying the full carrier provenance (`cdf_source`, `horizon_ratio`, `transition_source`, …). 73n is expected to expand the existing enums for active cohort(A!=X) — `is_completeness_source` to `'prepared_cdf_arr' | 'path_completeness'`, `path_completeness_source` to `'subject_span_only' | 'composed_path_completeness'`, `evidence_denominator` to `'x_at_x' | 'a_at_anchor'`.
 - **Touching the rate-conditioning seam** → read STATS_SUBSYSTEMS §3.3 first. The seam lives in `forecast_runtime.py:build_prepared_runtime_bundle`; current behaviour is intentionally narrow (WP8 lands `direct_cohort_enabled` for exact single-hop `cohort(A,X-Y)` only).
-- **Touching v3 row routing** → use `latency.latency_parameter`, not `sigma`. Anti-pattern 50.
+- **Touching v3 row construction** → there is no router fork to choose; all cohort_maturity v3 rows flow through `compute_forecast_trajectory` post-73m Stage 5. If a future stage adds a route, surface the bypass on `runtime_bundle_diag.legacy_non_latency_router_bypassed` (currently always `True`) so forensic traces can detect it without code inspection.
+- **Touching `build_cohort_evidence_from_frames`** → known AP58 instance on the count axis (the `is_window`-gated fallback at `:750-769` vs the carrier-projection rebuild at `:775-803`). 73n owns the fix via its primitive registry + composition / projection passes. Do NOT smuggle a partial fix into other stages; the four strict-xfailed tests in `test_cohort_factorised_outside_in.py` are the regression net for when 73n lands. See KNOWN_ANTI_PATTERNS AP58.
 - **Adding a derivation** → keep it pure; consume engine output, don't fetch directly. Snapshot DB queries belong in `api_handlers.py` (which then calls the derivation).
 
 ## 10. Pitfalls

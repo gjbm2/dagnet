@@ -702,6 +702,14 @@ export function AnalysisChartContainer(props: {
   }, [defaultContext, props.analysisTypeId, props.onAnalysisTypeChange, props.availableAnalyses, availableChartKinds, kind, handleChartKindChange, effectiveKind, effectiveDisplay, handleDisplayChange, props.scenarioLayerItems, props.onScenarioToggleVisibility, result, props.onOpenAsTab, props.onDumpDebug]);
 
   if (showInlineAnalysisTypePicker) {
+    if (finalResult?.analysis_type === 'daily_conversions') {
+      console.log('[ToolbarDiag] AnalysisChartContainer EARLY RETURN: showInlineAnalysisTypePicker', {
+        analysisId: props.analysisId,
+        analysisTypeId: props.analysisTypeId,
+        defaultContext,
+        hasOnAnalysisTypeChange: !!props.onAnalysisTypeChange,
+      });
+    }
     return (
       <div
         style={{
@@ -728,11 +736,34 @@ export function AnalysisChartContainer(props: {
   }
 
   if (!effectiveKind) {
+    if (finalResult?.analysis_type === 'daily_conversions') {
+      console.log('[ToolbarDiag] AnalysisChartContainer EARLY RETURN: !effectiveKind', {
+        analysisId: props.analysisId,
+        analysisType: finalResult?.analysis_type,
+        kind,
+        normalisedOverride,
+        availableChartKinds,
+        displayPlanEffective: displayPlan?.effectiveChartKind,
+      });
+    }
     return (
       <div style={{ padding: 12, color: 'var(--text-secondary)' }}>
         No chart available for this analysis.
       </div>
     );
+  }
+
+  if (finalResult?.analysis_type === 'daily_conversions') {
+    console.log('[ToolbarDiag] AnalysisChartContainer reached toolbar render', {
+      analysisId: props.analysisId,
+      effectiveKind,
+      hideChrome,
+      defaultContext,
+      hasToolbarTray: true,
+      chartWidthPx,
+      chartHeightPx,
+      canvasZoom: props.canvasZoom,
+    });
   }
 
   const wideToolbar = chartWidthPx > 480;
@@ -797,6 +828,7 @@ export function AnalysisChartContainer(props: {
             tray={toolbarTray}
             canvasZoom={props.canvasZoom}
             defaultAnchor={defaultContext === 'tab' ? 'top' : 'top-right'}
+            debugLabel={finalResult?.analysis_type === 'daily_conversions' ? `dc:${props.analysisId ?? 'unknown'}` : undefined}
           />
         )}
         <div

@@ -1500,6 +1500,18 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
             || (hookResultMatchesTab ? result : null)
             || (containerCacheMatchesTab ? containerCachedResult : null)
             || null;
+          if (ci.analysis_type === 'daily_conversions') {
+            console.log('[ToolbarDiag] CanvasAnalysisNode renderContent (daily_conversions)', {
+              analysisId: analysis.id,
+              ciId: ci.id,
+              view_type: ci.view_type,
+              hasCiResult: !!ciResult,
+              hasAnalysisType,
+              awaitingScenariosHydration,
+              willRenderCards: ci.view_type === 'cards' && !!ciResult && !awaitingScenariosHydration,
+              willRenderChartContainer: ci.view_type === 'chart' && (!!ciResult || !hasAnalysisType) && !awaitingScenariosHydration,
+            });
+          }
           return (
           <>
             {ci.view_type === 'cards' && ciResult && !(awaitingScenariosHydration) && (() => {

@@ -455,17 +455,62 @@ def serialise_runtime_bundle(
             return [len(value)]
         return None
 
+    # 73m §"Stage 6": expose the carrier-CDF provenance and horizon
+    # diagnostics from the composed CarrierToX object (when present) so a
+    # forensic trace can answer the four 73h F14 questions directly from
+    # the runtime-bundle diag block. The composed object lives on
+    # ``XProvider.carrier_to_x`` (carrier_composition.compose_carrier_to_x
+    # output); when ``mode == 'identity'`` no composed object exists and
+    # the diag block reports ``cdf_source='identity'`` with reach=1.
+    cx = bundle.carrier_to_x
+    composed = (
+        getattr(cx.x_provider, 'carrier_to_x', None) if cx.x_provider is not None else None
+    )
+    cdf_source: Optional[str] = None
+    horizon_diag: Optional[Dict[str, Any]] = None
+    if cx.mode == 'identity':
+        cdf_source = 'identity'
+    elif composed is not None and getattr(composed, 'diagnostics', None) is not None:
+        diag = composed.diagnostics
+        cdf_source = str(getattr(diag, 'tier', '') or '') or None
+        horizon_diag = {
+            'tier': cdf_source,
+            'horizon_ratio': round(float(getattr(diag, 'horizon_ratio', 0.0) or 0.0), 6),
+            'horizon_status': str(getattr(diag, 'horizon_status', '') or ''),
+            'composed_edges': int(getattr(diag, 'composed_edges', 0) or 0),
+            'has_latency_edge': bool(getattr(diag, 'has_latency_edge', False)),
+            'transition_source': str(getattr(diag, 'transition_source', '') or ''),
+        }
+    elif cx.from_node_arrival is not None:
+        emp_tier = str(getattr(cx.from_node_arrival, 'tier', '') or '')
+        # 73m Stage 3 disabled empirical Tier 2 for Phase 1 carrier
+        # construction. Surfacing the empirical-tier label here flags any
+        # regression in that gate as a forensic artefact.
+        cdf_source = f'empirical_tier_{emp_tier}' if emp_tier else 'empirical_unknown'
+
     return {
         'mode': bundle.mode,
         'population_root': bundle.population_root,
+        # 73m §"Stage 6" stop-condition: the legacy non-latency router was
+        # retired in Stage 5 and all cohort_maturity v3 rows now flow
+        # through the trajectory engine. Fixed True because there is no
+        # other route in v3 post-Stage-5; the diagnostic is preserved so
+        # forensic traces can assert "no closed-form shortcut was taken"
+        # without inspecting code paths. If a future stage re-introduces
+        # any router fork, this flag must become a runtime-derived source
+        # label rather than a constant.
+        'legacy_non_latency_router_bypassed': True,
         'carrier_to_x': {
-            'population_root': bundle.carrier_to_x.population_root,
-            'anchor_node_id': bundle.carrier_to_x.anchor_node_id,
-            'x_node_id': bundle.carrier_to_x.x_node_id,
-            'mode': bundle.carrier_to_x.mode,
-            'reach': round(bundle.carrier_to_x.reach, 6),
-            'has_x_provider': bundle.carrier_to_x.x_provider is not None,
-            'has_from_node_arrival': bundle.carrier_to_x.from_node_arrival is not None,
+            'population_root': cx.population_root,
+            'anchor_node_id': cx.anchor_node_id,
+            'x_node_id': cx.x_node_id,
+            'mode': cx.mode,
+            'reach': round(cx.reach, 6),
+            'has_x_provider': cx.x_provider is not None,
+            'has_from_node_arrival': cx.from_node_arrival is not None,
+            # 73m §"Stage 6" carrier-CDF provenance — see preamble above.
+            'cdf_source': cdf_source,
+            'horizon': horizon_diag,
         },
         'subject_span': {
             'start_node_id': bundle.subject_span.start_node_id,
@@ -846,16 +891,31 @@ class XProvider:
             Each dict has: p, mu, sigma, onset, and optionally
             mu_sd, sigma_sd, onset_sd, alpha, beta, p_sd.
         enabled: if False, the row builder treats this as "no upstream"
-            (equivalent to window mode for the denominator).
+            (equivalent to window mode for the denominator). Stage 3
+            redefined this to ``carrier.is_active`` from the new
+            composition primitive — true when the carrier composes a
+            valid A → X chain with positive reach (window short-circuit
+            and A = X identity both leave it False). Latency presence
+            on the upstream chain is no longer a precondition.
         ingress_carrier: path-level latency params from edges entering x.
         upstream_obs: observed arrivals at x from upstream evidence.
             Dict mapping anchor_day (str) to a list of (tau, x_obs) tuples.
+        carrier_to_x: post-Stage-3 canonical carrier object built by
+            ``carrier_composition.compose_carrier_to_x``. Carries the
+            sum-over-paths reach, the conditional A → X CDF (saturating
+            to 1.0), per-draw MC CDFs when requested, and horizon
+            diagnostics. Populated when the carrier is active; ``None``
+            for window mode / A = X / no-path / horizon-inadequate
+            cases. Downstream consumers prefer this when present
+            because the legacy ``upstream_params_list`` only carries
+            edges immediately incoming to X (no multi-hop composition).
     """
     reach: float = 0.0
     upstream_params_list: List[Dict[str, float]] = field(default_factory=list)
     enabled: bool = False
     ingress_carrier: Optional[List[Dict[str, float]]] = None
     upstream_obs: Optional[Dict[str, List[Tuple[int, float]]]] = None
+    carrier_to_x: Optional['CarrierToX'] = None
 
 
 def build_x_provider_from_graph(
@@ -867,9 +927,24 @@ def build_x_provider_from_graph(
 ) -> XProvider:
     """Build the runtime-owned x_provider from graph data.
 
-    Reads the target edge's from-node as `X` and assembles the upstream
-    carrier inputs needed by the live forecast runtime.
+    Stage 3 (73m): routes through the shared carrier composition primitive
+    in ``runner.carrier_composition``. The composer owns reach (sum over
+    A → X paths), the conditional A → X CDF (saturating to 1.0,
+    Dirac-at-zero for non-latency chains), MC CDFs, and horizon
+    diagnostics. The new ``enabled`` gate is the composer's
+    ``is_active`` property: ``reach > 0`` and ``A != X``, independent
+    of whether any upstream edge is latency-bearing. The legacy
+    ``has_semantic_upstream_latency`` gate is retired here.
+
+    Output preserves the existing ``XProvider`` shape so legacy
+    downstream consumers continue working: ``upstream_params_list`` /
+    ``ingress_carrier`` still carry edges immediately incoming to X
+    (which is all the legacy ``build_upstream_carrier`` consumes). The
+    new ``carrier_to_x`` field exposes the canonical multi-hop
+    composition for consumers that prefer it.
     """
+    from .carrier_composition import compose_carrier_to_x
+
     if is_window or target_edge is None:
         return XProvider(reach=0.0, upstream_params_list=[], enabled=False)
 
@@ -877,101 +952,53 @@ def build_x_provider_from_graph(
     if not from_node_id:
         return XProvider(reach=0.0, upstream_params_list=[], enabled=False)
 
-    reach = 0.0
-    try:
-        from .forecast_state import _resolve_edge_p
-
-        edges = sorted(graph.get('edges', []), key=_stable_edge_sort_key)
-        id_to_uuid: Dict[str, str] = {}
-        node_ids = []
-        for n in graph.get('nodes', []):
-            uuid = n.get('uuid', '')
-            hid = n.get('id', '')
-            nid = uuid or hid
-            node_ids.append(nid)
-            if hid and uuid:
-                id_to_uuid[hid] = uuid
-        incoming_map: Dict[str, List[Dict]] = {}
-        in_degree: Dict[str, int] = {nid: 0 for nid in node_ids}
-        for e in edges:
-            to_id = e.get('to', '')
-            if to_id not in incoming_map:
-                incoming_map[to_id] = []
-            incoming_map[to_id].append(e)
-            in_degree[to_id] = in_degree.get(to_id, 0) + 1
-
-        node_reach: Dict[str, float] = {}
-        anchor = anchor_node_id or ''
-        if anchor and anchor in id_to_uuid:
-            anchor = id_to_uuid[anchor]
-        if anchor:
-            node_reach[anchor] = 1.0
-        queue = sorted([nid for nid in node_ids if in_degree.get(nid, 0) == 0])
-        if anchor and anchor not in queue:
-            queue.append(anchor)
-            queue.sort()
-        visited: set = set()
-        while queue:
-            nid = queue.pop(0)
-            if nid in visited:
-                continue
-            visited.add(nid)
-            if nid != anchor and nid in incoming_map:
-                r = 0.0
-                for ie in incoming_map[nid]:
-                    ie_from = ie.get('from', '')
-                    r += node_reach.get(ie_from, 0.0) * max(0, _resolve_edge_p(ie))
-                node_reach[nid] = r
-            elif nid not in node_reach:
-                node_reach[nid] = 0.0
-            for e in edges:
-                if e.get('from', '') == nid:
-                    to_id = e.get('to', '')
-                    in_degree[to_id] = in_degree.get(to_id, 0) - 1
-                    if in_degree[to_id] <= 0 and to_id not in visited:
-                        queue.append(to_id)
-            queue.sort()
-
-        reach = node_reach.get(from_node_id, 0.0)
-        if _COHORT_DEBUG:
-            print(f"[REACH] from_node={from_node_id} anchor={anchor_node_id} "
-                  f"reach={reach:.6f}")
-    except Exception as e:
-        print(f"[REACH] Error computing reach: {e}")
-        import traceback; traceback.print_exc()
-
-    upstream_params_list: List[Dict[str, float]] = []
-    incoming = get_incoming_edges(graph, from_node_id)
-    for inc_edge in incoming:
-        params = read_edge_cohort_params(inc_edge)
-        if params:
-            params_local = dict(params)
-            if use_epistemic_mu_sd:
-                latency_posterior = (
-                    ((inc_edge.get('p') or {}).get('latency') or {}).get('posterior')
-                    or {}
-                )
-                for mu_sd_key in ('path_mu_sd', 'mu_sd'):
-                    mu_sd_value = latency_posterior.get(mu_sd_key)
-                    if (
-                        isinstance(mu_sd_value, (int, float))
-                        and math.isfinite(mu_sd_value)
-                        and mu_sd_value > 0
-                    ):
-                        params_local['mu_sd'] = float(mu_sd_value)
-                        break
-            upstream_params_list.append(params_local)
-
-    enabled = reach > 0 and has_semantic_upstream_latency(
-        graph,
-        anchor_node_id,
-        from_node_id,
+    carrier = compose_carrier_to_x(
+        graph=graph,
+        anchor_node_id=anchor_node_id,
+        denominator_node_id=from_node_id,
+        is_window=is_window,
     )
+
+    if _COHORT_DEBUG:
+        print(
+            f"[REACH] from_node={from_node_id} anchor={anchor_node_id} "
+            f"reach={carrier.reach:.6f} tier={carrier.diagnostics.tier}"
+        )
+
+    # Legacy upstream_params_list: edges immediately incoming to X. The
+    # composer's transitions cover the full A → X topology, but the
+    # legacy ``build_upstream_carrier`` consumer expects per-edge params
+    # for parallel ingress edges only — preserving that shape keeps
+    # v2/v3 parity intact during this migration.
+    upstream_params_list: List[Dict[str, float]] = []
+    if carrier.is_active:
+        incoming = get_incoming_edges(graph, from_node_id)
+        for inc_edge in incoming:
+            params = read_edge_cohort_params(inc_edge)
+            if params:
+                params_local = dict(params)
+                if use_epistemic_mu_sd:
+                    latency_posterior = (
+                        ((inc_edge.get('p') or {}).get('latency') or {}).get('posterior')
+                        or {}
+                    )
+                    for mu_sd_key in ('path_mu_sd', 'mu_sd'):
+                        mu_sd_value = latency_posterior.get(mu_sd_key)
+                        if (
+                            isinstance(mu_sd_value, (int, float))
+                            and math.isfinite(mu_sd_value)
+                            and mu_sd_value > 0
+                        ):
+                            params_local['mu_sd'] = float(mu_sd_value)
+                            break
+                upstream_params_list.append(params_local)
+
     return XProvider(
-        reach=reach,
+        reach=carrier.reach if carrier.is_active else 0.0,
         upstream_params_list=upstream_params_list,
-        enabled=enabled,
+        enabled=carrier.is_active,
         ingress_carrier=upstream_params_list if upstream_params_list else None,
+        carrier_to_x=carrier if carrier.is_active else None,
     )
 
 

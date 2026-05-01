@@ -1062,53 +1062,24 @@ def compute_cohort_maturity_rows_v3(
             bundle.p_conditioning_evidence.total_y = None
         return bundle
 
-    # ── Non-latency edge: closed-form shortcut ─────────────────────
-    # Authoritative signal is the edge's latency_parameter flag, not
-    # resolved.latency.sigma. See ANALYSIS_TYPES_CATALOGUE.md §284,
-    # adding-analysis-types.md §235, and KNOWN_ANTI_PATTERNS.md —
-    # promoted sigma/mu appears on non-latency edges too, so sigma
-    # is not a reliable signal.
-    _lat_meta = (target_edge.get('p') or {}).get('latency') or {}
-    _is_latency_edge = _lat_meta.get('latency_parameter') is True
-    if not _is_latency_edge:
-        fe_closed_form = build_cohort_evidence_from_frames(
-            frames=frames,
-            target_edge=target_edge,
-            anchor_from=anchor_from,
-            anchor_to=anchor_to,
-            sweep_to=sweep_to,
-            is_window=is_window,
-            resolved=resolved,
-            axis_tau_max=axis_tau_max,
-        )
-        _res = _non_latency_rows(
-            fe=fe_closed_form,
-            resolved=resolved,
-            sweep_to=sweep_to,
-            axis_tau_max=axis_tau_max,
-            band_level=band_level,
-            extra_conditioning_evidence=extra_conditioning_evidence,
-        )
-        _prepare_runtime_bundle(
-            fe_local=fe_closed_form,
-            resolved_local=resolved,
-            cf_mode_local=_cf_mode,
-            cf_reason_local=_cf_reason,
-        )
-        return _attach_cf_row_metadata(
-            _res.rows,
-            conditioning={
-                'r': _res.r,
-                'm_S': _res.m_S,
-                'm_G': _res.m_G,
-                'applied': _res.blend_applied,
-                'skip_reason': _res.blend_skip_reason,
-            },
-            conditioned=_res.conditioned,
-            cf_mode=_cf_mode,
-            cf_reason=_cf_reason,
-        )
-
+    # 73m Stage 5 retired the latency/non-latency router that previously
+    # forked here. The legacy branch routed non-latency targets to
+    # `_non_latency_rows` — a closed-form Beta-Binomial path that
+    # ignored the prepared subject-span object and returned a flat rate
+    # in τ even when the composed span had upstream latency. That was
+    # the 73h "computed and discarded" surface for terminal-non-latency
+    # multi-hop subjects: the same bundle preparation that the trajectory
+    # path consumes was happening here too, and then being dropped.
+    #
+    # Post-retirement, all cohort_maturity v3 rows flow through the
+    # trajectory path below. Structurally non-latency edges become
+    # natural degeneracies of the same span-kernel objects: their
+    # `mc_span_cdfs` output is a Dirac-at-zero shape, and the trajectory
+    # consumes it the same way as any other prepared subject span.
+    #
+    # `_non_latency_rows` (and the parallel `test_non_latency_rows.py`
+    # module) remain as dev-only oracles — see the deletion checklist in
+    # the §9 Stage 5 baseline note for the cleanup deadline.
     lat = resolved.latency
 
     # ── Build evidence from frames (shared with topo pass) ─────────
