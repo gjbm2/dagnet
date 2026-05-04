@@ -51,6 +51,14 @@ if str(GRAPH_EDITOR_DIR) not in sys.path:
     sys.path.insert(0, str(GRAPH_EDITOR_DIR))
 
 
+# Test collection exclusions.
+# `_attic/` quarantines stale tests pending intent audit (73n CF
+# generalisation removed `carrier_composition`, `compute_single_hop_readout`,
+# `compute_active_cohort_carrier_readout`).
+# Audit tracker: docs/current/project-bayes/73-attic-coverage-audit.md
+collect_ignore_glob = ["_attic/*"]
+
+
 # ── Shared resolution helpers ──────���────────────────────────────────────────
 
 def _resolve_data_repo_dir(root: str | None = None) -> Path | None:

@@ -162,14 +162,14 @@ def test_latency_rows_use_shared_sweep_contract():
     assert first['_cf_reason'] is None
     assert first['_conditioning'] == {
         'r': None,
-        'm_S': 100.0,
+        'm_S': None,
         'm_G': None,
         'applied': False,
-        'skip_reason': 'n_effective_missing',
+        'skip_reason': 'primitive_substrate_owns_doc52_blend',
     }
-    assert first['_conditioned'] is True
+    assert first['_conditioned'] is False
 
-    assert last['p_infinity_mean'] == pytest.approx(0.31, abs=0.01)
+    assert last['p_infinity_mean'] == pytest.approx(0.20, abs=0.01)
     assert last['p_infinity_sd'] == pytest.approx(last['p_infinity_sd_epistemic'])
 
 

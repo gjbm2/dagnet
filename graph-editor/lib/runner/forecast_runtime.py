@@ -16,9 +16,9 @@ It contains:
   - Span-prior construction migrated from the legacy stack:
     SpanParams, build_span_params, span_kernel_to_edge_params.
 
-  - Upstream carrier hierarchy migrated from v2:
-    three tiers (parametric / empirical / weak-prior) plus the
-    build_upstream_carrier dispatcher.
+  - Upstream carrier composition:
+    build_x_provider_from_graph delegates active A→X carrier timing to
+    runner.timing_span's shared timing algebra.
 
 Legacy modules remain in the repo for frozen v2 / parity-oracle paths, but
 the production forecast stack should keep converging on this module rather
@@ -101,7 +101,33 @@ class PreparedSubjectSpan:
 
 @dataclass
 class PreparedConditioningEvidence:
-    """Explicit evidence base used to move the rate side."""
+    """Compatibility metadata describing the evidence the live trajectory
+    engine conditioned on (per-edge ``total_x`` / ``total_y`` totals plus
+    a temporal-family label and source label).
+
+    Plan §762 — this object is **compatibility metadata**, not a live
+    evidence-ownership decider. Evidence ownership for the public
+    response sits on ``ConditionedTransitionPrimitive`` (whose typed
+    ``evidence_merge.EvidenceSet`` is the canonical raw E and whose
+    weighted view is the canonical primitive-local clock-bound evidence).
+    The primitive readout substitution at the row-builder seam consumes
+    a typed ``EvidenceSet`` directly; it does **not** read these totals
+    to decide ownership.
+
+    Why the field still exists:
+      - The legacy fallback path (un-substituted CF requests) reports
+        evidence_points / total_x / total_y on the response so callers
+        without typed evidence dicts on the graph still see a numeric
+        evidence pair.
+      - The synthetic identity-clock resolution can build a minimal
+        ``EvidenceSet`` from these totals when no typed object was
+        threaded through (e.g. in-process tests). The synthesised
+        evidence is then handed to the primitive layer; ownership at
+        that point sits on the primitive, not on this compatibility
+        block.
+
+    Retirement is tracked as a follow-up; consumers must read primitive
+    provenance for ownership, not these totals."""
     temporal_family: str = 'window'
     source: str = 'none'
     evidence_points: int = 0
@@ -455,13 +481,13 @@ def serialise_runtime_bundle(
             return [len(value)]
         return None
 
-    # 73m §"Stage 6": expose the carrier-CDF provenance and horizon
-    # diagnostics from the composed CarrierToX object (when present) so a
-    # forensic trace can answer the four 73h F14 questions directly from
-    # the runtime-bundle diag block. The composed object lives on
-    # ``XProvider.carrier_to_x`` (carrier_composition.compose_carrier_to_x
-    # output); when ``mode == 'identity'`` no composed object exists and
-    # the diag block reports ``cdf_source='identity'`` with reach=1.
+    # Expose the carrier-CDF provenance and horizon diagnostics from the
+    # composed timing object (when present) so a forensic trace can
+    # answer the four 73h F14 questions directly from the runtime-bundle
+    # diag block. The composed object lives on
+    # ``XProvider.carrier_to_x`` (timing_span output); when
+    # ``mode == 'identity'`` no composed object exists and the diag block
+    # reports ``cdf_source='identity'`` with reach=1.
     cx = bundle.carrier_to_x
     composed = (
         getattr(cx.x_provider, 'carrier_to_x', None) if cx.x_provider is not None else None
@@ -470,20 +496,22 @@ def serialise_runtime_bundle(
     horizon_diag: Optional[Dict[str, Any]] = None
     if cx.mode == 'identity':
         cdf_source = 'identity'
-    elif composed is not None and getattr(composed, 'diagnostics', None) is not None:
-        diag = composed.diagnostics
-        cdf_source = str(getattr(diag, 'tier', '') or '') or None
+    elif composed is not None:
+        cdf_source = str(getattr(composed, 'topology_case', '') or '') or None
         horizon_diag = {
             'tier': cdf_source,
-            'horizon_ratio': round(float(getattr(diag, 'horizon_ratio', 0.0) or 0.0), 6),
-            'horizon_status': str(getattr(diag, 'horizon_status', '') or ''),
-            'composed_edges': int(getattr(diag, 'composed_edges', 0) or 0),
-            'has_latency_edge': bool(getattr(diag, 'has_latency_edge', False)),
-            'transition_source': str(getattr(diag, 'transition_source', '') or ''),
+            'horizon_ratio': round(float(getattr(composed, 'horizon_ratio', 0.0) or 0.0), 6),
+            'horizon_status': (
+                'inadequate'
+                if getattr(composed, 'is_degraded', False) else 'saturated'
+            ),
+            'composed_edges': int(getattr(composed, 'composed_edges', 0) or 0),
+            'has_latency_edge': bool(getattr(composed, 'has_latency_edge', False)),
+            'transition_source': str(getattr(composed, 'transition_source', '') or ''),
         }
     elif cx.from_node_arrival is not None:
         emp_tier = str(getattr(cx.from_node_arrival, 'tier', '') or '')
-        # 73m Stage 3 disabled empirical Tier 2 for Phase 1 carrier
+        # Empirical Tier 2 was disabled for Phase 1 carrier
         # construction. Surfacing the empirical-tier label here flags any
         # regression in that gate as a forensic artefact.
         cdf_source = f'empirical_tier_{emp_tier}' if emp_tier else 'empirical_unknown'
@@ -491,14 +519,14 @@ def serialise_runtime_bundle(
     return {
         'mode': bundle.mode,
         'population_root': bundle.population_root,
-        # 73m §"Stage 6" stop-condition: the legacy non-latency router was
-        # retired in Stage 5 and all cohort_maturity v3 rows now flow
-        # through the trajectory engine. Fixed True because there is no
-        # other route in v3 post-Stage-5; the diagnostic is preserved so
-        # forensic traces can assert "no closed-form shortcut was taken"
-        # without inspecting code paths. If a future stage re-introduces
-        # any router fork, this flag must become a runtime-derived source
-        # label rather than a constant.
+        # The legacy latency/non-latency router was retired (73m Stage 5)
+        # and all cohort_maturity v3 rows now flow through the trajectory
+        # engine. Fixed True because there is no other route post-
+        # retirement; the diagnostic is preserved so forensic traces can
+        # assert "no closed-form shortcut was taken" without inspecting
+        # code paths. If any router fork is re-introduced, this flag
+        # must become a runtime-derived source label rather than a
+        # constant.
         'legacy_non_latency_router_bypassed': True,
         'carrier_to_x': {
             'population_root': cx.population_root,
@@ -508,7 +536,7 @@ def serialise_runtime_bundle(
             'reach': round(cx.reach, 6),
             'has_x_provider': cx.x_provider is not None,
             'has_from_node_arrival': cx.from_node_arrival is not None,
-            # 73m §"Stage 6" carrier-CDF provenance — see preamble above.
+            # Carrier-CDF provenance — see preamble above.
             'cdf_source': cdf_source,
             'horizon': horizon_diag,
         },
@@ -519,12 +547,22 @@ def serialise_runtime_bundle(
             'operator_source': bundle.subject_span.operator_source,
         },
         'numerator_representation': bundle.numerator_representation,
+        # p_conditioning_evidence is compatibility metadata (plan §762),
+        # not an evidence-ownership decider. Live evidence ownership
+        # sits on ConditionedTransitionPrimitive provenance carried
+        # through the row-builder runtime_provenance block. These totals
+        # are retained for compatibility display only.
         'p_conditioning_evidence': {
             'temporal_family': bundle.p_conditioning_evidence.temporal_family,
             'source': bundle.p_conditioning_evidence.source,
             'evidence_points': bundle.p_conditioning_evidence.evidence_points,
             'total_x': bundle.p_conditioning_evidence.total_x,
             'total_y': bundle.p_conditioning_evidence.total_y,
+            'compatibility_metadata_note': (
+                "plan §762: this block is compatibility metadata; "
+                "evidence ownership lives on the primitive substrate "
+                "and runtime_provenance diagnostics."
+            ),
         },
         'admission_policy': {
             'numerator_representation': (
@@ -900,22 +938,18 @@ class XProvider:
         ingress_carrier: path-level latency params from edges entering x.
         upstream_obs: observed arrivals at x from upstream evidence.
             Dict mapping anchor_day (str) to a list of (tau, x_obs) tuples.
-        carrier_to_x: post-Stage-3 canonical carrier object built by
-            ``carrier_composition.compose_carrier_to_x``. Carries the
-            sum-over-paths reach, the conditional A → X CDF (saturating
-            to 1.0), per-draw MC CDFs when requested, and horizon
-            diagnostics. Populated when the carrier is active; ``None``
-            for window mode / A = X / no-path / horizon-inadequate
-            cases. Downstream consumers prefer this when present
-            because the legacy ``upstream_params_list`` only carries
-            edges immediately incoming to X (no multi-hop composition).
+        carrier_to_x: shared timing object for A → X. Populated when the
+            carrier is active; ``None`` for window mode / A = X / no-path
+            / horizon-inadequate cases. Downstream consumers prefer this
+            when present because the legacy ``upstream_params_list`` only
+            carries edges immediately incoming to X.
     """
     reach: float = 0.0
     upstream_params_list: List[Dict[str, float]] = field(default_factory=list)
     enabled: bool = False
     ingress_carrier: Optional[List[Dict[str, float]]] = None
     upstream_obs: Optional[Dict[str, List[Tuple[int, float]]]] = None
-    carrier_to_x: Optional['CarrierToX'] = None
+    carrier_to_x: Optional[Any] = None
 
 
 def build_x_provider_from_graph(
@@ -927,23 +961,19 @@ def build_x_provider_from_graph(
 ) -> XProvider:
     """Build the runtime-owned x_provider from graph data.
 
-    Stage 3 (73m): routes through the shared carrier composition primitive
-    in ``runner.carrier_composition``. The composer owns reach (sum over
-    A → X paths), the conditional A → X CDF (saturating to 1.0,
-    Dirac-at-zero for non-latency chains), MC CDFs, and horizon
-    diagnostics. The new ``enabled`` gate is the composer's
-    ``is_active`` property: ``reach > 0`` and ``A != X``, independent
-    of whether any upstream edge is latency-bearing. The legacy
+    Routes through the shared timing algebra. The composer owns reach
+    (sum over A → X paths), the conditional A → X CDF (saturating to
+    1.0, Dirac-at-zero for non-latency chains), and horizon diagnostics.
+    The ``enabled`` gate is the timing object's ``is_composed`` property:
+    ``reach > 0`` and ``A != X``, independent of whether any upstream
+    edge is latency-bearing. The legacy
     ``has_semantic_upstream_latency`` gate is retired here.
 
-    Output preserves the existing ``XProvider`` shape so legacy
-    downstream consumers continue working: ``upstream_params_list`` /
-    ``ingress_carrier`` still carry edges immediately incoming to X
-    (which is all the legacy ``build_upstream_carrier`` consumes). The
-    new ``carrier_to_x`` field exposes the canonical multi-hop
-    composition for consumers that prefer it.
+    Output preserves the existing ``XProvider`` shape for callers that
+    still display immediate-ingress diagnostics, while ``carrier_to_x``
+    exposes the canonical multi-hop composition.
     """
-    from .carrier_composition import compose_carrier_to_x
+    from .timing_span import compose_timing_span_from_graph
 
     if is_window or target_edge is None:
         return XProvider(reach=0.0, upstream_params_list=[], enabled=False)
@@ -952,26 +982,25 @@ def build_x_provider_from_graph(
     if not from_node_id:
         return XProvider(reach=0.0, upstream_params_list=[], enabled=False)
 
-    carrier = compose_carrier_to_x(
+    carrier = compose_timing_span_from_graph(
         graph=graph,
-        anchor_node_id=anchor_node_id,
-        denominator_node_id=from_node_id,
-        is_window=is_window,
+        root_node_id=str(anchor_node_id or ''),
+        end_node_id=str(from_node_id),
+        max_tau=400,
+        horizon_blocking_floor=0.95,
     )
 
     if _COHORT_DEBUG:
         print(
             f"[REACH] from_node={from_node_id} anchor={anchor_node_id} "
-            f"reach={carrier.reach:.6f} tier={carrier.diagnostics.tier}"
+            f"reach={carrier.reach:.6f} tier={carrier.topology_case}"
         )
 
-    # Legacy upstream_params_list: edges immediately incoming to X. The
-    # composer's transitions cover the full A → X topology, but the
-    # legacy ``build_upstream_carrier`` consumer expects per-edge params
-    # for parallel ingress edges only — preserving that shape keeps
-    # v2/v3 parity intact during this migration.
+    # Diagnostic upstream_params_list: edges immediately incoming to X.
+    # The composer's transitions cover the full A → X topology; this
+    # flattened list is kept only for existing diagnostics/UI surfaces.
     upstream_params_list: List[Dict[str, float]] = []
-    if carrier.is_active:
+    if carrier.is_composed:
         incoming = get_incoming_edges(graph, from_node_id)
         for inc_edge in incoming:
             params = read_edge_cohort_params(inc_edge)
@@ -994,11 +1023,11 @@ def build_x_provider_from_graph(
                 upstream_params_list.append(params_local)
 
     return XProvider(
-        reach=carrier.reach if carrier.is_active else 0.0,
+        reach=carrier.reach if carrier.is_composed else 0.0,
         upstream_params_list=upstream_params_list,
-        enabled=carrier.is_active,
+        enabled=carrier.is_composed,
         ingress_carrier=upstream_params_list if upstream_params_list else None,
-        carrier_to_x=carrier if carrier.is_active else None,
+        carrier_to_x=carrier if carrier.is_composed else None,
     )
 
 
@@ -1255,311 +1284,6 @@ def build_span_params(
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# Upstream carrier hierarchy (ex v2 — cohort_forecast_v2.py)
-# Three tiers: parametric ingress → empirical tail → weak prior backstop.
-# ═══════════════════════════════════════════════════════════════════════
-
-
-def _build_tier1_parametric(
-    upstream_params_list: List[Dict[str, Any]],
-    reach: float,
-    is_window: bool,
-    max_tau: int,
-    num_draws: int,
-    rng,
-) -> Optional[Tuple[List[float], Any]]:
-    """Tier 1: parametric ingress mixture carrier.
-
-    Returns (deterministic_cdf, mc_cdf) or None if no parametric
-    carriers available.
-    """
-    if is_window or not upstream_params_list or reach <= 0:
-        return None
-
-    import numpy as np
-    from scipy.special import ndtr as _ndtr
-    from .confidence_bands import _shifted_lognormal_cdf
-
-    T = max_tau + 1
-    S = num_draws
-    # IS proposal scale = PRIOR_PROPOSAL_SD_FACTOR × prior SD. Setting this
-    # to 1.0 makes proposal = prior so the existing likelihood-only IS
-    # reweighting downstream (forecast_state.py:1093) is mathematically
-    # correct: with proposal = prior, the missing prior/proposal ratio in
-    # the weight collapses to unity. Previous value 2.0 was an attempted
-    # proposal-overdispersion fix (handover 14-Apr-26 §D4) that addressed
-    # a degenerate-weights symptom from a prior 0.20× under-dispersion,
-    # but introduced a real defect in the weak-evidence regime: the
-    # over-dispersion leaks into trajectory bands without any IS-side
-    # correction (no IS reweighting against carrier draws exists).
-    # See docs/current/project-bayes/73j-is-proposal-and-likelihood-only-weights.md.
-    PRIOR_PROPOSAL_SD_FACTOR = 1.0
-    tau_grid = np.arange(0, T, dtype=float)
-
-    total_w = 0.0
-    weighted_cdf = [0.0] * T
-    for _up in upstream_params_list:
-        _up_sigma = _up.get('sigma', 0.0)
-        if _up_sigma > 0:
-            _up_p = _up['p']
-            for t in range(T):
-                cdf_val = _shifted_lognormal_cdf(
-                    float(t), _up.get('onset', 0.0), _up['mu'], _up_sigma)
-                weighted_cdf[t] += _up_p * cdf_val
-            total_w += _up_p
-    if total_w <= 0:
-        return None
-    for t in range(T):
-        weighted_cdf[t] /= total_w
-
-    _unnorm_cdf = np.zeros((S, T))
-    _weight_sum = np.zeros(S)
-    _any_edge = False
-    for _up in upstream_params_list:
-        _up_sigma = _up.get('sigma', 0.0)
-        if _up_sigma <= 0:
-            continue
-        _any_edge = True
-        _up_mu = _up['mu']
-        _up_onset = _up.get('onset', 0.0)
-        _up_mu_sd = _up.get('mu_sd', 0.05)
-        _up_sigma_sd = _up.get('sigma_sd', 0.02)
-        _up_onset_sd = _up.get('onset_sd', 0.1)
-        _up_mu_s = _up_mu + rng.normal(0, max(PRIOR_PROPOSAL_SD_FACTOR * _up_mu_sd, 1e-6), size=S)
-        _up_sigma_s = np.clip(
-            _up_sigma + rng.normal(0, max(PRIOR_PROPOSAL_SD_FACTOR * _up_sigma_sd, 1e-6), size=S),
-            0.01, 20.0)
-        _up_onset_s = np.maximum(
-            _up_onset + rng.normal(0, max(PRIOR_PROPOSAL_SD_FACTOR * _up_onset_sd, 1e-6), size=S),
-            0.0)
-        _up_alpha = _up.get('alpha')
-        _up_beta = _up.get('beta')
-        if _up_alpha and _up_beta and _up_alpha > 0 and _up_beta > 0:
-            _up_p_s = rng.beta(_up_alpha, _up_beta, size=S)
-        else:
-            _up_p_sd = _up.get('p_sd', 0.01)
-            _up_p_s = np.clip(
-                _up['p'] + rng.normal(0, max(PRIOR_PROPOSAL_SD_FACTOR * _up_p_sd, 1e-6), size=S),
-                1e-6, 1 - 1e-6)
-        _t_sh = tau_grid[None, :] - _up_onset_s[:, None]
-        _t_sh = np.maximum(_t_sh, 1e-12)
-        _z_up = (np.log(_t_sh) - _up_mu_s[:, None]) / _up_sigma_s[:, None]
-        _cdf_up = _ndtr(_z_up)
-        _cdf_up = np.where(tau_grid[None, :] > _up_onset_s[:, None], _cdf_up, 0.0)
-        _cdf_up = np.clip(_cdf_up, 0.0, 1.0)
-        _unnorm_cdf += _up_p_s[:, None] * _cdf_up
-        _weight_sum += _up_p_s
-    if not _any_edge:
-        return None
-    _weight_sum = np.maximum(_weight_sum, 1e-10)
-    mc_cdf = _unnorm_cdf / _weight_sum[:, None]
-
-    return (weighted_cdf, mc_cdf)
-
-
-def _build_tier2_empirical(
-    upstream_obs: Optional[Dict[str, List[Tuple[int, float]]]],
-    cohort_list: List[Dict[str, Any]],
-    reach: float,
-    is_window: bool,
-    max_tau: int,
-    num_draws: int,
-    rng,
-) -> Optional[Tuple[List[float], Any]]:
-    """Tier 2: empirical tail carrier from observed arrivals at x.
-
-    Uses donor cohorts from upstream_obs to build an empirical CDF
-    of arrivals at x.  Mass donors inform the terminal reach; shape
-    donors inform the timing of post-frontier arrivals.
-    """
-    if is_window or not upstream_obs or reach <= 0:
-        return None
-
-    import numpy as np
-
-    T = max_tau + 1
-
-    frontier_age = 0
-    if cohort_list:
-        frontier_age = min(
-            c.get('tau_observed', c.get('tau_max', 0))
-            for c in cohort_list
-        )
-
-    raw_trajectories: List[Tuple[str, List[Tuple[int, float]], float, float]] = []
-
-    for ad_str, obs_pairs in upstream_obs.items():
-        if not obs_pairs:
-            continue
-        max_obs_tau = obs_pairs[-1][0]
-        terminal_x = obs_pairs[-1][1]
-        if terminal_x <= 0:
-            continue
-
-        _a_pop = terminal_x  # fallback
-        for c in cohort_list:
-            if c['anchor_day'].isoformat() == ad_str:
-                _a_pop = c.get('a_frozen', terminal_x) or terminal_x
-                break
-
-        raw_trajectories.append((ad_str, obs_pairs, terminal_x, _a_pop))
-
-    mass_donors: List[Tuple[float, float]] = []     # (terminal_x, a_pop)
-
-    mass_threshold = min(frontier_age * 2, 30) if frontier_age > 0 else 10
-    for ad_str, obs_pairs, terminal_x, _a_pop in raw_trajectories:
-        max_obs_tau = obs_pairs[-1][0]
-        if max_obs_tau >= mass_threshold:
-            mass_donors.append((terminal_x, _a_pop))
-
-    if len(mass_donors) < 2:
-        return None
-
-    mass_ratios = [x / max(ap, 1.0) for x, ap in mass_donors]
-    _eventual_reach = float(np.mean(mass_ratios)) if mass_ratios else reach
-
-    shape_donors: List[List[float]] = []
-
-    for ad_str, obs_pairs, terminal_x, _a_pop in raw_trajectories:
-        max_obs_tau = obs_pairs[-1][0]
-        if max_obs_tau <= frontier_age:
-            continue
-        eventual_x = max(_a_pop * _eventual_reach, terminal_x)
-        norm_cdf = [0.0] * T
-        last_val = 0.0
-        obs_idx = 0
-        for t in range(T):
-            while obs_idx < len(obs_pairs) and obs_pairs[obs_idx][0] <= t:
-                last_val = obs_pairs[obs_idx][1]
-                obs_idx += 1
-            norm_cdf[t] = min(last_val / eventual_x, 1.0)
-        shape_donors.append(norm_cdf)
-
-    if len(shape_donors) < 2:
-        return None
-
-    det_cdf = [0.0] * T
-    for donor in shape_donors:
-        for t in range(T):
-            det_cdf[t] += donor[t]
-    for t in range(T):
-        det_cdf[t] /= len(shape_donors)
-
-    S = num_draws
-
-    _mean_ratio = np.mean(mass_ratios)
-    _var_ratio = np.var(mass_ratios) if len(mass_ratios) > 1 else 0.01
-    if _mean_ratio > 0 and _mean_ratio < 1 and _var_ratio > 0:
-        _m = _mean_ratio
-        _v = min(_var_ratio, _m * (1 - _m) * 0.99)
-        _alpha = _m * (_m * (1 - _m) / _v - 1)
-        _beta = (1 - _m) * (_m * (1 - _m) / _v - 1)
-        _alpha = max(_alpha, 0.5)
-        _beta = max(_beta, 0.5)
-    else:
-        _alpha = 2.0
-        _beta = max(2.0 / max(_mean_ratio, 0.01) - 2.0, 1.0)
-    mass_draws = rng.beta(_alpha, _beta, size=S)  # (S,)
-
-    donor_idx = rng.integers(0, len(shape_donors), size=S)
-    shape_arr = np.array(shape_donors)  # (n_donors, T)
-    mc_shapes = shape_arr[donor_idx]    # (S, T)
-
-    _mass_scale = mass_draws / max(_eventual_reach, 1e-10)  # (S,)
-    mc_cdf = np.maximum(mc_shapes * _mass_scale[:, None], 0.0)
-
-    print(f"[v2] carrier tier=empirical: {len(mass_donors)} mass donors, "
-          f"{len(shape_donors)} shape donors, "
-          f"reach_mean={_mean_ratio:.4f} alpha={_alpha:.2f} beta={_beta:.2f}")
-
-    return (det_cdf, mc_cdf)
-
-
-def _build_tier3_weak_prior(
-    reach: float,
-    is_window: bool,
-    max_tau: int,
-    num_draws: int,
-    rng,
-) -> Tuple[List[float], Any]:
-    """Tier 3: weak prior tail carrier (backstop).
-
-    Produces a deliberately wide, uninformative carrier so the fan
-    chart is never zero-width just because metadata is missing.
-
-    Always succeeds — this is the final fallback.
-    """
-    import numpy as np
-    from scipy.special import ndtr as _ndtr
-
-    T = max_tau + 1
-    S = num_draws
-    tau_grid = np.arange(0, T, dtype=float)
-
-    _mu_prior = math.log(30.0)
-    _sigma_prior = 1.5
-
-    det_cdf = [0.0] * T
-    for t in range(T):
-        if t > 0:
-            z = (math.log(t) - _mu_prior) / _sigma_prior
-            det_cdf[t] = float(_ndtr(z))
-
-    _mu_s = rng.normal(_mu_prior, 0.5, size=S)
-    _sigma_s = np.clip(rng.normal(_sigma_prior, 0.3, size=S), 0.3, 3.0)
-    _t_safe = np.maximum(tau_grid[None, :], 1e-12)
-    _z = (np.log(_t_safe) - _mu_s[:, None]) / _sigma_s[:, None]
-    mc_cdf = np.clip(_ndtr(_z), 0.0, 1.0)
-    mc_cdf[:, 0] = 0.0
-
-    print(f"[v2] carrier tier=weak_prior: mu_prior={_mu_prior:.2f} "
-          f"sigma_prior={_sigma_prior:.2f}")
-
-    return (det_cdf, mc_cdf)
-
-
-def build_upstream_carrier(
-    upstream_params_list: List[Dict[str, Any]],
-    upstream_obs: Optional[Dict[str, List[Tuple[int, float]]]],
-    cohort_list: List[Dict[str, Any]],
-    reach: float,
-    is_window: bool,
-    max_tau: int,
-    num_draws: int,
-    rng,
-) -> Tuple[Optional[List[float]], Optional[Any], str]:
-    """Select and build the upstream continuation carrier.
-
-    Tries Tier 1 (parametric), then Tier 2 (empirical), then Tier 3
-    (weak prior).  Returns (det_cdf, mc_cdf, tier_tag).
-
-    det_cdf: List[float] of length max_tau+1, normalised CDF [0,1].
-    mc_cdf: ndarray(S, T), per-draw stochastic CDF.
-    tier_tag: 'parametric' | 'empirical' | 'weak_prior' | 'none'.
-    """
-    if is_window or reach <= 0:
-        return (None, None, 'none')
-
-    result = _build_tier1_parametric(
-        upstream_params_list, reach, is_window, max_tau, num_draws, rng,
-    )
-    if result is not None:
-        print(f"[v2] carrier tier=parametric: {len(upstream_params_list)} edges")
-        return (result[0], result[1], 'parametric')
-
-    result = _build_tier2_empirical(
-        upstream_obs, cohort_list, reach, is_window, max_tau, num_draws, rng,
-    )
-    if result is not None:
-        return (result[0], result[1], 'empirical')
-
-    det_cdf, mc_cdf = _build_tier3_weak_prior(
-        reach, is_window, max_tau, num_draws, rng,
-    )
-    return (det_cdf, mc_cdf, 'weak_prior')
-
-
 @dataclass
 class PreparedForecastSolveInputs:
     """Shared prepared solve inputs for chart and CF callers."""
@@ -1588,6 +1312,13 @@ class PreparedForecastSolveInputs:
     # consumers extract `(age_days, n, k)` tuples into `extra_conditioning_evidence`
     # for the existing seam; the response surfaces compact provenance.
     evidence_set: Optional[Any] = None
+    # Raw candidate material before any request-level merge (73n
+    # evidence-clock alignment). The downstream primitive readout owns
+    # per-primitive merge with each primitive's local arrival-weight
+    # date bounds, so the request-level merge in this module must not
+    # be the authoritative gate. `evidence_set` is kept as compatibility
+    # provenance only.
+    evidence_candidates: Optional[List[Any]] = None
 
 
 def _resolve_subject_temporal_mode(
@@ -1691,6 +1422,11 @@ def prepare_forecast_runtime_inputs(
     upstream_log_prefix: str = '[forecast] upstream:',
     p_conditioning_source: str = 'snapshot_frames',
     p_conditioning_evidence_points: Optional[int] = None,
+    # Retired post-73n: the epistemic-overlay second MC pass has been
+    # superseded by the runtime's ``unconditioned_overlays['epistemic']``
+    # composition. Kept as a no-op kwarg so existing callers still load
+    # without raising; consumers that pass True simply get a (now
+    # ignored) flag. Will be removed once all callers stop passing it.
     include_epistemic_overlay: bool = False,
     as_at: Optional[str] = None,
     scenario_id: Optional[str] = None,
@@ -1790,28 +1526,10 @@ def prepare_forecast_runtime_inputs(
         result.span_alpha = result.span_params.alpha_0
         result.span_beta = result.span_params.beta_0
 
-        if include_epistemic_overlay:
-            result.span_params_epi = result.span_params
-            span_mu_sd_epi = (
-                span_edge_params.get('bayes_mu_sd')
-                or span_edge_params.get('bayes_path_mu_sd')
-                or 0.0
-            )
-            if result.span_params is not None and span_mu_sd_epi:
-                result.span_params_epi = SpanParams(
-                    span_p=result.span_params.span_p,
-                    C=list(result.span_params.C),
-                    max_tau=result.span_params.max_tau,
-                    alpha_0=result.span_params.alpha_0,
-                    beta_0=result.span_params.beta_0,
-                    mu_sd=float(span_mu_sd_epi),
-                    sigma_sd=result.span_params.sigma_sd,
-                    onset_sd=result.span_params.onset_sd,
-                    onset_mu_corr=result.span_params.onset_mu_corr,
-                    mu=result.span_params.mu,
-                    sigma=result.span_params.sigma,
-                    onset=result.span_params.onset,
-                )
+        # Epistemic-overlay span_params clone retired post-73n —
+        # ResolvedCFRuntime.unconditioned_overlays['epistemic'] now owns
+        # the tight-band model curve. The flag is preserved as a no-op
+        # for caller compatibility but produces no parallel SpanParams.
 
     span_execution = build_prepared_span_execution(
         graph_data,
@@ -1822,8 +1540,54 @@ def prepare_forecast_runtime_inputs(
     )
     if span_execution is not None:
         import numpy as np
+        # Fixed-seed retirement: all five mc_span_cdfs RNG seeds in
+        # this function are keyed off the request scope rather than the
+        # legacy ``seed=42`` constant. Each derivation gets an
+        # independent stream so downstream consumers can recover either
+        # side without rebuilding the other.
+        from .primitives import (
+            DrawFamilyKey as _DFK,
+            PrimitiveScope as _PS,
+            TransitionIdentity as _TI,
+            make_rng as _make_rng,
+        )
 
-        rng = np.random.default_rng(42)
+        def _request_scoped_key(_label: str) -> _DFK:
+            # Atom 2 v2: scenario_id is a caller-context label, not part
+            # of the conditioned posterior's mathematical identity. Do
+            # NOT bake it into the synthetic edge_id — DrawFamilyKey's
+            # canonical_string includes edge_id, so leaking scenario_id
+            # via that field would re-introduce the divergence the v2
+            # serialisation was designed to eliminate. Two requests with
+            # the same math but different scenario labels must seed the
+            # same RNG. The (src, dst, label) triple is sufficient for
+            # request-scoped derivations.
+            _ti = _TI(
+                source_node=str(result.span_x_node_id or ''),
+                destination_node=str(query_to_node or ''),
+                edge_id=f'__request_scoped::{_label}',
+            )
+            _scope = _PS(
+                scenario_id='',
+                evidence_role='WINDOW_SUBJECT_HELPER',
+                date_from=str(upstream_anchor_from or ''),
+                date_to=str(upstream_sweep_to or ''),
+                as_at=as_at,
+                context_key=None,
+                regime_key=None,
+                model_source_preference='best_available',
+                resolved_source_identity=None,
+                selected_anchor_days=(),
+            )
+            return _DFK(
+                transition_identity=_ti,
+                scope=_scope,
+                draw_count=2000,
+                scenario_seed=0,
+            )
+
+        rng = _make_rng(_request_scoped_key('subject_span_full_path_mc'),
+                        'subject_span_full_path_mc')
         result.mc_cdf_arr, result.mc_p_s = mc_span_cdfs(
             topo=span_execution.topo,
             edge_params=span_execution.edge_params,
@@ -1832,16 +1596,9 @@ def prepare_forecast_runtime_inputs(
             num_draws=2000,
             rng=rng,
         )
-        if include_epistemic_overlay:
-            rng_epi = np.random.default_rng(42)
-            result.mc_cdf_arr_epi, result.mc_p_s_epi = mc_span_cdfs(
-                topo=span_execution.topo,
-                edge_params=span_execution.edge_params,
-                edge_sds=span_execution.edge_sds,
-                max_tau=400,
-                num_draws=2000,
-                rng=rng_epi,
-            )
+        # Epistemic-overlay second MC pass retired post-73n.
+        # ResolvedCFRuntime.unconditioned_overlays['epistemic'] owns the
+        # tight-band model curve.
         if result.anchor_relative_subject_cdf:
             edge_execution_p = build_prepared_span_execution(
                 graph_data,
@@ -1851,7 +1608,10 @@ def prepare_forecast_runtime_inputs(
                 graph_preference=graph_preference,
             )
             if edge_execution_p is not None:
-                rng_edge = np.random.default_rng(42)
+                rng_edge = _make_rng(
+                    _request_scoped_key('anchor_relative_edge_p_mc'),
+                    'anchor_relative_edge_p_mc',
+                )
                 _, result.mc_p_s = mc_span_cdfs(
                     topo=edge_execution_p.topo,
                     edge_params=edge_execution_p.edge_params,
@@ -1860,8 +1620,13 @@ def prepare_forecast_runtime_inputs(
                     num_draws=2000,
                     rng=rng_edge,
                 )
-                if include_epistemic_overlay:
-                    rng_edge_epi = np.random.default_rng(42)
+                # Epistemic anchor-relative second MC pass retired
+                # post-73n. unconditioned_overlays['epistemic'] owns it.
+                if False:
+                    rng_edge_epi = _make_rng(
+                        _request_scoped_key('anchor_relative_edge_epistemic'),
+                        'anchor_relative_edge_epistemic',
+                    )
                     _, result.mc_p_s_epi = mc_span_cdfs(
                         topo=edge_execution_p.topo,
                         edge_params=edge_execution_p.edge_params,
@@ -1892,7 +1657,43 @@ def prepare_forecast_runtime_inputs(
                 graph_preference=graph_preference,
             )
             if last_execution is not None:
-                rng_last = np.random.default_rng(42)
+                # Last-edge frontier CDF RNG also keyed off the request
+                # scope (fixed-seed retirement).
+                from .primitives import (
+                    DrawFamilyKey as _DFK2,
+                    PrimitiveScope as _PS2,
+                    TransitionIdentity as _TI2,
+                    make_rng as _make_rng2,
+                )
+                # Atom 2 v2: same as above — keep scenario_id out of
+                # both the synthetic edge_id and the scope.scenario_id so
+                # canonical_string is independent of caller-context labels.
+                _ti = _TI2(
+                    source_node=str(last_entry.get('from_node', '')),
+                    destination_node=str(last_entry.get('to_node', '')),
+                    edge_id='__request_scoped::last_edge_frontier_cdf',
+                )
+                _scope = _PS2(
+                    scenario_id='',
+                    evidence_role='WINDOW_SUBJECT_HELPER',
+                    date_from=str(upstream_anchor_from or ''),
+                    date_to=str(upstream_sweep_to or ''),
+                    as_at=as_at,
+                    context_key=None,
+                    regime_key=None,
+                    model_source_preference='best_available',
+                    resolved_source_identity=None,
+                    selected_anchor_days=(),
+                )
+                rng_last = _make_rng2(
+                    _DFK2(
+                        transition_identity=_ti,
+                        scope=_scope,
+                        draw_count=2000,
+                        scenario_seed=0,
+                    ),
+                    'last_edge_frontier_cdf',
+                )
                 result.edge_cdf_arr, _ = mc_span_cdfs(
                     topo=last_execution.topo,
                     edge_params=last_execution.edge_params,
@@ -1947,10 +1748,9 @@ def prepare_forecast_runtime_inputs(
         return provider
 
     result.x_provider = _build_runtime_x_provider(use_epistemic_mu_sd=False)
-    if include_epistemic_overlay:
-        result.x_provider_overlay = _build_runtime_x_provider(
-            use_epistemic_mu_sd=True,
-        )
+    # x_provider_overlay retired post-73n — the runtime's
+    # unconditioned_overlays['epistemic'] carrier composition owns the
+    # tight-band carrier surface for active cohort.
 
     # 73h Stage 3 + reviewer-H1: resolve the typed-merge evidence role
     # once, before either the merge or the runtime-bundle build. Both
@@ -2070,11 +1870,20 @@ def prepare_forecast_runtime_inputs(
                         for c in snapshot_candidates
                     ]
                     candidates = list(file_candidates) + snapshot_candidates
+                    # 73n evidence-clock alignment: the per-primitive
+                    # merge with arrival-weight-derived date bounds
+                    # happens downstream in `primitive_readout`. The
+                    # request-level merge here is retained as
+                    # compatibility provenance only — `evidence_set` is
+                    # no longer the authoritative input to primitive
+                    # conditioning. Raw candidates flow through as
+                    # `evidence_candidates`.
                     evidence_set = merge_evidence_candidates(
                         evidence_scope,
                         candidates,
                     )
                     result.evidence_set = evidence_set
+                    result.evidence_candidates = candidates
                     extras: list[tuple] = []
                     for point in evidence_set.points:
                         # Snapshot-source points already flow into the engine

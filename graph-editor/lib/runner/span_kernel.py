@@ -152,6 +152,20 @@ def _build_span_topology(
         uuid_to_id[uuid] = nid
         uuid_to_id[nid] = nid
 
+    # Canonicalise the BFS endpoints. Adjacency is built on canonical
+    # (id-form) keys; callers may pass either id or uuid form for x_node_id
+    # / y_node_id (e.g. CF's `build_x_provider_from_graph` passes
+    # anchor_node_id as id-form while `get_edge_from_node(target_edge)`
+    # returns uuid-form). Without canonicalising the endpoints, the BFS
+    # silently fails to find the path and the caller treats it as
+    # "no carrier" — see the carrier-evidence divergence in
+    # docs/current/snapshot-fetch-envelope-design.md (Atom-2-adjacent fix).
+    x_canon = uuid_to_id.get(x_node_id, x_node_id)
+    y_canon = uuid_to_id.get(y_node_id, y_node_id)
+
+    if x_canon == y_canon:
+        return None
+
     adjacency: Dict[str, List[Tuple[str, Dict]]] = {}
     for e in edges:
         from_uuid = e.get('from_node', e.get('from', ''))
@@ -162,10 +176,10 @@ def _build_span_topology(
             adjacency[from_id] = []
         adjacency[from_id].append((to_id, e))
 
-    # Forward BFS from x
+    # Forward BFS from x (canonical form)
     forward_reachable = set()
-    queue = deque([x_node_id])
-    forward_reachable.add(x_node_id)
+    queue = deque([x_canon])
+    forward_reachable.add(x_canon)
     while queue:
         node = queue.popleft()
         for to_id, _ in adjacency.get(node, []):
@@ -173,10 +187,10 @@ def _build_span_topology(
                 forward_reachable.add(to_id)
                 queue.append(to_id)
 
-    if y_node_id not in forward_reachable:
+    if y_canon not in forward_reachable:
         return None
 
-    # Backward BFS from y
+    # Backward BFS from y (canonical form)
     reverse_adj: Dict[str, List[str]] = {}
     for from_id, targets in adjacency.items():
         for to_id, _ in targets:
@@ -185,8 +199,8 @@ def _build_span_topology(
             reverse_adj[to_id].append(from_id)
 
     backward_reachable = set()
-    queue = deque([y_node_id])
-    backward_reachable.add(y_node_id)
+    queue = deque([y_canon])
+    backward_reachable.add(y_canon)
     while queue:
         node = queue.popleft()
         for from_id in reverse_adj.get(node, []):
@@ -195,8 +209,12 @@ def _build_span_topology(
                 queue.append(from_id)
 
     on_path = forward_reachable & backward_reachable
-    if x_node_id not in on_path or y_node_id not in on_path:
+    if x_canon not in on_path or y_canon not in on_path:
         return None
+    # Use canonical forms downstream so SpanTopology.x_node_id / y_node_id
+    # are consistently the id-form regardless of caller input.
+    x_node_id = x_canon
+    y_node_id = y_canon
 
     # Topological sort
     in_degree: Dict[str, int] = {n: 0 for n in on_path}

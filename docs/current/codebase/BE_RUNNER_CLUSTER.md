@@ -2,7 +2,7 @@
 
 The Python backend's analysis and forecasting layer. **18,481 LOC across 30+ files** — larger than the entire `bayes/compiler/` tree. This doc is the missing umbrella; before this, the cluster was only addressed indirectly through STATS_SUBSYSTEMS, ANALYSIS_TYPES_CATALOGUE, and FE_BE_STATS_PARALLELISM.
 
-**See also**: [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) (the canonical four-subsystem disambiguation map and "which Python entry point do I call" table — read that first if you don't know which function you should be calling), [ANALYSIS_TYPES_CATALOGUE.md](ANALYSIS_TYPES_CATALOGUE.md) (per-runner inventory), [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) (FE topo + CF orchestration), [adding-analysis-types.md](adding-analysis-types.md) (developer guide).
+**See also**: [stats-pipeline-schematic.md](stats-pipeline-schematic.md) (single-canvas field-flow schematic), [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) (the canonical four-subsystem disambiguation map and "which Python entry point do I call" table — read that first if you don't know which function you should be calling), [ANALYSIS_TYPES_CATALOGUE.md](ANALYSIS_TYPES_CATALOGUE.md) (per-runner inventory), [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) (FE topo + CF orchestration), [adding-analysis-types.md](adding-analysis-types.md) (developer guide).
 
 ---
 
@@ -25,6 +25,15 @@ graph-editor/lib/runner/
 ├── forecast_application.py           #   228 — annotate_rows, annotate_data_point (legacy blend)
 ├── forecast_preparation.py           #   573 — resolve_forecast_subjects, regime selection plumbing
 ├── forecasting_settings.py           #   161 — per-repo forecasting-knob configuration
+│
+├── primitives.py                     #   508 — ConditionedTransitionPrimitive, TransitionIdentity, PrimitiveScope, DrawFamilyKey, RNG keying via make_rng (73n Stage 1)
+├── prefix_arrival.py                 #   459 — prefix-arrival map (73n Stage 2)
+├── primitive_evidence.py             #   577 — admitted window() evidence resolution per primitive (73n Stage 2)
+├── primitive_conditioning.py         #   775 — subset / effective-evidence policy + conjugate update applied at primitive construction (73n Stage 3)
+├── primitive_residual_guard.py       #   450 — explicit unsupported markers for residual / complement / unparameterised edges (73n Stage 4)
+├── subject_span_composer.py          #   664 — compose_subject_span — DAG composition over primitives, returns ComposedSubjectSpan (73n Stage 5b)
+├── primitive_readout.py              # 2,609 — four flag-gated readouts: single-hop / multi-hop subject / multi-hop window / active-cohort carrier (73n Stages 5a, 5b, 5c, 6)
+│   (../result_cache.py)              #   279 — generic TTL result-cache utility, registry, clear_all (73n Stage 7; lives one level up at lib/result_cache.py)
 │
 ├── cohort_forecast.py                # 1,638 — v1 cohort maturity (legacy, dev-only)
 ├── cohort_forecast_v2.py             # 1,210 — v2 cohort maturity (legacy, dev-only)
@@ -116,6 +125,78 @@ runners.run_<analysis_type>(graph, params, ...)
 
 Both are inner kernels. **Analysis runners must not import them directly** — use the public `handle_conditioned_forecast` surface instead. See STATS_SUBSYSTEMS §7 entry-point disambiguation table.
 
+## 3a. The conditioned-primitive substrate (73n, default OFF)
+
+73n (Stages 1–8 landed 1-May-26) added a typed primitive substrate
+**inside** the CF kernel boundary, between `forecast_runtime` bundle
+preparation and the `forecast_state` row builder. The pre-73n
+trajectory / summary route remains the live path; primitive readouts
+are gated behind environment-variable flags, all defaulting to OFF.
+
+### Module map
+
+| File | Stage | Responsibility |
+|---|---|---|
+| `primitives.py` | 1 | `ConditionedTransitionPrimitive` — typed posterior over one parameterised edge in a single `(scope, regime, context)` triple. Carries probability + timing posteriors, draw-family identity, raw / weighted / effective evidence views, residual classification. RNG keying via `DrawFamilyKey` + `make_rng`. |
+| `prefix_arrival.py` | 2 | Prefix-arrival map: per-edge `tau` distribution induced by the upstream subject prefix. Consumed by primitive evidence resolution and the multi-hop readouts. |
+| `primitive_evidence.py` | 2 | Resolves admitted `window()` evidence per primitive; produces the raw and weighted views used by primitive conditioning. |
+| `primitive_conditioning.py` | 3 | Applies the subset and effective-evidence policy **once at primitive construction**; emits the conjugate Beta-Binomial update; records doc 52 compatibility-blend metadata. **The single locus** for "what evidence moved this rate". |
+| `primitive_residual_guard.py` | 4 | Explicit unsupported classification for residual / complement / unparameterised edges. The substrate never silently invents timing or rate. |
+| `subject_span_composer.py` | 5b | `compose_subject_span` runs DAG composition over conditioned primitives; returns `ComposedSubjectSpan`. Reused by the multi-hop and active-cohort readouts. |
+| `primitive_readout.py` | 5a, 5b, 5c, 6 | The four readouts at the shared row-builder seam — single-hop, multi-hop subject, multi-hop window, active-cohort carrier. Each is independently flag-gated. |
+| `lib/result_cache.py` | 7 | Generic process-memory TTL result-cache utility. Registry; `clear_all()`; `cache_bypass_ctx` for per-request bypass. The existing snapshot-DB cache was migrated onto it; primitive, composed-carrier, and composed-subject caches register alongside. |
+
+### Flag-gated rollout
+
+| Flag | Stage | Surface |
+|---|---|---|
+| `DAGNET_SINGLE_HOP_PRIMITIVE_READOUT` | 5a | Single-hop window and single-hop subject (`A == X`) cohort readout |
+| `DAGNET_MULTI_HOP_SUBJECT_COMPOSITION` | 5b | Multi-hop cohort `A == X` subject-span composition |
+| `DAGNET_MULTI_HOP_WINDOW_READOUT` | 5c | Multi-hop `window()` reuses the Stage 5b composer under an independent flag |
+| `DAGNET_ACTIVE_COHORT_CARRIER_READOUT` | 6 | Active cohort `A != X` reads through 73m's `compose_carrier_to_x` plus Stage 5b's `compose_subject_span` |
+
+Each flag accepts `OFF` (live path), `SHADOW` (compute primitive
+readout in parallel and emit divergence diagnostics, return live
+result), and `ON` (return primitive readout). **Production flag-ON
+for any of the four is blocked** on a single follow-up: maturity-aware
+likelihood migration into the primitive posterior. SHADOW is the
+highest mode recommended for production while that follow-up is open.
+
+### Cache invalidation contract
+
+Primitive, composed-carrier, and composed-subject caches use
+scope-bearing keys (changes to scope = different key = miss) plus a
+TTL. There is no per-key targeted invalidation. Any
+`result_cache.clear_all()` call — snapshot writes,
+`/api/snapshots/cache-clear`, the per-request `no_cache: true` flag's
+`cache_bypass_ctx` bypass — flushes every registered cache. The plan
+§739 stop-condition's "an unrelated primitive's cache entry survives"
+clause was deliberately softened in Stage 7; per-key invalidation is a
+documented follow-up.
+
+### Provenance threading on the response
+
+Stage 8 widened `ConditionedTransitionPrimitive.to_provenance_dict()`
+and threaded the per-primitive substrate through every readout's
+diagnostic block. Under flag SHADOW or ON, the `[I12]` response carries
+per-primitive: identity, evidence role, raw / weighted / effective
+evidence totals, evidence-clock provenance, prior source, conditioning
+status, draw-family identity, residual / complement diagnostics,
+composed subject + carrier topology, and an optional Stage 7
+`cache_status` snapshot. The top-level `[I12]` field shape is
+unchanged.
+
+`PreparedConditioningEvidence` is now **compatibility metadata only**
+— consumers must read per-primitive provenance, not
+`p_conditioning_evidence`, to determine which evidence family
+conditioned a primitive. The serialised block on the response carries
+an explicit `compatibility_metadata_note`. Retirement of
+`p_conditioning_evidence` is tracked as Stage 8 Follow-up 8.
+
+For the post-73n CF substrate end-to-end picture see
+[FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) §B.6 and
+[STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) §3.3a.
+
 ## 4. The cohort-forecast lineage (v1 → v2 → v3)
 
 | File | Status | Notes |
@@ -179,9 +260,10 @@ When working in this cluster:
 
 - **New analysis runner** → start in `analysis_types.yaml`, then `runners.py`, then update FE registry per [adding-analysis-types.md](adding-analysis-types.md). Do not invent a new forecast path — use `handle_conditioned_forecast` for forecast-backed analyses.
 - **New forecast-engine field** → add to `ForecastSummary` / `CohortForecastAtEval` / `ForecastTrajectory` in `forecast_state.py`, then through `compute_forecast_summary`/`_trajectory`, then expose via `handle_conditioned_forecast` in `api_handlers.py`. See anti-pattern 14 for how to avoid silent drops in `_build_unified_slices`. Post-73m Stage 6, `ForecastTrajectory` carries diagnostic fields naming the source of each load-bearing object: `subject_span_source`, `subject_probability_source`, `is_completeness_source`, `evidence_denominator` (Stage 4); `carrier_reach`, `carrier_cdf_source`, `path_completeness_source`, `legacy_non_latency_router_bypassed` (Stage 6); plus `runtime_bundle_diag` carrying the full carrier provenance (`cdf_source`, `horizon_ratio`, `transition_source`, …). 73n is expected to expand the existing enums for active cohort(A!=X) — `is_completeness_source` to `'prepared_cdf_arr' | 'path_completeness'`, `path_completeness_source` to `'subject_span_only' | 'composed_path_completeness'`, `evidence_denominator` to `'x_at_x' | 'a_at_anchor'`.
-- **Touching the rate-conditioning seam** → read STATS_SUBSYSTEMS §3.3 first. The seam lives in `forecast_runtime.py:build_prepared_runtime_bundle`; current behaviour is intentionally narrow (WP8 lands `direct_cohort_enabled` for exact single-hop `cohort(A,X-Y)` only).
+- **Touching the rate-conditioning seam** → read STATS_SUBSYSTEMS §3.3 first. The seam lives in `forecast_runtime.py:build_prepared_runtime_bundle`; current behaviour is intentionally narrow (WP8 lands `direct_cohort_enabled` for exact single-hop `cohort(A,X-Y)` only). Post-73n Stage 8, `PreparedConditioningEvidence` is **compatibility metadata only** — read per-primitive provenance (§3a) to determine which evidence family conditioned a primitive, not `p_conditioning_evidence`.
 - **Touching v3 row construction** → there is no router fork to choose; all cohort_maturity v3 rows flow through `compute_forecast_trajectory` post-73m Stage 5. If a future stage adds a route, surface the bypass on `runtime_bundle_diag.legacy_non_latency_router_bypassed` (currently always `True`) so forensic traces can detect it without code inspection.
-- **Touching `build_cohort_evidence_from_frames`** → known AP58 instance on the count axis (the `is_window`-gated fallback at `:750-769` vs the carrier-projection rebuild at `:775-803`). 73n owns the fix via its primitive registry + composition / projection passes. Do NOT smuggle a partial fix into other stages; the four strict-xfailed tests in `test_cohort_factorised_outside_in.py` are the regression net for when 73n lands. See KNOWN_ANTI_PATTERNS AP58.
+- **Touching `build_cohort_evidence_from_frames`** → known AP58 instance on the count axis (the `is_window`-gated fallback at `:750-769` vs the carrier-projection rebuild at `:775-803`). 73n stages 1–8 added the primitive substrate (§3a) that owns the fix; the four strict-xfailed tests in `test_cohort_factorised_outside_in.py` are the regression net. Production flag-ON of the readouts is gated on the maturity-aware likelihood migration follow-up (see §3a). See KNOWN_ANTI_PATTERNS AP58.
+- **Touching the primitive substrate (§3a)** → all four readout flags default OFF; SHADOW mode is the highest recommended in production until the maturity-aware likelihood migration follow-up lands. The single conditioning locus is `primitive_conditioning.py` — never apply subset / effective-evidence / conjugate-update logic in carrier, subject, window, or projection consumers; that's the failure mode the substrate exists to prevent. Cache invalidation is coarse-grained — `result_cache.clear_all()` flushes every registered cache; per-key invalidation is a documented follow-up.
 - **Adding a derivation** → keep it pure; consume engine output, don't fetch directly. Snapshot DB queries belong in `api_handlers.py` (which then calls the derivation).
 
 ## 10. Pitfalls

@@ -245,7 +245,20 @@ def _mixture_log_normal_quantile(percentile: float, components: List[Dict[str, A
         # FE parity: quality gate for component fit uses floor(weight) (>=1).
         # This intentionally forces small components to use default sigma conservatively.
         k_for_fit = max(1, int(math.floor(u["w"])))
-        fit = fit_lag_distribution(u["median"], u["mean"], k_for_fit)
+        # Graceful degradation: fit_lag_distribution raises on garbage / mean-missing
+        # input. Skip this component rather than fabricating defaults. Python BE has
+        # no session log — emit a marker on stderr so the failure is visible.
+        try:
+            fit = fit_lag_distribution(u["median"], u["mean"], k_for_fit)
+        except Exception as _exc:
+            import sys as _sys
+            print(
+                f"[lag_fit_failed] component skipped: median={u['median']} "
+                f"mean={u['mean']} k={k_for_fit} reason={_exc}",
+                file=_sys.stderr,
+                flush=True,
+            )
+            continue
         fitted.append({"w": u["w"], "mu": fit.mu, "sigma": fit.sigma, "median": u["median"]})
 
     min_median = min(f["median"] for f in fitted)
@@ -469,15 +482,38 @@ def fit_model_from_evidence(
     # Step 4: Fit initial distribution.
     # FE parity: use recency-weighted K for the quality gate, matching
     # FE's totalKForFit = sum(c.k * computeRecencyWeight(c.age, halfLife)).
-    initial_fit = fit_lag_distribution(
-        median_lag=median_x,
-        mean_lag=mean_x,
-        total_k=total_k_recency_weighted,
-        min_fit_converters=settings.min_fit_converters,
-        default_sigma=settings.default_sigma,
-        min_mean_median_ratio=settings.min_mean_median_ratio,
-        max_mean_median_ratio=settings.max_mean_median_ratio,
-    )
+    # Graceful degradation: fit_lag_distribution raises on garbage / mean-missing
+    # input. Return a quality-failed FitResult instead of fabricating defaults.
+    try:
+        initial_fit = fit_lag_distribution(
+            median_lag=median_x,
+            mean_lag=mean_x,
+            total_k=total_k_recency_weighted,
+            min_fit_converters=settings.min_fit_converters,
+            default_sigma=settings.default_sigma,
+            min_mean_median_ratio=settings.min_mean_median_ratio,
+            max_mean_median_ratio=settings.max_mean_median_ratio,
+        )
+    except Exception as _exc:
+        import sys as _sys
+        print(
+            f"[lag_fit_failed] initial fit raised: median_x={median_x} mean_x={mean_x} "
+            f"total_k_recency={total_k_recency_weighted} reason={_exc}",
+            file=_sys.stderr,
+            flush=True,
+        )
+        return FitResult(
+            mu=0.0,
+            sigma=0.0,
+            t95_days=0.0,
+            onset_delta_days=float(agg_onset or 0.0),
+            quality_ok=False,
+            total_k=int(total_k or 0),
+            quality_failure_reason=f'Fit raised: {_exc}',
+            training_window=training_window,
+            settings_signature=settings_signature,
+            evidence_anchor_days=len(evidence),
+        )
 
     mu = initial_fit.mu
     sigma = initial_fit.sigma

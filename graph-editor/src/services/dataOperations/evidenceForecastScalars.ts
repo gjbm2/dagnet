@@ -266,16 +266,16 @@ export function addEvidenceAndForecastScalars(
     t95Days?: number;
     /** As-of date for maturity + recency weighting. Must be max(window date) when available. */
     asOfDate: Date;
-  }): { mean?: number; weightedN: number; weightedK: number; maturityDays: number; usedAllDaysFallback: boolean } => {
+  }): { mean?: number; weightedN: number; weightedK: number; rawN: number; maturityDays: number; usedAllDaysFallback: boolean } => {
     const { bestWindow, t95Days: innerT95Days, asOfDate } = args;
     const dates: string[] | undefined = bestWindow?.dates;
     const nDaily: number[] | undefined = bestWindow?.n_daily;
     const kDaily: number[] | undefined = bestWindow?.k_daily;
     if (!Array.isArray(dates) || !Array.isArray(nDaily) || !Array.isArray(kDaily)) {
-      return { mean: undefined, weightedN: 0, weightedK: 0, maturityDays: 0, usedAllDaysFallback: false };
+      return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays: 0, usedAllDaysFallback: false };
     }
     if (dates.length === 0 || nDaily.length !== dates.length || kDaily.length !== dates.length) {
-      return { mean: undefined, weightedN: 0, weightedK: 0, maturityDays: 0, usedAllDaysFallback: false };
+      return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays: 0, usedAllDaysFallback: false };
     }
 
     // Mature cutoff: exclude the most recent (ceil(t95)+1) days, which are systematically under-counted for lagged conversions.
@@ -332,15 +332,15 @@ export function addEvidenceAndForecastScalars(
     }
 
     if (weightedN > 0) {
-      return { mean: weightedK / weightedN, weightedN, weightedK, maturityDays, usedAllDaysFallback: false };
+      return { mean: weightedK / weightedN, weightedN, weightedK, rawN: totalNAll, maturityDays, usedAllDaysFallback: false };
     }
 
     // Fallback: censoring left no mature days; use full-window mean if available.
     if (totalNAll > 0) {
-      return { mean: totalKAll / totalNAll, weightedN: totalNAll, weightedK: totalKAll, maturityDays, usedAllDaysFallback: true };
+      return { mean: totalKAll / totalNAll, weightedN: totalNAll, weightedK: totalKAll, rawN: totalNAll, maturityDays, usedAllDaysFallback: true };
     }
 
-    return { mean: undefined, weightedN: 0, weightedK: 0, maturityDays, usedAllDaysFallback: false };
+    return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays, usedAllDaysFallback: false };
   };
 
   // === 2) Forecast scalars (query-time recompute from matching window() slice daily arrays) ===
@@ -691,6 +691,7 @@ export function addEvidenceAndForecastScalars(
       });
       const weightedNTotal = dailyResult.weightedN;
       const weightedKTotal = dailyResult.weightedK;
+      const rawNTotal = dailyResult.rawN;
       const maturityDaysUsed = dailyResult.maturityDays;
       const usedAllDaysFallback = dailyResult.usedAllDaysFallback;
 
@@ -760,6 +761,7 @@ export function addEvidenceAndForecastScalars(
           stdev_pred: forecastStdevPredComputed,
           weighted_n: weightedNTotal,
           weighted_k: weightedKTotal,
+          raw_n: rawNTotal,
           as_of: asOfDate.toISOString(),
           target_slice: targetSlice,
         };

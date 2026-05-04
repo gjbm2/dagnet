@@ -6,7 +6,7 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
 
 **Forecasting machinery**
 - **B.** Compliance test tracker — [73f](docs/current/project-bayes/73f-outside-in-cohort-engine-investigation.md)
-  - **Bi.** Problems with non-latency edges — Phase 1 closed by [73m](docs/current/project-bayes/73m-carrier-composition-and-router-unification-implementation-plan.md) (router unification + carrier composition, all 9 stages complete 1-May-26). Phase 2 (carrier evidence-conditioning, 73h Issue 2 surface 2) **open and owned by [73n](docs/current/project-bayes/73n-carrier-evidence-conditioning-implementation-plan.md)**. Stage record + AP58 finding + held-over tests: [73m-stage-0-baseline.md §§9-12](docs/current/project-bayes/73m-stage-0-baseline.md). 73n acceptance criteria below.
+  - **Bi.** Problems with non-latency edges — Phase 1 closed by [73m](docs/current/project-bayes/73m-carrier-composition-and-router-unification-implementation-plan.md) (router unification + carrier composition, all 9 stages complete 1-May-26). Phase 2 (carrier evidence-conditioning, 73h Issue 2 surface 2) **open and owned by [73n](docs/current/project-bayes/73n-carrier-evidence-conditioning-implementation-plan.md)**. Stage record + AP58 finding + held-over tests: [73m-stage-0-baseline.md §§9-12](docs/current/project-bayes/  73m-stage-0-baseline.md). 73n acceptance criteria below.
     - **73n flip-to-green strict-xfails** (in `graph-editor/lib/tests/test_cohort_factorised_outside_in.py`, all carry precise `reason=` naming the AP58 fork in `build_cohort_evidence_from_frames` and 73n's primitive registry as the fix path; `strict=True` so XPASS surfaces as suite failure prompting marker removal):
       1. `test_degenerate_identity_and_instant_carrier_oracles_reduce_to_subject_kernel` — instant-carrier τ=0 zero
       2. `test_multihop_non_latent_upstream_collapse` — window vs cohort rate divergence at small τ
@@ -18,8 +18,11 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
       - Two outside-in flakes pass in isolation but exhibit serial-state effects when run after other tests in the same pytest session: `test_cli_identity_collapse...`, `test_cli_projection_parity...`. Partly addressable by 73n's request-scoped primitive registry; full diagnosis is its own ticket.
 - **C.** Refresh may not trigger CF pass for all scenarios — no doc yet — **investigate**
 - **D.** Once FE vars flows tested, test Bayes vars flows properly — [modelvars audit 30-Apr-26](docs/current/modelvars-flow-forensic-audit-30-Apr-26.md) — **pending FE flow validation**
-- RETIRE v1, v2 cohortmaturity ++ all associated files
+- **73n follow-up — migrate `daily_conversions` and `surprise_gauge` onto `ResolvedCFRuntime`.** The v3 CF row/scalar path is now fully runtime-driven (`compute_cohort_maturity_rows_v3` reads composed primitive draws). `compute_forecast_trajectory` and its `XProvider` / `from_node_arrival` / `compose_timing_span_from_graph` plumbing only survive because two non-CF analyses still use them: `daily_conversions` row annotation + latency bands ([api_handlers.py:3735](graph-editor/lib/api_handlers.py#L3735), [:3826](graph-editor/lib/api_handlers.py#L3826)), and `surprise_gauge` ([api_handlers.py:414](graph-editor/lib/api_handlers.py#L414)). Once both are migrated, the trajectory engine and its legacy timing helpers can be deleted. (v1/v2 retirement is the separate item below.)
+- RETIRE v1, v2 cohortmaturity ++ all associated files: docs/current/cohort-maturity-v1-v2-retirement-plan.md 
 - "Spike B3" work to use cohort() data properly
+- is epist. or predict. banding right on cohortmaturity curve? ...in f mode? in e+f mode?? under degernerate subset -> global case???
+- poss. issue with t95 roundtrip bloating.../ horizon llogic
 
 **Nightly fetch**
 - **E.** Problematically slow — [daily-automation-audit 28-Feb-26](docs/current/daily-automation-audit-28-feb-26.md), [programme P2.11](docs/current/project-bayes/programme.md) — **needs instrumentation & optimisation**
@@ -32,6 +35,11 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
 ---
 
 ## General forecasting work
+
+- **Doc 52 blend mass semantics: keep raw/raw, not weighted/weighted** (4-May-26)
+  - Decision: `n_effective` is doc-52 overlap mass, not posterior precision. Emit raw local training count as `m_G` from both Bayes and FE analytic model-vars; compute runtime `m_S` from raw admitted selected rows. Keep arrival-weighted / recency-weighted counts only for likelihood shape and moment fitting.
+  - Fixed current mixed-unit bug: primitive conditioning was comparing arrival-weighted `n_weighted_total` against raw `n_effective`; FE topo analytic model-vars were exporting recency-weighted `weighted_n` as `n_effective` while Bayes exported raw count.
+  - Residual approximation: raw/raw ignores recency in the doc-52 ratio. It can under-correct recent subsets from long recency-weighted fits and over-correct old subsets. Revisit only if calibration shows this residual matters; do not switch just one side to recency-weighted.
 
 - **Strip stale graph-edge fields left over from retired writers** (29-Apr-26)
   - `edge.p.forecast_state` — no FE writer; no live FE compute reader; populated only by the retired BE topo lane (post-73b, removed 24-Apr-26) and never refreshed since. `source: "analytic_be"`, `tier: "be_forecast"` on stamped instances. Strip from the graph schema and from snapshot deserialisation. Verify no Python consumer still keys off it before deleting (preliminary trace: only retired-lane code reads it).

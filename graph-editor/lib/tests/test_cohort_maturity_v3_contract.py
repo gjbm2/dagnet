@@ -985,3 +985,178 @@ def test_v3_empty_frames_cohort_mode_matches_truth_fw_curve():
             for tau, mid, exp in model_failures[:5]
         )
     )
+
+
+# ── Model-curve overlay (epistemic) row-field contract ────────────────
+
+
+def test_model_curve_fields_absent_when_toggle_off():
+    """Default ``show_model_curve=False``: rows must NOT carry populated
+    ``model_curve_*`` fields. Either absent or all-None is acceptable;
+    populated would mean the BE is paying the epistemic-overlay MC cost
+    on every request regardless of toggle.
+    """
+    graph = _build_single_edge_graph()
+    frames, anchor_from, sweep_to = _build_synth_frames(
+        anchor_to=date(2026, 3, 10),
+        sweep_days=20,
+        n_cohorts=10,
+    )
+    rows_off = compute_cohort_maturity_rows_v3(
+        frames=frames,
+        graph=graph,
+        target_edge_id='e1',
+        query_from_node='node-a',
+        query_to_node='node-b',
+        anchor_from='2026-03-01',
+        anchor_to=anchor_from,
+        sweep_to=sweep_to,
+        is_window=True,
+        axis_tau_max=60,
+        band_level=0.90,
+        scenario_id='test_model_curve',
+        # show_model_curve defaults to False
+    )
+    rows = rows_off
+    assert rows, 'expected non-empty rows from v3 row builder'
+    populated = [
+        r for r in rows
+        if r.get('model_curve_midpoint') is not None
+        or r.get('model_curve_fan_upper') is not None
+        or r.get('model_curve_fan_lower') is not None
+        or r.get('model_curve_bands') is not None
+    ]
+    assert not populated, (
+        f'show_model_curve=False but {len(populated)} rows carry '
+        f'populated model_curve_* fields: '
+        f'{populated[0]!r}'
+    )
+
+
+def test_model_curve_fields_populated_when_toggle_on():
+    """``show_model_curve=True``: rows must carry the epistemic overlay
+    surface — midpoint, fan upper/lower, and a band dict. The midpoint
+    is monotonically non-decreasing in τ (CDF property of `p · CDF(τ)`).
+    Bands must envelope the midpoint, and band keys must follow the
+    canonical {80,90,95,99} levels.
+    """
+    graph = _build_single_edge_graph()
+    frames, anchor_from, sweep_to = _build_synth_frames(
+        anchor_to=date(2026, 3, 10),
+        sweep_days=20,
+        n_cohorts=10,
+    )
+    rows = compute_cohort_maturity_rows_v3(
+        frames=frames,
+        graph=graph,
+        target_edge_id='e1',
+        query_from_node='node-a',
+        query_to_node='node-b',
+        anchor_from='2026-03-01',
+        anchor_to=anchor_from,
+        sweep_to=sweep_to,
+        is_window=True,
+        axis_tau_max=60,
+        band_level=0.90,
+        scenario_id='test_model_curve',
+        show_model_curve=True,
+    )
+    assert rows, 'expected non-empty rows from v3 row builder'
+
+    populated_rows = [
+        r for r in rows
+        if r.get('model_curve_midpoint') is not None
+    ]
+    assert populated_rows, (
+        'show_model_curve=True but no rows carry model_curve_midpoint — '
+        'the epistemic overlay is not being projected into row fields'
+    )
+
+    # Schema: every populated row carries the full overlay surface.
+    expected_band_keys = {'80', '90', '95', '99'}
+    for r in populated_rows:
+        for field in ('model_curve_fan_upper', 'model_curve_fan_lower'):
+            assert r.get(field) is not None, (
+                f'row tau={r.get("tau_days")} has model_curve_midpoint '
+                f'but missing {field}'
+            )
+        bands = r.get('model_curve_bands')
+        assert isinstance(bands, dict) and bands, (
+            f'row tau={r.get("tau_days")} model_curve_bands is not a '
+            f'non-empty dict: {bands!r}'
+        )
+        assert set(bands.keys()) >= expected_band_keys, (
+            f'model_curve_bands keys {set(bands.keys())} missing some of '
+            f'{expected_band_keys}'
+        )
+        for level, bounds in bands.items():
+            assert isinstance(bounds, list) and len(bounds) == 2, (
+                f'band[{level}] is not [lo, hi]: {bounds!r}'
+            )
+            lo, hi = float(bounds[0]), float(bounds[1])
+            assert 0.0 <= lo <= hi <= 1.0, (
+                f'band[{level}] = [{lo}, {hi}] violates 0 ≤ lo ≤ hi ≤ 1'
+            )
+
+    # Midpoint monotonically non-decreasing in τ (rate = p · CDF(τ)
+    # under non-negative draws; sample noise can cause tiny dips at
+    # finite S — allow a small tolerance).
+    sorted_pop = sorted(
+        populated_rows, key=lambda r: int(r['tau_days']),
+    )
+    monotone_violations = []
+    for i in range(1, len(sorted_pop)):
+        prev = float(sorted_pop[i - 1]['model_curve_midpoint'])
+        cur = float(sorted_pop[i]['model_curve_midpoint'])
+        if cur + 0.01 < prev:
+            monotone_violations.append(
+                (sorted_pop[i]['tau_days'], prev, cur)
+            )
+    assert not monotone_violations, (
+        f'model_curve_midpoint not monotone in τ: '
+        f'{monotone_violations[:3]}'
+    )
+
+    # Bands envelope the midpoint at the canonical 80% level.
+    for r in populated_rows:
+        mid = float(r['model_curve_midpoint'])
+        bands = r['model_curve_bands']
+        if '80' in bands:
+            lo, hi = float(bands['80'][0]), float(bands['80'][1])
+            assert lo - 0.005 <= mid <= hi + 0.005, (
+                f'tau={r["tau_days"]} 80% band [{lo}, {hi}] does not '
+                f'envelope midpoint {mid}'
+            )
+
+
+def test_predictive_model_fields_always_populated():
+    """F-mode predictive overlay (``model_*`` row fields) must populate
+    regardless of ``show_model_curve`` — F mode is mandatory chart
+    content, not toggleable."""
+    graph = _build_single_edge_graph()
+    frames, anchor_from, sweep_to = _build_synth_frames(
+        anchor_to=date(2026, 3, 10),
+        sweep_days=20,
+        n_cohorts=10,
+    )
+    for show in (False, True):
+        rows = compute_cohort_maturity_rows_v3(
+            frames=frames,
+            graph=graph,
+            target_edge_id='e1',
+            query_from_node='node-a',
+            query_to_node='node-b',
+            anchor_from='2026-03-01',
+            anchor_to=anchor_from,
+            sweep_to=sweep_to,
+            is_window=True,
+            axis_tau_max=60,
+            band_level=0.90,
+            scenario_id='test_model_curve',
+            show_model_curve=show,
+        )
+        populated = [r for r in rows if r.get('model_midpoint') is not None]
+        assert populated, (
+            f'show_model_curve={show}: no rows carry model_midpoint '
+            f'(F-mode predictive overlay must always populate)'
+        )

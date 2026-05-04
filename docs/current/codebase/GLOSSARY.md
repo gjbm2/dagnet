@@ -75,6 +75,18 @@ When in doubt, this glossary points at the canonical doc; that doc is the source
 
 ---
 
+## Cohort-maturity chart display modes
+
+The `cohort_maturity_v3` chart can render three trajectory modes per scenario, selected in the FE chart UI. They differ in which forecast-engine output series they read from each row:
+
+- **F mode** (model-only forecast) — reads `model_midpoint` / `model_fan_*` / `model_bands`. Pure-model projection: aggregate posterior `p` (from the resolved source-ledger model) times the latency CDF at τ. Decoupled from per-cohort observed slices — invariant under query window choice for a given fixture/posterior. F is `compute_forecast_trajectory.model_rate_draws` aggregated by `np.median` per τ.
+- **E+F mode** (evidence + forecast) — reads `midpoint` / `fan_*` / `fan_bands`. Data-conditioned trajectory: cohort-loop output with IS conditioning on per-cohort observed slices, doc-52-blended with the IS-off twin where evidence is sparse. Pulls toward local evidence; varies sharply by query window.
+- **E mode** (evidence-only) — reads `evidence_y` / `evidence_x` (Σy, Σx aggregated across cohorts contributing observation at τ). The chart shows the observed slice without model projection.
+
+The bead display modes in [BEAD_DISPLAY_MODE.md](BEAD_DISPLAY_MODE.md) are a different concept (per-edge bead rendering), even though they reference "E or F mode" — those refer to which rate series feeds bead `k` values.
+
+The F vs E+F invariant: at τ = `tau_solid_max` both lines should agree (latency CDF still small leaves both ≈ 0 in the typical drift-free case); off-frontier they diverge under drift / window-localised evidence. The contract — that F is the model-only projection, NOT a re-render of cohort observations — was restored 1-May-26 (regression where `model_rate_draws` had been wired to the cohort-loop IS-off twin).
+
 ## Cohort/Window roles
 
 - **A** — Anchor node (cohort entry node).

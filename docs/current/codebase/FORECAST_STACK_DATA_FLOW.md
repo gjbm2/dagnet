@@ -15,6 +15,9 @@ below with the materialisation, transport, and CLI changes shipped by
 28-Apr-26). The original project-bayes path now redirects here.
 
 **Cross-references**:
+- [stats-pipeline-schematic.md](stats-pipeline-schematic.md) —
+  the single-canvas field-flow schematic for writers, layer bands,
+  persistence, and reader dispatch.
 - [73b plan body](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) —
   the layered contract this doc diagrams (sections 3.1–3.9, 6.x, 12, etc.).
   When the body of this doc says "§3.3.4" or "§6.5" without a doc prefix,
@@ -625,3 +628,114 @@ and not surfaced to the CLI.
   surface does not currently forward `snapshot_subjects` — migrating
   those is gated on extending the dispatch shape or relocating them
   as Python BE integration tests.
+
+## B.6 Post-73n supplement — conditioned transition primitive substrate
+
+73n (Stages 1–8 landed 1-May-26) added a second forecasting substrate
+that sits **inside** the CF inner-kernel boundary already defined by
+B.3 (between the `[I10]` request and the `[I12]` response). The labelled
+interfaces I1–I17 are unchanged. What changed is how CF computes its
+per-edge outputs internally.
+
+### B.6.1 What the substrate is
+
+A **conditioned transition primitive** is a typed posterior over a
+single parameterised graph edge under a single `(scope, regime,
+context)` triple. Each primitive carries the conjugate-updated
+probability posterior, the timing posterior (or a Dirac-at-zero
+degeneracy for structurally non-latency edges), the run-deterministic
+draw-family identity used to seed RNGs, the raw / weighted / effective
+evidence views, and the residual / unparameterised classification.
+
+The substrate is implemented in:
+
+| Module | Role |
+|---|---|
+| [`graph-editor/lib/runner/primitives.py`](../../graph-editor/lib/runner/primitives.py) | `ConditionedTransitionPrimitive`, `TransitionIdentity`, `PrimitiveScope`, `DrawFamilyKey`, RNG keying via `make_rng`, `WeightedPrimitiveEvidenceView`, conditioning / draw-family / timing enums |
+| [`graph-editor/lib/runner/prefix_arrival.py`](../../graph-editor/lib/runner/prefix_arrival.py) | Prefix-arrival map — per-edge `tau` distribution induced by the upstream subject prefix |
+| [`graph-editor/lib/runner/primitive_evidence.py`](../../graph-editor/lib/runner/primitive_evidence.py) | Resolves admitted `window()` evidence per primitive; produces the raw / weighted views |
+| [`graph-editor/lib/runner/primitive_conditioning.py`](../../graph-editor/lib/runner/primitive_conditioning.py) | Subset and effective-evidence policy applied **once at primitive construction**; conjugate Beta-Binomial update; doc 52 compatibility-blend metadata |
+| [`graph-editor/lib/runner/primitive_residual_guard.py`](../../graph-editor/lib/runner/primitive_residual_guard.py) | Marks unsupported residual / complement / unparameterised edges with explicit provenance — never silently invents timing or rate |
+| [`graph-editor/lib/runner/subject_span_composer.py`](../../graph-editor/lib/runner/subject_span_composer.py) | `compose_subject_span` — DAG composition over conditioned primitives; returns `ComposedSubjectSpan` |
+| [`graph-editor/lib/runner/primitive_readout.py`](../../graph-editor/lib/runner/primitive_readout.py) | Four readouts at the shared row-builder seam (single-hop, multi-hop subject span, multi-hop window, active-cohort carrier) |
+
+These run **between** the existing `forecast_runtime` request-bundle
+preparation and the `forecast_state` trajectory / summary kernel — they
+do not replace those layers, they slot in front of the row builder's
+subject-side and carrier-side reads.
+
+### B.6.2 Flag-gated rollout (default OFF)
+
+Every primitive readout is gated behind an environment variable. All
+four flags default to OFF; the live path remains the pre-73n
+`compute_forecast_trajectory` / `compute_forecast_summary` route.
+
+| Flag | Stage | Surface |
+|---|---|---|
+| `DAGNET_SINGLE_HOP_PRIMITIVE_READOUT` | 5a | Single-hop window and single-hop subject (`A == X`) cohort readout |
+| `DAGNET_MULTI_HOP_SUBJECT_COMPOSITION` | 5b | Multi-hop cohort `A == X` subject-span composition over primitives |
+| `DAGNET_MULTI_HOP_WINDOW_READOUT` | 5c | Multi-hop `window()` reuses the Stage 5b composer under an independent flag |
+| `DAGNET_ACTIVE_COHORT_CARRIER_READOUT` | 6 | Active cohort `A != X` reads through 73m's `compose_carrier_to_x` plus Stage 5b's `compose_subject_span` |
+
+Each flag accepts `OFF` (live path), `SHADOW` (compute primitive
+readout in parallel and emit divergence diagnostics, but return the
+live result), and `ON` (return the primitive readout). **Production
+flag-ON for any of the four is currently blocked** on a single
+follow-up: maturity-aware likelihood migration into the primitive
+posterior. While that follow-up is open, SHADOW is the highest mode
+recommended for production rollout. See `73n-stage-5a-note.md`
+"Follow-up 1" through `73n-stage-8-note.md` "Follow-up 1" — they are
+all the same item, inherited.
+
+### B.6.3 Caching layer
+
+73n Stage 7 introduced a generic process-memory TTL result-cache
+utility — [`graph-editor/lib/result_cache.py`](../../graph-editor/lib/result_cache.py) — and the
+existing snapshot-DB cache was migrated onto it. Three additional
+caches register under the same registry:
+
+- **primitive posterior cache** wrapping `primitive_conditioning`
+- **composed-carrier cache** wrapping the Stage 6 carrier path
+- **composed-subject-span cache** wrapping `compose_subject_span`
+
+Invalidation is **coarse-grained on purpose**. Any
+`result_cache.clear_all()` call (snapshot writes, the existing
+`/api/snapshots/cache-clear` endpoint, the per-request
+`no_cache: true` body flag's bypass via `cache_bypass_ctx`) flushes
+every registered cache. Per-key targeted invalidation is left as a
+follow-up — TTL bounding plus scope-bearing keys (changes to scope =
+different key = miss) are the live invariant. See
+`73n-stage-7-note.md` §3 for the §739 stop-condition softening.
+
+### B.6.4 Provenance threading on the response
+
+73n Stage 8 widened `ConditionedTransitionPrimitive.to_provenance_dict()`
+and threaded the per-primitive substrate into every readout's
+diagnostic block. A `[I12]` response from a flag-ON or flag-SHADOW
+primitive readout now carries — alongside the existing `p_mean`,
+`p_sd`, `p_sd_epistemic`, `completeness`, `completeness_sd`,
+`tau_max`, etc. — per-primitive: identity, evidence role, raw /
+weighted / effective evidence totals, evidence-clock provenance
+(arrival_weight summary + binding policy + scope key), prior source,
+conditioning status, draw-family identity, residual / complement
+diagnostics, and the composed subject + carrier topology. An optional
+`cache_status` snapshot (Stage 7 observability) may also be present.
+
+The serialised `runtime_bundle.p_conditioning_evidence` block now
+carries an explicit `compatibility_metadata_note`. Stage 8 documented
+`PreparedConditioningEvidence` as **compatibility metadata only** —
+not an evidence-ownership decider. Consumers must read
+`evidence_role` and the per-primitive substrate provenance, not
+`p_conditioning_evidence`, to understand which evidence family
+conditioned a given primitive. Retirement of `p_conditioning_evidence`
+is tracked as Stage 8 Follow-up 8.
+
+### B.6.5 Field shape on the [I12] response — unchanged
+
+The CF response payload (`ConditionedForecastEdgeResult` per B.3
+[I12]) is unchanged in shape. Per-primitive substrate provenance lives
+inside the readout-specific diagnostic blocks, not on the top-level
+edge result. The B.3 apply mapping (`p_mean → p.mean`,
+`p_sd → p.stdev_pred`, `p_sd_epistemic → p.stdev`, etc.) continues to
+own the persistence boundary regardless of which inner path produced
+the scalars. CF still never writes L1, L1.5, L2, or L3.

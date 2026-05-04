@@ -195,88 +195,71 @@ def fit_lag_distribution(
     Quality gates and settings are keyword arguments so the frontend can pass
     them via forecasting_settings (see analysis-forecasting.md §4.5).
     """
+    # Categories 3 + 4 (mean-missing, garbage input) used to substitute
+    # default_sigma = 0.5. That fabricates fitted-looking output from no
+    # fit, with no audit trail; downstream consumers can't tell "fitted"
+    # from "made up". We raise instead. Category 1 (data is effectively
+    # Dirac: mean ≈ median, ratio < 1) returns σ=0 — the honest fit
+    # result. Only Category 2 (insufficient converters) retains the soft
+    # default until a separate rip-out lands.
     if not math.isfinite(median_lag):
-        return LagDistributionFit(
-            mu=0.0,
-            sigma=default_sigma,
-            empirical_quality_ok=False,
-            total_k=total_k,
-            quality_failure_reason=f"Invalid median lag (non-finite): {median_lag}",
+        raise ValueError(
+            f"fit_lag_distribution: invalid median lag (non-finite): {median_lag}"
+        )
+
+    if median_lag <= 0:
+        raise ValueError(
+            f"fit_lag_distribution: invalid median lag (must be > 0 for lognormal): {median_lag}"
         )
 
     if total_k < min_fit_converters:
         return LagDistributionFit(
-            mu=math.log(median_lag) if median_lag > 0 else 0.0,
+            mu=math.log(median_lag),
             sigma=default_sigma,
             empirical_quality_ok=False,
             total_k=total_k,
             quality_failure_reason=f"Insufficient converters: {total_k} < {min_fit_converters}",
         )
 
-    if median_lag <= 0:
-        return LagDistributionFit(
-            mu=0.0,
-            sigma=default_sigma,
-            empirical_quality_ok=False,
-            total_k=total_k,
-            quality_failure_reason=f"Invalid median lag: {median_lag}",
-        )
-
     mu = math.log(median_lag)
 
     if mean_lag is None or mean_lag <= 0:
-        return LagDistributionFit(
-            mu=mu,
-            sigma=default_sigma,
-            empirical_quality_ok=True,
-            total_k=total_k,
-            quality_failure_reason="Mean lag not available, using default σ",
+        raise ValueError(
+            f"fit_lag_distribution: mean lag missing or non-positive (cannot compute σ from median alone): {mean_lag!r}"
         )
 
     ratio = mean_lag / median_lag
 
     if ratio < 1.0:
-        is_close_to_one = ratio >= min_mean_median_ratio
+        # Data has mean ≤ median — empirically ≈ Dirac. The honest fit is σ=0.
         return LagDistributionFit(
             mu=mu,
-            sigma=default_sigma,
-            empirical_quality_ok=is_close_to_one,
+            sigma=0.0,
+            empirical_quality_ok=True,
             total_k=total_k,
             quality_failure_reason=(
-                f"Mean/median ratio {ratio:.3f} < 1.0 (using default σ)"
-                if is_close_to_one
-                else f"Mean/median ratio too low: {ratio:.3f} < {min_mean_median_ratio}"
+                f"Mean/median ratio {ratio:.3f} < 1.0 — data is effectively Dirac, σ=0"
             ),
         )
 
     if ratio > max_mean_median_ratio:
-        return LagDistributionFit(
-            mu=mu,
-            sigma=default_sigma,
-            empirical_quality_ok=False,
-            total_k=total_k,
-            quality_failure_reason=f"Mean/median ratio too high: {ratio:.3f} > {max_mean_median_ratio}",
+        raise ValueError(
+            f"fit_lag_distribution: mean/median ratio {ratio:.3f} > max {max_mean_median_ratio} (data outside lognormal regime)"
         )
 
     sigma = math.sqrt(2.0 * math.log(ratio))
     if sigma < 1e-12:
-        # ratio ≈ 1.0 (mean ≈ median): degenerate — sigma=0 would produce a
-        # step-function CDF with no smooth completeness transition.  Use the
-        # default σ instead; quality is still OK (the mu from median is valid).
+        # ratio ≈ 1.0: data is effectively Dirac. Honest answer is σ=0.
         return LagDistributionFit(
             mu=mu,
-            sigma=default_sigma,
+            sigma=0.0,
             empirical_quality_ok=True,
             total_k=total_k,
-            quality_failure_reason="Mean/median ratio ≈ 1.0 (σ degenerate), using default σ",
+            quality_failure_reason="Mean/median ratio ≈ 1.0 — data is effectively Dirac, σ=0",
         )
     if not math.isfinite(sigma) or sigma < 0:
-        return LagDistributionFit(
-            mu=mu,
-            sigma=default_sigma,
-            empirical_quality_ok=False,
-            total_k=total_k,
-            quality_failure_reason=f"Invalid sigma computed from ratio {ratio:.3f}",
+        raise ValueError(
+            f"fit_lag_distribution: computed σ is invalid ({sigma}) from ratio {ratio:.3f}"
         )
 
     return LagDistributionFit(

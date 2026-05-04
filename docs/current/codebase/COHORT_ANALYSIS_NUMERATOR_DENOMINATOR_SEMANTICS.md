@@ -615,3 +615,66 @@ Those are separate architectural and forensic questions.
 
 This note defines the semantic contract that those decisions must
 preserve.
+
+---
+
+## Appendix A: Primitive identity and the eight named forms (4-May-26)
+
+The body above pre-dates clarifications about evidence-clock shifting at
+conditioning time. This appendix pins the per-primitive terminology.
+
+**Identity notation** — every primitive is `<binding>(α, β-γ)`:
+`α` = clock anchor (arrival-map root), `β` = source, `γ` = target.
+
+**Two bindings:**
+- `window` — local-clock, `α = β`, identity arrival map at `β`, **no
+  propagation**. Each primitive conditioned on its own un-shifted
+  source-day evidence; cohorts mixed by design.
+- `cohort` — anchored-clock, `α` may ≠ `β`, weights at `β` propagated
+  from `α` through the relevant sub-tree (carrier rooted at `A`, subject
+  rooted at `X`). Cohort identity preserved end-to-end.
+
+**Four object types × two bindings = eight forms:**
+
+| Form | Meaning | Canonical α |
+|---|---|---|
+| `window-vars(α, β-γ)` | Fitted parameters for `β→γ` under local-clock binding | `α = β` |
+| `cohort-vars(α, β-γ)` | Fitted parameters under anchored binding rooted at `α` | `α = A` (carrier fit) or `α = X` (subject fit) |
+| `window-evidence(α, β-γ)` | Bound rows on `β`-rooted identity map; mixes cohorts; "most recent total performance" | `α = β` |
+| `cohort-evidence(α, β-γ)` | Bound rows on `α`-rooted propagated map; preserves cohort identity | `α = A` or `X` |
+| `window-primitive-subject(α, β-γ)` | Subject primitive conditioned on `window-evidence` × `window-vars` | `α = β` |
+| `cohort-primitive-subject(α, β-γ)` | Subject primitive conditioned on `cohort-evidence` × `cohort-vars` | `α = X` |
+| `window-primitive-carrier(α, β-γ)` | Rare: `window-vars` admitted as a helper into a cohort carrier role | `α = β` (helper); served into anchor `A` |
+| `cohort-primitive-carrier(α, β-γ)` | Carrier primitive in cohort query | `α = A` |
+
+**Identity rules:**
+1. Same physical edge under different bindings or different anchors
+   yields **distinct** vars / evidence / primitive objects. They MUST
+   NOT share cache entries.
+2. Raw `window-evidence` is **forbidden** as a substitute for
+   `cohort-evidence`; clocks differ.
+3. `window-vars` MAY serve as the **prior input** to a
+   `cohort-primitive-subject` under the §"Subject-side reuse rule"
+   admissibility gates. Only priors cross between bindings; conditioned
+   posteriors must be re-derived.
+
+**Caching identity** — a primitive's cached value is keyed by
+`(binding, α, β, γ, role)` together with the arrival-map identity, the
+fitted-prior identity, the bound-evidence identity, and the algorithm
+parameters. Caller-context labels do not enter the identity unless they
+actually slice priors or evidence — in which case they enter via the
+priors or evidence themselves, not as separate fields.
+
+**Trade-off the user makes by query shape:** `window` is faster to
+react and edge-local but mixes cohorts; `cohort` preserves cohort
+identity end-to-end but reacts more slowly. Both are correct for what
+they are; neither substitutes for the other.
+
+**Pin vs the body:** the body describes whole-query rate display
+correctly under both modes, but does not, on its own, settle the
+per-primitive evidence-binding semantic for multi-hop window subjects.
+This appendix pins it: **window mode is per-primitive local-clock at
+the conditioning layer**, not `X`-rooted-with-propagation. A multi-hop
+window subject is a chain of independently-conditioned local-clock
+primitives composed into a span after conditioning, never bound on a
+single propagated arrival map.

@@ -811,6 +811,28 @@ Required tests:
 
 Regression discipline for `test_cohort_factorised_outside_in.py` remains strict. This plan may only move tests in the documented direction, must not xfail or skip existing passing tests, and must not relax assertions to hide changed semantics.
 
+## Stage 10 — Codebase Documentation Pass
+
+After the implementation and acceptance tests land, update the maintained codebase documentation so the full CF journey is discoverable without reading this project plan or forensic notes.
+
+This stage is documentation-only. It should update existing codebase-reference docs in place where possible, especially `docs/current/codebase/FORECAST_STACK_DATA_FLOW.md`, and only create a new `docs/current/codebase/` reference if the existing structure cannot cleanly describe the final architecture. Project-bayes plans and baselines may remain as historical implementation records, but they must not be the only place a future maintainer can learn how CF works.
+
+The documentation pass must characterise the final journey end to end:
+
+- request and scenario scope resolution;
+- primitive enumeration and request-scoped registry ownership;
+- evidence retrieval, raw `EvidenceSet`, weighted evidence view, effective evidence, and subset policy;
+- primitive posterior construction and draw-family coherence;
+- subject-span, carrier-to-X, and window readout composition;
+- projection into rows, CF scalars, graph fields, and diagnostics;
+- unsupported residual/complement handling and the relationship to graph-output sibling rebalancing;
+- cache boundaries and invalidation behaviour if Stage 7 persistent caching landed;
+- the remaining compatibility role, if any, of `p_conditioning_evidence` and compatibility-blend metadata.
+
+Related codebase docs that mention CF, cohort maturity, runner entry points, span/carrier composition, or field authority must be checked for stale claims. At minimum, review `STATS_SUBSYSTEMS.md`, `BE_RUNNER_CLUSTER.md`, and `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` and update them only where the completed implementation changed the durable architecture. If user-facing behaviour or terminology changed, update the appropriate `graph-editor/public/docs/` page as well.
+
+Stop condition: a reviewer can start from `docs/current/codebase/FORECAST_STACK_DATA_FLOW.md` or its replacement and follow the current CF path without consulting the 73-series implementation plans; stale codebase-doc claims about trajectory-owned evidence admission, empirical Tier 2 carrier ownership, terminal-edge multi-hop semantics, or `p_conditioning_evidence` as an ownership surface have been removed or explicitly marked historical.
+
 ## Closure Criteria
 
 73h Issue 2 can be called closed only when:
@@ -823,7 +845,8 @@ Regression discipline for `test_cohort_factorised_outside_in.py` remains strict.
 - empirical carrier Tier 2 is no longer the live conditioning mechanism;
 - projection reads composed runtime objects without choosing semantics;
 - diagnostics trace outputs back to primitive evidence and composition provenance;
-- scoped and representative whole-graph primitive enumeration have acceptable runtime or a documented flag-gated rollout limit.
+- scoped and representative whole-graph primitive enumeration have acceptable runtime or a documented flag-gated rollout limit;
+- the codebase documentation pass records the completed CF architecture in `docs/current/codebase/` and removes stale claims from related maintained docs.
 
 ## Review Checklist
 
@@ -856,3 +879,22 @@ Reviewers should reject an implementation if:
 - it lets projection choose evidence roles or recompute primitive posteriors;
 - it changes displayed rates from `Y / X` to `Y / A`.
 
+## Implementation progress
+
+<!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
+
+- [x] Stage 0a — Code Inventory and Precondition Check — completed 1-May-26
+- [x] Stage 0b — Forensic Localisation and Test Triage — completed 1-May-26
+- [x] Stage 0c — Contracts, Tolerances, and Read Coordination — completed 1-May-26
+- [x] Stage 1 — Primitive Posterior Contract — completed 1-May-26
+- [x] Stage 2 — Primitive Evidence Resolution — completed 1-May-26
+- [x] Stage 3 — Subset and Primitive Conditioning Policy — completed 1-May-26
+- [x] Stage 4 — Unsupported Residual and Unparameterised Edge Guard — completed 1-May-26
+- [x] Stage 5a — Single-Hop Window and Subject Cutover (Parity Oracle) — completed 1-May-26
+- [x] Stage 5b — Multi-Hop Subject Span Composition — completed 1-May-26
+- [x] Stage 5c — Multi-Hop Window Readout — completed 1-May-26
+- [x] Stage 6 — Carrier Consumer — completed 1-May-26
+- [x] Stage 7 — Primitive and Composition Caching — completed 1-May-26
+- [x] Stage 8 — Cross-Surface Projection and Provenance — completed 1-May-26
+- [ ] Stage 9 — Acceptance Tests
+- [x] Stage 10 — Codebase Documentation Pass — completed 2-May-26 (executed before Stage 9 per user direction; captures Stages 1-8 reality before Stage 9 drift)

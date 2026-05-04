@@ -4,7 +4,7 @@ Failure patterns that have occurred in this codebase and recur across surfaces. 
 
 This list is deliberately short. Subsystem-specific traps that only apply to one file or function live next to that code, in the relevant doc under `docs/current/codebase/`. See the **Moved entries** table at the end for redirects, and the **Removed entries** list for ones that are now duplicated by CLAUDE.md or other warm-start docs.
 
-Numbering is non-contiguous and stable: cited numbers (e.g. "see anti-pattern 23") keep working even after a move. New entries take the next free integer.
+Numbering is non-contiguous and stable: cited numbers (e.g. "see anti-pattern 23") keep working even after a move. New entries take the next free integer. **Recent high-impact entries may appear out of numerical order at the top of the list for prominence; their numbers remain stable.**
 
 ## When to add an entry here
 
@@ -58,6 +58,36 @@ UpdateManager mapping configurations (`updateManager/mappingConfigurations.ts`) 
 **Root cause**: cleanup is inside `if (count > 0)` where `count` tracks how many items were found to clean. On second run, source is clean → count=0 → derived state cleanup is skipped → derived copies persist.
 
 **Fix**: clean derived state unconditionally. Cleanup must be idempotent — work whether the source data is present, absent, or partially cleaned.
+
+## Anti-pattern 59: "Architecturally complete" stage closure with the new path default-OFF
+
+(Listed here out of numerical order for prominence. Number 59 is stable for citation.)
+
+**Signature**: a multi-stage rewrite plan reaches its final stage with every "completed" stage's note containing an "Open follow-ups" section that lists the actual numerical work. The new code path sits behind feature flags. The flags default to OFF. Every test marker that was supposed to flip green still XFAILs. The legacy code the rewrite was meant to replace is still authoritative on every production request. The `git log` shows weeks of work; the runtime behaviour is unchanged.
+
+**Root cause**: each stage's implementer discovered the numerical migration (likelihood, evidence fetching, fixed-seed retirement, dead-code deletion) was harder than the architectural plumbing. They built the architecture, declared the stage "architecturally complete", recorded the parity gap as a follow-up "for the next stage", and moved on. The next stage inherited the deferral. Repeat across every stage. Flag-OFF means the legacy path runs, so the test suite stays green by virtue of *not exercising the new code at all* — every "tests pass with flag OFF" assertion in a stage note is meaningless as a correctness signal for the new code.
+
+The choreography pattern in plan §"Migration choreography" sections — `build behind flag → flip flag ON → prove parity → delete legacy` — is correct and necessary. The failure mode is stopping at step 1 and calling it done. Step 1 is the easy half.
+
+The compounding harm:
+
+1. **Components silently get missed.** Numerical work the architecture sat in front of (likelihood reweighting, per-edge evidence retrieval) is recorded in a follow-up bullet and forgotten.
+2. **The new code is never tested under production conditions.** Flag-ON parity is the only meaningful correctness signal, and it isn't run. Every stage that "passed" passed by avoiding its own deliverable.
+3. **The deletion debt grows, not shrinks.** Every stage adds a new parallel surface; none retire the legacy one. By the final stage there are two architectures in the tree, the old one authoritative, the new one rotting.
+4. **The strict-xfail markers stop working as a signal.** They are designed to XPASS when the work lands; with the work deferred, they all sit unfired across stages, multiplying.
+
+**Fix**:
+- Stage closure must include a flag-ON parity measurement against the legacy oracle. "All tests pass with flag OFF" is *not* a stage acceptance signal — it proves nothing about the new path.
+- A stage that defers numerical parity is **incomplete**. Mark it `- [/]` (in-progress with deliverables outstanding), not `- [x]`. Do not "tick the box" until the cutover step is done.
+- "Open follow-ups" sections in stage notes must be tracked as numbered deliverables that block the next stage's progress, not soft lists. If a follow-up was deferred from stage N to stage N+1, it is the *first atom* of stage N+1, not pushed forward again.
+- The `--strict` xfails the plan defines as flip-to-green targets are the closure signal. If they don't XPASS by the time the stage that names them is "complete", the stage isn't complete.
+- The dead-code audit named in a plan's choreography section is mandatory and not deferrable. If anything the plan said should be removed remains reachable, the cutover isn't done.
+
+**Why this recurs**: every individual decision feels reasonable in isolation. "I built the plumbing. The numerical gap is a separate concern. Let me declare what I built and move on." The cumulative effect — months of effort behind an OFF flag, dead code growing on both sides of the flag boundary, every test xfail rolling forward unkilled — is invisible from inside any single stage. It surfaces only at the next plan iteration: someone walks the strict xfails and discovers none have flipped. By then there are 12 markers, 7 deferred follow-ups, and a parallel architecture nobody is exercising.
+
+**Smell to watch for**: a stage note whose acceptance criteria table contains the phrase "**Architecture discharged, semantics deferred**" (or any rephrasing — "architectural connectivity proven, full retirement deferred"; "architecture complete, flipping to ON in production blocked by …"). That phrase, in any form, means the stage is not complete. The follow-up must land before the box is ticked.
+
+**Realised instance** (2-May-26): 73n stages 5a, 5b, 5c, 6, 7, 8 each closed in this pattern. Maturity-aware likelihood migration deferred from 5a → 5b → 6 → "Stage 7 or a dedicated post-Stage-6 follow-up" → never. Seven fixed-seed RNG sites named for migration in stages 2/5b/6 untouched. Per-upstream-edge evidence fetching deferred from Stage 6 to follow-up #2. `test_v3_midline_at_saturation_converges_to_p` defect deferred to "re-evaluate at Stage 9". F14 Q1 flag-ON parity gap measured at −0.167 in Stage 5a; ignored at every subsequent stage. Final-stage discovery: zero of the 12 strict-xfails the plan defined as flip-to-green targets had flipped, and the legacy trajectory engine, AP58 fork, `build_upstream_carrier`, Tier 2/3, and weak-prior carrier timing were all still authoritative on the production-default path. Full forensics: [`docs/current/project-bayes/73n-stage-5a-note.md`](../project-bayes/73n-stage-5a-note.md) §5.1, [`73n-stage-6-note.md`](../project-bayes/73n-stage-6-note.md) §3, [`73n-stage-7-note.md`](../project-bayes/73n-stage-7-note.md) §3, [`73n-stage-8-note.md`](../project-bayes/73n-stage-8-note.md) §3.
 
 ## Anti-pattern 6: Blaming HMR / code staleness without proof
 

@@ -25,6 +25,15 @@ Usage:
     # Clean up synthetic data (by core_hash)
     python synth_gen.py --clean --graph branch
 
+Drift modes (set in the truth file's `simulation:` block; CLI overrides
+exist only for `drift_sigma` and `drift_rate`):
+    drift_sigma: stochastic random-walk on logit(p) (logit SD/day)
+    drift_rate:  deterministic LOGIT-linear drift (logit/day)
+    drift_p_to:  deterministic LINEAR-IN-P drift from each edge's `p`
+                 to this target across the n_days observable window.
+                 Mutually exclusive with non-zero drift_rate; composes
+                 additively with drift_sigma. Burn-in stays at base_p.
+
 Output format matches _query_snapshot_subjects return shape so
 bind_snapshot_evidence can consume it directly.
 
@@ -1193,6 +1202,7 @@ DEFAULT_SIM_CONFIG = {
     "failure_rate": 0.05,          # 5% of fetch nights fail
     "drift_sigma": 0.0,           # random-walk drift disabled by default
     "drift_rate": 0.0,            # deterministic linear drift (logit/day), e.g. -0.01 = p decreases
+    "drift_p_to": None,           # if set, p drifts LINEARLY-IN-P from each edge's base `p` to this value over the n_days observable range (burn-in stays at base_p). Composes additively with drift_sigma; mutually exclusive with non-zero drift_rate.
     "seed": 42,
     "growth_rate_mom": 0.0,       # monthly growth rate (0.05 = 5% MoM exponential)
     "snapshot_start_offset": 0,   # 0 = full coverage; >0 = snapshot DB rows only for last N days
@@ -1242,6 +1252,13 @@ def simulate_graph(
     kappa_default = sim_config["kappa_sim_default"]
     drift_sigma = sim_config["drift_sigma"]
     drift_rate = sim_config.get("drift_rate", 0.0)
+    drift_p_to = sim_config.get("drift_p_to", None)
+    if drift_p_to is not None and drift_rate != 0.0:
+        raise ValueError(
+            "drift_p_to and drift_rate are mutually exclusive: drift_p_to specifies "
+            "linear-in-p drift (a per-day target p), drift_rate is logit-linear. "
+            "Set one or the other."
+        )
     failure_rate = sim_config["failure_rate"]
     frame_drop_rate = sim_config.get("frame_drop_rate", 0.0)
     toggle_rate = sim_config.get("toggle_rate", 0.0)
@@ -1304,15 +1321,34 @@ def simulate_graph(
             edge_to_bg[sib_id] = bg.group_id
 
     # --- Drift (logit scale, per-edge) ---
-    # drift_path[edge_id] = array of total_sim_days logit offsets.
-    # Two modes (composable):
-    #   drift_rate: deterministic linear drift (logit/day)
-    #   drift_sigma: random-walk drift (logit SD/day)
+    # drift_path[edge_id] = array of total_sim_days logit offsets, applied
+    # additively to logit(base_p) at simulation time.
+    # Three modes (the linear component picks ONE of drift_rate / drift_p_to):
+    #   drift_rate: deterministic logit-linear drift (logit/day)
+    #   drift_p_to: deterministic linear-in-p drift over the observable
+    #     n_days range; per-edge offset = logit(target_p[d]) − logit(base_p)
+    #     where target_p ramps linearly from base_p (at burn_in_days) to
+    #     drift_p_to (at total_sim_days−1). Burn-in stays at base_p.
+    #   drift_sigma: random-walk drift (logit SD/day), composes additively.
     drift_paths: dict[str, np.ndarray] = {}
-    if drift_sigma > 0 or drift_rate != 0:
+    if drift_sigma > 0 or drift_rate != 0 or drift_p_to is not None:
         for edge_id in edge_params:
-            # Linear component: drift_rate × day_index
-            linear = drift_rate * np.arange(total_sim_days, dtype=np.float64)
+            base_p = edge_params[edge_id]["p"]
+            if drift_p_to is not None:
+                target_p = np.full(total_sim_days, base_p, dtype=np.float64)
+                if abs(base_p - drift_p_to) > 1e-9:
+                    target_p[burn_in_days:] = np.linspace(
+                        base_p, drift_p_to, n_days, dtype=np.float64
+                    )
+                target_p_clip = np.clip(target_p, 1e-6, 1.0 - 1e-6)
+                base_logit = math.log(
+                    max(base_p, 1e-6) / max(1 - base_p, 1e-6)
+                )
+                target_logit = np.log(target_p_clip / (1.0 - target_p_clip))
+                linear = target_logit - base_logit
+            else:
+                # Logit-linear drift_rate × day_index
+                linear = drift_rate * np.arange(total_sim_days, dtype=np.float64)
             # Stochastic component: cumulative random walk
             if drift_sigma > 0:
                 increments = rng.normal(0.0, drift_sigma, size=total_sim_days)

@@ -511,19 +511,28 @@ export function fitLagDistribution(
   totalK: number,
   maxMeanMedianRatioOverride?: number
 ): LagDistributionFit {
+  // Categories 3 + 4 (mean-missing, garbage input) used to substitute
+  // LATENCY_DEFAULT_SIGMA = 0.5. That fabricates fitted-looking output
+  // from no fit, with no audit trail; downstream consumers can't tell
+  // "fitted" from "made up". We throw instead. Category 1 (data is
+  // effectively Dirac: mean ≈ median, ratio < 1) returns σ=0 — the
+  // honest fit result. Only Category 2 (insufficient converters)
+  // retains the soft default until a separate rip-out lands.
   if (!Number.isFinite(medianLag)) {
-    return {
-      mu: 0,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
-      total_k: totalK,
-      quality_failure_reason: `Invalid median lag (non-finite): ${String(medianLag)}`,
-    };
+    throw new Error(
+      `fitLagDistribution: invalid median lag (non-finite): ${String(medianLag)}`,
+    );
+  }
+
+  if (medianLag <= 0) {
+    throw new Error(
+      `fitLagDistribution: invalid median lag (must be > 0 for lognormal): ${medianLag}`,
+    );
   }
 
   if (totalK < LATENCY_MIN_FIT_CONVERTERS) {
     return {
-      mu: medianLag > 0 ? Math.log(medianLag) : 0,
+      mu: Math.log(medianLag),
       sigma: LATENCY_DEFAULT_SIGMA,
       empirical_quality_ok: false,
       total_k: totalK,
@@ -531,39 +540,24 @@ export function fitLagDistribution(
     };
   }
 
-  if (medianLag <= 0) {
-    return {
-      mu: 0,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
-      total_k: totalK,
-      quality_failure_reason: `Invalid median lag: ${medianLag}`,
-    };
-  }
-
   const mu = Math.log(medianLag);
 
   if (meanLag === undefined || meanLag <= 0) {
-    return {
-      mu,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: true,
-      total_k: totalK,
-      quality_failure_reason: 'Mean lag not available, using default σ',
-    };
+    throw new Error(
+      `fitLagDistribution: mean lag missing or non-positive (cannot compute σ from median alone): ${String(meanLag)}`,
+    );
   }
 
   const ratio = meanLag / medianLag;
   if (ratio < 1.0) {
-    const isCloseToOne = ratio >= LATENCY_MIN_MEAN_MEDIAN_RATIO;
+    // Data has mean ≤ median — empirically ≈ Dirac. The honest fit is σ=0.
     return {
       mu,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: isCloseToOne,
+      sigma: 0,
+      empirical_quality_ok: true,
       total_k: totalK,
-      quality_failure_reason: isCloseToOne
-        ? `Mean/median ratio ${ratio.toFixed(3)} < 1.0 (using default σ)`
-        : `Mean/median ratio too low: ${ratio.toFixed(3)} < ${LATENCY_MIN_MEAN_MEDIAN_RATIO}`,
+      quality_failure_reason:
+        `Mean/median ratio ${ratio.toFixed(3)} < 1.0 — data is effectively Dirac, σ=0`,
     };
   }
 
@@ -575,35 +569,27 @@ export function fitLagDistribution(
       : LATENCY_MAX_MEAN_MEDIAN_RATIO;
 
   if (ratio > maxMeanMedianRatio) {
-    return {
-      mu,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
-      total_k: totalK,
-      quality_failure_reason: `Mean/median ratio too high: ${ratio.toFixed(3)} > ${maxMeanMedianRatio}`,
-    };
+    throw new Error(
+      `fitLagDistribution: mean/median ratio ${ratio.toFixed(3)} > max ${maxMeanMedianRatio} (data outside lognormal regime)`,
+    );
   }
 
   const sigma = Math.sqrt(2 * Math.log(ratio));
-  // σ ≈ 0 when mean ≈ median (ratio ≈ 1): use default σ to avoid a degenerate
-  // step-function CDF that produces binary completeness with no smooth transition.
   if (sigma < 1e-12) {
+    // ratio ≈ 1.0: data is effectively Dirac. Honest answer is σ=0.
     return {
       mu,
-      sigma: LATENCY_DEFAULT_SIGMA,
+      sigma: 0,
       empirical_quality_ok: true,
       total_k: totalK,
-      quality_failure_reason: 'Mean/median ratio ≈ 1.0 (σ degenerate), using default σ',
+      quality_failure_reason:
+        'Mean/median ratio ≈ 1.0 — data is effectively Dirac, σ=0',
     };
   }
   if (!Number.isFinite(sigma) || sigma < 0) {
-    return {
-      mu,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
-      total_k: totalK,
-      quality_failure_reason: `Invalid sigma computed from ratio ${ratio.toFixed(3)}`,
-    };
+    throw new Error(
+      `fitLagDistribution: computed σ is invalid (${sigma}) from ratio ${ratio.toFixed(3)}`,
+    );
   }
 
   return {

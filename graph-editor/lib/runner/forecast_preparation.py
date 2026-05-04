@@ -36,6 +36,12 @@ class ForecastPreparation:
     per_edge_results: List[Dict[str, Any]]
     composed_frames: List[Dict[str, Any]]
     regime_diagnostics: List[Dict[str, Any]]
+    # Per-request fetch envelope plan from
+    # `runner.request_envelope.build_request_envelope_plan`. Threaded
+    # forward to `_fetch_upstream_observations` and to the runtime
+    # builder so carrier-side fetches and prebuilt arrival maps stay
+    # consistent with the subject-side fetch.
+    envelope_plan: Optional[Any] = None
 
 
 def apply_temporal_regime_selection(
@@ -345,11 +351,24 @@ def prepare_forecast_subject_entry(
     log_prefix: str,
     anchor_from_override: Optional[str] = None,
     sweep_from_override: Optional[str] = None,
+    envelope_anchor_from: Optional[str] = None,
+    envelope_anchor_to: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Prepare one forecast subject through the shared snapshot/regime path.
 
     Used by the main subject preparation flow and by donor/upstream fetches so
     both routes obey the same regime-selection and derivation policy.
+
+    `envelope_anchor_from` / `envelope_anchor_to` (ISO date strings) are the
+    fetch envelope derived from the request's binding plan
+    (`runner.request_envelope.build_request_envelope_plan`). When supplied,
+    they replace `subj['anchor_from']` / `subj['anchor_to']` at the
+    `query_snapshots_for_sweep` call only — the prepared subject's own
+    `anchor_from` / `anchor_to` keep their public-window values for
+    downstream regime-selection and provenance. This is the structural
+    replacement for the 73n in-runtime widening and the carrier-side
+    `lookback_days` heuristic; see
+    `docs/current/snapshot-fetch-envelope-design.md`.
     """
     from runner.cohort_maturity_derivation import derive_cohort_maturity
     from snapshot_service import query_snapshots_for_sweep
@@ -363,13 +382,24 @@ def prepare_forecast_subject_entry(
     sweep_from = prepared_subject.get("sweep_from")
     sweep_to = prepared_subject.get("sweep_to")
 
+    fetch_anchor_from = (
+        envelope_anchor_from
+        if envelope_anchor_from is not None
+        else prepared_subject["anchor_from"]
+    )
+    fetch_anchor_to = (
+        envelope_anchor_to
+        if envelope_anchor_to is not None
+        else prepared_subject["anchor_to"]
+    )
+
     try:
         rows = query_snapshots_for_sweep(
             param_id=prepared_subject["param_id"],
             core_hash=prepared_subject["core_hash"],
             slice_keys=prepared_subject.get("slice_keys", [""]),
-            anchor_from=_parse_date(prepared_subject["anchor_from"]),
-            anchor_to=_parse_date(prepared_subject["anchor_to"]),
+            anchor_from=_parse_date(fetch_anchor_from),
+            anchor_to=_parse_date(fetch_anchor_to),
             sweep_from=_parse_date_or_none(sweep_from),
             sweep_to=_parse_date_or_none(sweep_to),
             equivalent_hashes=prepared_subject.get("equivalent_hashes"),
@@ -461,8 +491,22 @@ def prepare_forecast_subject_group(
     subjects: List[Dict[str, Any]],
     is_window: bool,
     log_prefix: str,
+    envelope_plan: Optional[Any] = None,
+    as_at: Optional[str] = None,
+    scenario_id: Optional[str] = None,
 ) -> ForecastPreparation:
-    """Build the shared subject/frame bundle for one forecast query path."""
+    """Build the shared subject/frame bundle for one forecast query path.
+
+    `envelope_plan` is an optional pre-built `RequestEnvelopePlan` from
+    `runner.request_envelope.build_request_envelope_plan`. When not
+    supplied, this function constructs one internally from the subjects'
+    request shape (graph + query_from_node + query_to_node +
+    anchor_node + anchor_from + anchor_to + is_window) and uses it to
+    bound each subject's `query_snapshots_for_sweep` call. This is the
+    structural replacement for the 73n in-runtime widening and the
+    carrier-side `lookback_days` heuristic; see
+    `docs/current/snapshot-fetch-envelope-design.md`.
+    """
     from runner.span_evidence import compose_path_maturity_frames
 
     if not subjects:
@@ -504,6 +548,37 @@ def prepare_forecast_subject_group(
     if not anchor_node:
         anchor_node = _resolve_anchor_node(graph_data, last_edge_id)
     is_multi_hop = len(subjects) > 1
+
+    # Build the per-request fetch envelope plan from the resolved request
+    # shape if the caller did not supply one. This drives every subject's
+    # snapshot fetch through arrival-map-derived bounds rather than the
+    # public-window anchor_to (which would force the legacy 73n in-runtime
+    # widening to fire as a second DB hit). See
+    # docs/current/snapshot-fetch-envelope-design.md.
+    if envelope_plan is None and subjects and query_from_node and query_to_node:
+        try:
+            from runner.request_envelope import build_request_envelope_plan as _build_env
+            _af = _parse_date(subjects[0].get("anchor_from", ""))
+            _at = _parse_date(subjects[0].get("anchor_to", ""))
+            envelope_plan = _build_env(
+                graph=graph_data,
+                query_from_node=str(query_from_node),
+                query_to_node=str(query_to_node),
+                anchor_node_id=str(anchor_node) if anchor_node else None,
+                anchor_from=_af,
+                anchor_to=_at,
+                is_window=bool(is_window),
+                graph_preference=graph_data.get("model_source_preference"),
+                as_at=as_at,
+                scenario_id=scenario_id,
+            )
+        except Exception as _env_exc:
+            print(
+                f"{log_prefix} WARNING: envelope plan construction failed "
+                f"({_env_exc!r}); falling back to public-window fetch bounds"
+            )
+            envelope_plan = None
+
     # Stage 1: the shared factorised subject path is window-led for both
     # single-hop and multi-hop cohort solves. Exact-match cohort evidence, if
     # later admitted, must arrive on a separate evidence seam rather than by
@@ -513,10 +588,28 @@ def prepare_forecast_subject_group(
     total_rows = 0
 
     for subj in subjects:
+        env_anchor_from: Optional[str] = None
+        env_anchor_to: Optional[str] = None
+        if envelope_plan is not None:
+            target = subj.get("target") or {}
+            edge_uuid = str(target.get("targetId") or "")
+            edge_id = str(subj.get("subject_id") or "")
+            env = (
+                envelope_plan.by_edge_uuid.get(edge_uuid)
+                if edge_uuid
+                else None
+            )
+            if env is None and edge_id:
+                env = envelope_plan.by_edge_id.get(edge_id)
+            if env is not None:
+                env_anchor_from = env.anchor_from.isoformat()
+                env_anchor_to = env.anchor_to.isoformat()
         prepared_entry = prepare_forecast_subject_entry(
             subj=subj,
             subject_is_window=True,
             log_prefix=log_prefix,
+            envelope_anchor_from=env_anchor_from,
+            envelope_anchor_to=env_anchor_to,
         )
         total_rows += prepared_entry["raw_row_count"]
         regime_diagnostic = dict(prepared_entry["regime_diagnostic"])
@@ -577,4 +670,5 @@ def prepare_forecast_subject_group(
         per_edge_results=per_edge_results,
         composed_frames=composed_frames,
         regime_diagnostics=regime_diagnostics,
+        envelope_plan=envelope_plan,
     )

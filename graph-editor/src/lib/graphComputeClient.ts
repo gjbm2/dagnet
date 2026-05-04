@@ -516,59 +516,6 @@ export class GraphComputeClient {
         }
       }
 
-      // Collect model CDF curves from backend results, keyed by
-      // composite `${scenario_id}::${subject_id}`.
-      //
-      // Each scenario passes its own per-scenario request-graph (engorged
-      // via posteriorSliceContexting against the scenario's effective DSL)
-      // and the BE computes model curves from that scenario's edge — so different
-      // scenarios on the same edge legitimately produce different model curves
-      // (different posterior slices for different contexts, different alpha/beta
-      // for window vs cohort, etc.). Keying by subject_id alone collapses these
-      // distinct curves into one — wrong for multi-scenario charts.
-      //
-      // When multiple epochs collapse into one (scenario, subject) pair, keep the
-      // longest curve (the gap epoch typically has a short or empty curve).
-      const _modelCurveKey = (scenarioId: string, subjectId: string): string =>
-        `${scenarioId}::${subjectId}`;
-      const modelCurveByKey = new Map<string, { scenario_id: string; subject_id: string; curve: Array<{ tau_days: number; model_rate: number }>; params: Record<string, number>; bayesCurve?: Array<{ tau_days: number; model_rate: number }>; bayesParams?: Record<string, number>; sourceModelCurves?: Record<string, any>; promotedSource?: string }>();
-      for (const b of blocks) {
-        const r = b.result;
-        if (r?.model_curve && Array.isArray(r.model_curve) && r.model_curve.length > 0) {
-          const key = _modelCurveKey(b.scenario_id, b.subject_id);
-          const existing = modelCurveByKey.get(key);
-          if (!existing || r.model_curve.length > existing.curve.length) {
-            const entry: any = {
-              scenario_id: b.scenario_id,
-              subject_id: b.subject_id,
-              curve: r.model_curve,
-              params: r.model_curve_params || {},
-            };
-            // Bayesian posterior overlay curve (if posteriors exist on this edge)
-            if (r?.model_curve_bayes && Array.isArray(r.model_curve_bayes) && r.model_curve_bayes.length > 0) {
-              entry.bayesCurve = r.model_curve_bayes;
-              entry.bayesParams = r.model_curve_bayes_params || {};
-            }
-            // Bayesian confidence band (upper/lower envelope)
-            if (r?.model_curve_bayes_band_upper && Array.isArray(r.model_curve_bayes_band_upper) && r.model_curve_bayes_band_upper.length > 0) {
-              entry.bayesBandUpper = r.model_curve_bayes_band_upper;
-              entry.bayesBandLower = r.model_curve_bayes_band_lower;
-            }
-            // Method B comparison curve (old onset approach)
-            if (r?.model_curve_method_b && Array.isArray(r.model_curve_method_b) && r.model_curve_method_b.length > 0) {
-              entry.methodBCurve = r.model_curve_method_b;
-              entry.methodBParams = r.model_curve_method_b_params || {};
-            }
-            // Per-source model curves (analytic, bayesian)
-            if (r?.source_model_curves && typeof r.source_model_curves === 'object') {
-              entry.sourceModelCurves = r.source_model_curves;
-              entry.promotedSource = r.promoted_source || 'best_available';
-            }
-            modelCurveByKey.set(key, entry);
-          }
-        }
-      }
-
       // ── Per-τ rows: BE-computed ──────────────────────────────────────
       // The BE computes complete per-τ rows (rate, midpoint, fan bounds)
       // in compute_cohort_maturity_rows using proper upstream x forecasting
@@ -677,6 +624,13 @@ export class GraphComputeClient {
         ])
       );
 
+      // Promoted model source from the first BE block that carries it.
+      // Surfaced to the chart-hint code in `analysisEChartsService` and to
+      // outside-in acceptance via `_promoted_source_from_cm`.
+      const cmPromotedSource: string | undefined = blocks.find(
+        (b) => b?.result?.promoted_source,
+      )?.result?.promoted_source;
+
       const result: AnalysisResult = {
         analysis_type: 'cohort_maturity',
         analysis_name: 'Cohort Maturity',
@@ -689,19 +643,7 @@ export class GraphComputeClient {
           sweep_to: firstMeta?.sweep_range?.to ?? firstMeta?.sweep_to,
           // Hint to UIs that this came from snapshot reads.
           source: 'snapshot_db',
-          // Promoted model source — used by chart hint rendering.
-          // Read from the first subject's model curve entry.
-          promoted_source: (() => {
-            for (const [, entry] of modelCurveByKey) {
-              if (entry.promotedSource) return entry.promotedSource;
-            }
-            return undefined;
-          })(),
-          // Model CDF curves keyed by `${scenario_id}::${subject_id}` (for
-          // overlay on maturity chart). Per-scenario keys preserve the
-          // distinction when scenarios resolve to different posterior slices
-          // (different contexts, window vs cohort, etc.).
-          model_curves: Object.fromEntries(modelCurveByKey),
+          promoted_source: cmPromotedSource,
           // Export-only tables (avoid polluting the primary `data` rows used by charts).
           export_tables: {
             cohort_maturity_points: Array.from(cohortPointsByKey.values()).sort((a: any, b: any) => {

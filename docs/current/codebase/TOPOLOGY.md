@@ -149,7 +149,7 @@ The dominant complexity is at **subsystem seams**, not within individual subsyst
 
 | Seam | Where to read |
 |---|---|
-| forecast ↔ snapshot | [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) |
+| forecast ↔ snapshot | [stats-pipeline-schematic.md](stats-pipeline-schematic.md), [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) |
 | snapshot ↔ generalisation | [SNAPSHOT_DB_CONTEXT_EPOCHS.md](SNAPSHOT_DB_CONTEXT_EPOCHS.md), `candidateRegimeService` |
 | signature ↔ cache | [HASH_SIGNATURE_INFRASTRUCTURE.md](HASH_SIGNATURE_INFRASTRUCTURE.md) |
 | scenario round-trip ↔ git | [SCENARIO_SYSTEM_ARCHITECTURE.md](SCENARIO_SYSTEM_ARCHITECTURE.md) |

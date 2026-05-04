@@ -2,7 +2,7 @@
 
 **Purpose**: disambiguation map for the four distinct processing subsystems that produce, enrich, or consume the graph's statistical fields. These look similar — they all touch `edge.p.*` fields, they all feed chart rendering, they all involve some form of "topological" or "pass-over-the-graph" concept — but they are architecturally distinct. Conflating them has repeatedly caused design mistakes and agent confusion.
 
-**See also**: [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) (FE topo + CF orchestration and the CF race), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (underlying statistical models — shifted lognormal, Beta/Binomial, completeness, partial pooling), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what latency fitting computes in detail), [PARAMETER_SYSTEM.md](PARAMETER_SYSTEM.md) (model_vars data model), [ANALYSIS_TYPES_CATALOGUE.md](ANALYSIS_TYPES_CATALOGUE.md) (analysis runner inventory), [project-bayes/INDEX.md](../project-bayes/INDEX.md) (Bayes compiler programme), [project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) (why the quick BE topo pass was removed on `24-Apr-26`).
+**See also**: [stats-pipeline-schematic.md](stats-pipeline-schematic.md) (single-canvas field-flow schematic), [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) (FE topo + CF orchestration and the CF race), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (underlying statistical models — shifted lognormal, Beta/Binomial, completeness, partial pooling), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what latency fitting computes in detail), [PARAMETER_SYSTEM.md](PARAMETER_SYSTEM.md) (model_vars data model), [ANALYSIS_TYPES_CATALOGUE.md](ANALYSIS_TYPES_CATALOGUE.md) (analysis runner inventory), [project-bayes/INDEX.md](../project-bayes/INDEX.md) (Bayes compiler programme), [project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) (why the quick BE topo pass was removed on `24-Apr-26`).
 
 ---
 
@@ -23,6 +23,8 @@ Subsystems 2 and 3 run during the standard Stage 2 fetch pipeline; subsystem 1 r
 
 The rest of this doc details each subsystem, the pipeline sequence, the fields each writes/reads, and the common confusions.
 
+For the field-origin canvas across both model-vars generation and projection / forecasting, start with [stats-pipeline-schematic.md](stats-pipeline-schematic.md). This doc remains the narrative subsystem reference.
+
 ---
 
 ## 2. Quick reference: what writes what
@@ -34,7 +36,7 @@ The rest of this doc details each subsystem, the pipeline sequence, the fields e
 | `edge.p.posterior.*` | `applyPromotion` (single writer post-unification, 30-Apr-26) | Source-agnostic Beta projection from active `model_vars[*].probability` |
 | `edge.p.latency.posterior.*` | `applyPromotion` (single writer post-unification) | Source-agnostic lognormal projection from active `model_vars[*].latency`. Today only the bayesian source produces a populated latency posterior — analytic carries point estimates without posterior moments |
 | `edge.p.latency.{mu, sigma, t95, path_t95, path_mu, path_sigma, ...}` | Promoted from whichever model_vars source won `applyPromotion` | Latency fit scalars |
-| `edge.p.mean`, `edge.p.sd` | BE CF pass (when landed) / else FE topo-pass blend fallback | Conditioned asymptotic rate + SD |
+| `edge.p.mean`, `edge.p.stdev`, `edge.p.stdev_pred` | BE CF pass (when landed) / else FE topo-pass blend fallback | Conditioned asymptotic rate + epistemic / predictive SD |
 | `edge.p.latency.completeness` | BE CF pass (authoritative per doc 45) / else FE topo-pass CDF eval fallback | Cohort maturity at query ages |
 | `edge.p.latency.completeness_stdev` | BE CF pass | Conditioned uncertainty on completeness |
 | `edge.p.evidence.{mean, n, k}` | FE topo-pass evidence aggregation (from query-scoped snapshot counts) | Raw observed conversion data |
@@ -43,7 +45,7 @@ The rest of this doc details each subsystem, the pipeline sequence, the fields e
 Key invariants:
 - A single field can be written by multiple subsystems — the authoritative writer depends on which pass has landed most recently and what promotion selects.
 - Promotion hierarchy (`modelVarsResolution.ts`): `bayesian` (if gated), else `analytic`; `manual` always wins when present.
-- The CF pass owns `p.mean`, `p.sd`, `completeness`, `completeness_stdev` — these overwrite whatever the FE topo pass produced once CF arrives.
+- The CF pass owns `p.mean`, `p.stdev`, `p.stdev_pred`, `completeness`, `completeness_stdev` — these overwrite whatever the FE topo pass produced once CF arrives.
 
 ---
 
@@ -120,10 +122,8 @@ Key invariants:
 **Runtime-bundle conditioning seam (current live behaviour)**: before the
 row-builder or summary solve runs, the live callers assemble
 `PreparedForecastRuntimeBundle.p_conditioning_evidence` in
-`graph-editor/lib/runner/forecast_runtime.py`. This object is an internal
-statement of which evidence family is allowed to move the rate side; it is
-not a second carrier selector and it does not rewrite the subject span. The
-current WP8 landing is intentionally narrow:
+`graph-editor/lib/runner/forecast_runtime.py`. The current WP8 landing is
+intentionally narrow:
 
 - exact single-hop `cohort()` subjects enable
   `direct_cohort_enabled = true` and tag the seam as
@@ -136,15 +136,96 @@ current WP8 landing is intentionally narrow:
   synthesises its own bundle, and `_compute_surprise_gauge`, so the live
   callers stay aligned
 
-This is only rate-conditioning metadata. Carrier semantics, latency
-semantics, and numerator representation stay on the factorised rules
-established by the earlier work packages.
+Post-73n Stage 8, `PreparedConditioningEvidence` is **compatibility
+metadata only** — *not* an evidence-ownership decider. Consumers reading
+which evidence family conditioned a given primitive must read the
+per-primitive provenance (Stage 8 substrate threading; see §3.3a below)
+and the readout diagnostic block, not `p_conditioning_evidence`. The
+serialised block on the response now carries an explicit
+`compatibility_metadata_note` to that effect; retirement of
+`p_conditioning_evidence` is tracked as Stage 8 Follow-up 8.
+
+Carrier semantics, latency semantics, and numerator representation stay
+on the factorised rules established by the earlier work packages.
+
+### 3.3a Conditioned transition primitive substrate (73n, default OFF)
+
+73n (Stages 1–8 landed 1-May-26) added a typed primitive substrate that
+sits **inside** the CF kernel boundary, between `forecast_runtime`
+bundle preparation and the `forecast_state` row builder. The four
+primitive readouts are gated behind environment-variable flags; all
+four default to OFF. The pre-73n `compute_forecast_trajectory` /
+`compute_forecast_summary` route remains the live path until the flags
+are flipped.
+
+| Flag | Surface |
+|---|---|
+| `DAGNET_SINGLE_HOP_PRIMITIVE_READOUT` | Single-hop window and single-hop subject (`A == X`) cohort readout |
+| `DAGNET_MULTI_HOP_SUBJECT_COMPOSITION` | Multi-hop cohort `A == X` subject-span composition |
+| `DAGNET_MULTI_HOP_WINDOW_READOUT` | Multi-hop `window()` reuses the Stage 5b composer under an independent flag |
+| `DAGNET_ACTIVE_COHORT_CARRIER_READOUT` | Active cohort `A != X` reads through 73m's `compose_carrier_to_x` plus Stage 5b's `compose_subject_span` |
+
+Each flag accepts `OFF` (live path), `SHADOW` (compute primitive
+readout in parallel and emit divergence diagnostics, return live
+result), and `ON` (return primitive readout). **Production flag-ON for
+any of the four is blocked** on a single follow-up: maturity-aware
+likelihood migration into the primitive posterior. SHADOW is the
+highest mode recommended for production while that follow-up is open.
+
+**Substrate modules** ([BE_RUNNER_CLUSTER.md](BE_RUNNER_CLUSTER.md) §3a
+has the full file map):
+
+- `lib/runner/primitives.py` — `ConditionedTransitionPrimitive` typed
+  posterior over a single parameterised edge in a single
+  `(scope, regime, context)` triple; carries probability + timing
+  posteriors, draw-family identity for deterministic RNG keying, raw /
+  weighted / effective evidence views, residual / unparameterised
+  classification.
+- `lib/runner/primitive_evidence.py` + `lib/runner/prefix_arrival.py` —
+  resolve admitted `window()` evidence per primitive and the prefix-
+  arrival map induced by the upstream subject prefix.
+- `lib/runner/primitive_conditioning.py` — applies the subset and
+  effective-evidence policy **once at primitive construction** and
+  emits the conjugate Beta-Binomial update; doc 52 compatibility-blend
+  metadata is recorded here.
+- `lib/runner/primitive_residual_guard.py` — explicit unsupported
+  classification for residual / complement / unparameterised edges; no
+  silent rate or timing invention.
+- `lib/runner/subject_span_composer.py` — `compose_subject_span` runs
+  DAG composition over conditioned primitives, returning
+  `ComposedSubjectSpan` (the multi-hop and active-cohort readouts both
+  consume this).
+- `lib/runner/primitive_readout.py` — the four readouts at the shared
+  row-builder seam.
+
+**Caching**: 73n Stage 7 introduced a generic process-memory TTL cache
+([`lib/result_cache.py`](../../graph-editor/lib/result_cache.py)) and
+migrated the existing snapshot-DB cache onto it. Primitive,
+composed-carrier, and composed-subject caches register under the same
+registry. Invalidation is coarse-grained: any `clear_all()` call —
+snapshot writes, `/api/snapshots/cache-clear`, the per-request
+`no_cache: true` flag's `cache_bypass_ctx` — flushes every registered
+cache. Per-key targeted invalidation is a documented follow-up.
+
+**Provenance**: with a flag at SHADOW or ON, the `[I12]` response (per
+[FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) §B.3) carries
+per-primitive substrate provenance inside each readout's diagnostic
+block — primitive identity, evidence role, raw / weighted / effective
+evidence totals, evidence-clock provenance (arrival_weight summary +
+binding policy + scope key), prior source, conditioning status,
+draw-family identity, residual / complement diagnostics, and composed
+subject + carrier topology. An optional `cache_status` snapshot is
+included for Stage 7 observability. The top-level `[I12]` field shape
+is unchanged.
+
+For the post-73n CF substrate end-to-end picture, read
+[FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) §B.6.
 
 **Dispersion contract (doc 49)**: `p_sd` and `p_sd_epistemic` are both closed-form Beta σ, derived from the resolved α/β pair — **not MC stds of the conditioned draws**. Historically `p_sd` was `np.std(rate_draws[:, -1])` on the IS-conditioned set, which collapses to the epistemic posterior width regardless of how diffuse the sampling prior was (IS-conditioning on O(n) observed evidence dominates the prior). Closed form is the only way to expose predictive dispersion (Beta(α_pred, β_pred)) distinctly from epistemic (Beta(α, β)). The non-latency fallback (`_non_latency_rows` in cohort_forecast_v3.py) derives `p_sd_epistemic` from the conjugate-updated posterior and `p_sd` from the unupdated predictive α_pred/β_pred so that kappa-inflated width is not collapsed by query-window evidence. See docs 45b §Phase C, 47 §5g.
 
 **Naming note (doc 61)**: the `p_sd` / `p_sd_epistemic` pair on the CF response retains the doc 49 convention, which is **inverted** from the doc 61 convention used for latency dispersions (where bare name = epistemic, `_pred` suffix = predictive). On the CF response `p_sd` is predictive and `p_sd_epistemic` is epistemic; on the Bayes latency posterior and `model_vars.latency.mu_sd`, bare name is epistemic and `_pred` is predictive. The two conventions live at different architectural layers (CF inner kernel output vs Bayes-webhook posterior block) and have not been unified. Consumers reading `p_sd` from a CF response should treat it as predictive; consumers reading `mu_sd` from a posterior block should treat it as epistemic. A future extension of doc 61 to the CF-response layer would eliminate this asymmetry. See doc 61 §11 "Acceptance criteria" for the residual.
 
-**Outputs**: per-edge per-scenario `{p_mean, p_sd, p_sd_epistemic, completeness, completeness_sd, tau_max, n_rows, n_cohorts, conditioned}` returned via API response. Applied to graph via `conditionedForecastService.applyConditionedForecastToGraph` — writes `edge.p.blendedMean`, `edge.p.latency.completeness`, `edge.p.latency.completeness_stdev`, `edge.p.forecast.mean`. `p_sd` and `p_sd_epistemic` are returned on the response but **not persisted to graph edges** by the current projector. Consumers that need them (today: the funnel runner's whole-graph CF call) read directly from the CF response. Whole-graph persistence of the dispersion scalars is deferred; see doc 54 §8.2.
+**Outputs**: per-edge per-scenario `{p_mean, p_sd, p_sd_epistemic, completeness, completeness_sd, tau_max, n_rows, n_cohorts, conditioned}` returned via API response. Applied to graph via `conditionedForecastService.applyConditionedForecastToGraph` per the I12 mapping: `p_mean → edge.p.mean`, `p_sd → edge.p.stdev_pred`, `p_sd_epistemic → edge.p.stdev`, `completeness → edge.p.latency.completeness`, `completeness_sd → edge.p.latency.completeness_stdev`, and `evidence_k/evidence_n → edge.p.evidence.{k,n}`. CF does not write `p.forecast.*`; response-only fields include `conditioning{...}`, `cf_mode`, `cf_reason`, `tau_max`, `n_rows`, `n_cohorts`, `conditioned`, and `skipped_edges`.
 
 **`conditioned` field**: boolean on every per-edge CF result. True when observed evidence was applied to the prior (the usual case when snapshot rows exist for the edge's regime in the query window); false when the result is the unconditioned prior unchanged (no rows found, or the resolver could not bind a regime). Set in both the closed-form path (`NonLatencyResult.conditioned` in `cohort_forecast_v3.py`, written as `(fe is not None and sum_x > 0)`) and the MC sweep path (`bool(sweep.n_cohorts_conditioned)`). Consumers use it diagnostically — it surfaces "no evidence applied" cases that would otherwise be invisible because the prior-mean and unconditioned-mean coincide when the prior is well-calibrated. The funnel runner consumes `conditioned` for logging but does not branch on it: the completeness-weighted variance mixture already widens bands correctly when completeness=0.
 
@@ -247,7 +328,8 @@ Q. User issues query ───────────────────�
 │   │    Writes: model_vars[analytic], promoted p.latency.*, blendedMean
 │   │
 │   └─ BE CF pass (async, races 500ms deadline)
-│        Writes: p.mean, p.sd, latency.completeness, completeness_stdev
+│        Writes: p.mean, p.stdev, p.stdev_pred,
+│                latency.completeness, completeness_stdev
 │        Overwrites FE blendedMean and topo-pass completeness on arrival
 │
 ├─ Stage 3: Render
@@ -296,7 +378,7 @@ pass being triggered again.
 Not any more. `run_conversion_funnel` calls the CF machinery directly — **one whole-graph CF pass per scenario**, then subgraph extraction for the selected path. The whole-graph shape is necessary because CF needs the full topological context to propagate upstream carriers; a per-edge scoped CF call would be semantically wrong. The funnel consumes CF output per edge (p_mean, p_sd, p_sd_epistemic, completeness, conditioned) to build stage bars with hi/lo bands via the completeness-weighted variance mixture. It does not call `compute_forecast_trajectory` directly — that's an inner kernel; it calls CF via `handle_conditioned_forecast` and extracts the subgraph result.
 
 **Confusion 6: "Bayes compiler's α/β gets re-conditioned at query time"**
-No. Bayes produces an **aggregate** posterior from the training corpus; that's durable. The BE CF pass does query-time IS conditioning of **draws** from that posterior, producing a conditioned posterior-representation (mean, SD) written to `p.mean, p.sd`. The bayesian α/β themselves don't change. The engine additionally applies a mass-weighted blend (doc 52) before return, mixing the IS-conditioned draws with the unconditioned draws at ratio `(1 − r) : r` where `r = m_S / m_G` (selected Cohort mass over compiler training mass on the matching temporal axis). This corrects the systematic over-concentration that arises when the query's selected Cohorts overlap the compiler's training set. See [project-bayes/52-subset-conditioning-double-count-correction.md](../project-bayes/52-subset-conditioning-double-count-correction.md).
+No. Bayes produces an **aggregate** posterior from the training corpus; that's durable. The BE CF pass does query-time IS conditioning of **draws** from that posterior, producing a conditioned posterior-representation written to `p.mean`, `p.stdev`, and `p.stdev_pred`. The bayesian α/β themselves don't change. The engine additionally applies a mass-weighted blend (doc 52) before return, mixing the IS-conditioned draws with the unconditioned draws at ratio `(1 − r) : r` where `r = m_S / m_G` (selected Cohort mass over compiler training mass on the matching temporal axis). This corrects the systematic over-concentration that arises when the query's selected Cohorts overlap the compiler's training set. See [project-bayes/52-subset-conditioning-double-count-correction.md](../project-bayes/52-subset-conditioning-double-count-correction.md).
 
 **Confusion 7 (historical): "`model_vars[analytic].alpha, beta` can be used as a prior"**
 
@@ -340,7 +422,7 @@ When you read a field, know who wrote it:
 - `edge.p.posterior.*`, `edge.p.latency.posterior.*` → `applyPromotion` (single writer post-unification, 30-Apr-26). Source-agnostic projections of the active `model_vars[*]` entry. Cleared when no source resolves.
 - `edge.p.latency.mu, sigma, t95, ...` → promoted from whichever model_vars source is active (per `resolveActiveModelVars`)
 - `edge.p.evidence.{mean, n, k}` → FE topo-pass evidence aggregation (from scoped snapshot data)
-- `edge.p.mean, edge.p.sd` → BE CF pass when landed; else FE topo pass's blended fallback
+- `edge.p.mean, edge.p.stdev, edge.p.stdev_pred` → BE CF pass when landed; else FE topo pass's blended fallback
 - `edge.p.latency.completeness` → BE CF pass when landed; else FE topo pass's CDF eval
 - `edge.p.latency.completeness_stdev` → BE CF pass
 - `edge.p.forecast.{mean, stdev, source}` → `applyPromotion` (the `source` label tracks the active source after promotion)

@@ -6,14 +6,9 @@ sections "Core design contract" and "Mathematical invariants".
 
 Two surfaces are exercised:
 
-1. **Legacy v3 factory** (``forecast_runtime.build_x_provider_from_graph`` +
-   ``forecast_runtime.build_upstream_carrier``). Tests against this surface
-   document the current behaviour. Cases where the legacy factory does not
-   yet satisfy the contract — because the gate is still
-   ``has_semantic_upstream_latency`` rather than the structural
-   ``A != X and reach > 0`` — remain ``xfail(strict=True)`` until Stage 3
-   wires the new primitive in. Stage 3 is responsible for removing those
-   xfail markers.
+1. **Runtime v3 factory** (``forecast_runtime.build_x_provider_from_graph``).
+   Tests against this surface document the current live behaviour after the
+   legacy tiered carrier dispatcher was retired.
 
 2. **The Stage-2 carrier composition primitive** in
    ``runner.carrier_composition``. The composer takes ``transitions``
@@ -21,7 +16,7 @@ Two surfaces are exercised:
    ``TransitionPrimitive`` objects without going through the default
    resolver. Tests against the composer prove that 73m §"Stage 1"
    bullets 2/3/4 and the horizon-adequacy rule are satisfied by the
-   primitive itself, even though no live caller uses it yet.
+   primitive itself.
 
 Scope: v3 only. ``cohort_forecast.py``'s legacy XProvider/factory and the
 inline ``XProvider`` construction inside ``_handle_cohort_maturity_v2`` at
@@ -193,37 +188,31 @@ def test_carrier_conditional_cdf_saturates_to_one_for_latent_chain():
     objects is conditional on reaching X. It should saturate to one over
     a sufficiently large horizon. Reach remains a separate scalar."
 
-    Run ``build_upstream_carrier`` with a tight-lognormal upstream params
-    list and check the deterministic CDF saturates to ~1.0 at the horizon
-    end. If the carrier reach were folded into the CDF, the saturation
-    target would be ``reach`` (here 0.6) rather than 1.0 — which would
-    break the displayed-rate semantics described in §"Core design contract".
+    Compose a tight-lognormal upstream transition and check the
+    deterministic CDF saturates to ~1.0 at the horizon end. If carrier
+    reach were folded into the CDF, the saturation target would be
+    ``reach`` (here 0.6) rather than 1.0 — which would break the
+    displayed-rate semantics described in §"Core design contract".
     """
-    import numpy as np
+    from runner.carrier_composition import compose_carrier_to_x
 
-    from runner.forecast_runtime import build_upstream_carrier
-
-    upstream_params = [{
-        'p': 0.6,
-        'mu': 1.0,        # t50 ≈ exp(1.0) ≈ 2.7 days
-        'sigma': 0.3,     # tight lognormal
-        'onset': 0.0,
-    }]
-    rng = np.random.default_rng(seed=42)
-    det_cdf, _mc_cdf, tier = build_upstream_carrier(
-        upstream_params_list=upstream_params,
-        upstream_obs=None,
-        cohort_list=[],
-        reach=0.6,
+    graph = _make_carrier_graph([
+        ('e-a-b', 'u-a', 'u-b', 'A', 'B', 0.6, 1.0, 0.3, 0.0),
+        ('e-b-c', 'u-b', 'u-c', 'B', 'C', 0.7, 2.2, 0.6, 0.0),
+    ])
+    carrier = compose_carrier_to_x(
+        graph=graph,
+        anchor_node_id='A',
+        denominator_node_id='B',
         is_window=False,
         max_tau=50,
-        num_draws=64,
-        rng=rng,
     )
-    assert det_cdf is not None, f"carrier returned no det_cdf (tier={tier})"
-    assert det_cdf[-1] == pytest.approx(1.0, abs=1e-2), (
+    assert carrier.deterministic_cdf is not None, (
+        f"carrier returned no det_cdf (tier={carrier.diagnostics.tier})"
+    )
+    assert carrier.deterministic_cdf[-1] == pytest.approx(1.0, abs=1e-2), (
         "conditional CDF must saturate to 1.0 at horizon, not to reach. "
-        f"det_cdf[-1]={det_cdf[-1]} reach=0.6"
+        f"det_cdf[-1]={carrier.deterministic_cdf[-1]} reach=0.6"
     )
 
 
@@ -355,9 +344,9 @@ def test_mixed_latency_then_non_latency_chain_carrier_reflects_latency_edge_timi
 # horizon. … any ratio below `0.95` is a blocking failure for this
 # implementation plan until the horizon rule is revised."
 #
-# The conditional CDF returned by build_upstream_carrier already represents
+# The conditional CDF returned by compose_carrier_to_x already represents
 # K(τ) / reach (it goes to 1.0 at large τ). The horizon-adequacy contract
-# is therefore: det_cdf[-1] >= 0.99 for fixtures where saturation is
+# is therefore: deterministic_cdf[-1] >= 0.99 for fixtures where saturation is
 # expected; det_cdf[-1] >= 0.95 is the blocking floor — below that, the
 # primitive must refuse or surface a horizon-inadequate diagnostic rather
 # than return a silently truncated carrier.
@@ -365,30 +354,28 @@ def test_mixed_latency_then_non_latency_chain_carrier_reflects_latency_edge_timi
 
 def test_horizon_adequacy_returns_at_least_99_percent_saturation_when_horizon_is_sufficient():
     """K[max_tau] / reach must be >= 0.99 for a fixture sized to saturate."""
-    import numpy as np
-
-    from runner.forecast_runtime import build_upstream_carrier
+    from runner.carrier_composition import compose_carrier_to_x
 
     # Tight lognormal: t99 ≈ exp(0.5 + 0.3·2.33) ≈ exp(1.2) ≈ 3.3 days.
     # max_tau = 50 leaves plenty of headroom.
-    rng = np.random.default_rng(seed=42)
-    det_cdf, _mc, tier = build_upstream_carrier(
-        upstream_params_list=[{
-            'p': 0.7, 'mu': 0.5, 'sigma': 0.3, 'onset': 0.0,
-        }],
-        upstream_obs=None,
-        cohort_list=[],
-        reach=0.7,
+    graph = _make_carrier_graph([
+        ('e-a-b', 'u-a', 'u-b', 'A', 'B', 0.7, 0.5, 0.3, 0.0),
+        ('e-b-c', 'u-b', 'u-c', 'B', 'C', 0.5, 1.5, 0.4, 0.0),
+    ])
+    carrier = compose_carrier_to_x(
+        graph=graph,
+        anchor_node_id='A',
+        denominator_node_id='B',
         is_window=False,
         max_tau=50,
-        num_draws=64,
-        rng=rng,
     )
-    assert det_cdf is not None, f"carrier returned no det_cdf (tier={tier})"
-    assert det_cdf[-1] >= 0.99, (
+    assert carrier.deterministic_cdf is not None, (
+        f"carrier returned no det_cdf (tier={carrier.diagnostics.tier})"
+    )
+    assert carrier.deterministic_cdf[-1] >= 0.99, (
         f"horizon-adequacy: K[max_tau]/reach must be >= 0.99 for a fixture "
         f"sized to saturate (mu=0.5, sigma=0.3, max_tau=50); "
-        f"got det_cdf[-1]={det_cdf[-1]}"
+        f"got det_cdf[-1]={carrier.deterministic_cdf[-1]}"
     )
 
 

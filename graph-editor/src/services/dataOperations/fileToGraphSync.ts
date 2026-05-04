@@ -1948,8 +1948,8 @@ export async function getParameterFromFile(options: {
             freshAnalyticProb.stdev,
             {
               stdev_pred: freshAnalyticProb.stdev_pred,
-              n_effective: typeof freshAnalyticProb.weighted_n === 'number' && freshAnalyticProb.weighted_n > 0
-                ? freshAnalyticProb.weighted_n
+              n_effective: typeof freshAnalyticProb.raw_n === 'number' && freshAnalyticProb.raw_n > 0
+                ? freshAnalyticProb.raw_n
                 : undefined,
             },
           ),

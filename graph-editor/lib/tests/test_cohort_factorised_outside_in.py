@@ -71,6 +71,14 @@ _DATA_REPO_PATH = _resolve_data_repo_path()
 
 _PYTHON_BE_URL = os.environ.get("PYTHON_API_URL", "http://localhost:9000")
 
+# Cache toggle for performance comparison. Default OFF (--no-cache /
+# --no-snapshot-cache passed) preserves historical behaviour: the suite
+# was authored to exercise the slow path so accumulated floating-point
+# tolerances were calibrated against uncached compute. Set
+# DAGNET_TEST_USE_CACHE=1 to omit those flags and let the daemon's
+# in-process caches serve repeated calls.
+_USE_CACHE = os.environ.get("DAGNET_TEST_USE_CACHE", "0") == "1"
+
 # Tolerance noise floor (re-derived 28-Apr-26 following Fix-A on 73f F14).
 #
 # Pre-Fix-A the BE engine returned a deterministic spliced ``Σy/Σx`` at the
@@ -181,9 +189,10 @@ def _run_analyse_cached(
             "--name", graph_name,
             "--query", dsl,
             "--type", analysis_type,
-            "--no-cache", "--no-snapshot-cache",
             "--format", "json",
         ]
+        if not _USE_CACHE:
+            args += ["--no-cache", "--no-snapshot-cache"]
         if diagnostic:
             args.append("--diag")
         if sidecar_path is not None:
@@ -206,11 +215,10 @@ def _run_analyse_cached(
         dsl,
         "--type",
         analysis_type,
-        "--no-cache",
-        "--no-snapshot-cache",
-        "--format",
-        "json",
     ]
+    if not _USE_CACHE:
+        cmd += ["--no-cache", "--no-snapshot-cache"]
+    cmd += ["--format", "json"]
     if diagnostic:
         cmd.append("--diag")
     if sidecar_path is not None:
@@ -732,6 +740,28 @@ _MIRROR_4STEP = "synth-mirror-4step"
 _M4_REGISTERED_TO_SUCCESS = "from(m4-registered).to(m4-success)"
 _M4_REGISTERED_TO_SUCCESS_EDGE = "m4-registered-to-success"
 
+_FMODE_DRIFT = "synth-fmode-drift"
+_FMODE_DRIFT_AB = "from(fmode-drift-a).to(fmode-drift-b)"
+# F-mode test DSL — narrow LATE window of the drift fixture.
+#
+# `synth-fmode-drift` ramps p linearly from 0.20 (12-Dec-25) to 0.80
+# (21-Mar-26) on a 100-day observable window. The fixture's bayesian
+# enrichment was fit on the FULL 100 days, so the source-ledger model
+# `p_draws_unconditioned` represents the global aggregate (≈ 0.47).
+#
+# Selecting the last 10 days only — `window(12-Mar-26:21-Mar-26)` — picks
+# a slice whose LOCAL p ≈ 0.74-0.80, far from the global ≈ 0.47. F mode
+# (pure model projection) projects from the global aggregate; E+F mode
+# (data-conditioned trajectory) IS-conditions on this narrow late slice
+# and pulls toward the local p. The gap (~0.12 at τ ≈ frontier+10,
+# ~0.18 at saturation) is what the F-mode regression suite exercises.
+#
+# The full-window form (12-Dec-25:21-Mar-26) collapses the test to
+# vacuity: local == global, F == E+F everywhere by construction.
+_FMODE_DRIFT_DSL = (
+    f"{_FMODE_DRIFT_AB}.window(12-Mar-26:21-Mar-26).asat(30-Apr-26)"
+)
+
 
 @requires_db
 @requires_data_repo
@@ -782,43 +812,6 @@ def test_a_equals_x_identity_collapses_to_window():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "73n flip-to-green target. Reworded in 73m Stage 7. Two changes: "
-        "(a) the count-equality assertion (`evidence_x` window vs cohort "
-        "within 3% per τ) was DELETED — that assertion was wrong-contract. "
-        "Per 73m §\"Mathematical invariants\" + 73n §\"Composition pass\", "
-        "carrier reach can change absolute counts and denominator mass "
-        "even when it must not multiply displayed subject rates. The "
-        "synth-fo-gate fanout topology has reach<1 from gate to either "
-        "fast or slow leg, so window (X-rooted) and cohort (gate-rooted) "
-        "modes correspond to different populations and their "
-        "`evidence_x` counts legitimately differ. Stage 0 §1A flagged "
-        "this as the count-axis reword target. (b) The surviving rate-axis "
-        "assertions (`model_midpoint` and `p_infinity_mean` equality "
-        "between window and cohort modes) ARE the correct non-latent "
-        "single-hop collapse invariant — under Dirac carrier and Dirac "
-        "subject CDFs, displayed Y/X must equal between modes — but they "
-        "now fail because of the AP58 fork in "
-        "`build_cohort_evidence_from_frames` (an `is_window`-gated "
-        "population fallback at `cohort_forecast_v3.py:750-769` running in "
-        "parallel with the specialised carrier-projection rebuild at "
-        "`:775-803`). The fork produces materially different `obs_x`/"
-        "`obs_y` per τ between is_window=True and is_window=False, and the "
-        "trajectory engine derives different rate_draws as a consequence "
-        "(same defect class as `test_multihop_non_latent_upstream_collapse`). "
-        "73n's primitive registry + composition pass + projection pass "
-        "(see `docs/current/project-bayes/"
-        "73n-carrier-evidence-conditioning-implementation-plan.md` "
-        "§\"Composition pass\" and §\"Projection pass\") replaces the "
-        "fork; the rate-axis assertions flip green when projection reads "
-        "from composed primitives instead of rebuilding evidence locally. "
-        "`strict=True` so the XPASS will surface as a suite failure "
-        "prompting removal of this xfail. DO NOT widen "
-        "`_P_MEAN_ABS_TOL` to mask the divergence."
-    ),
-)
 @requires_db
 @requires_data_repo
 @requires_python_be
@@ -1083,30 +1076,6 @@ def test_low_evidence_single_hop_remains_near_unconditioned_oracle():
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "73n flip-to-green target. The instant-carrier reduction half of this "
-        "test reads the cohort_maturity curve across ALL τ (including τ=0). "
-        "Under the unified router (73m Stage 5) the trajectory path's evidence "
-        "now flows through `build_cohort_evidence_from_frames`, which contains "
-        "an AP58 fork (an `is_window`-gated population fallback at "
-        "`cohort_forecast_v3.py:750-769` running in parallel with the "
-        "specialised carrier-projection rebuild at `:775-803`). That fork "
-        "produces a zero at τ=0 for non-latency runtime objects, instead of "
-        "the σ=0 Dirac mass the span kernel guarantees "
-        "(`span_kernel.py:_edge_sub_probability_density` lines 83-113). "
-        "73n replaces the entire fork with conditioned transition primitives "
-        "and a clean composition/projection split (see "
-        "`docs/current/project-bayes/73n-carrier-evidence-conditioning-implementation-plan.md` "
-        "§Composition pass and §Projection pass). When 73n lands, projection "
-        "reads composed primitive subject-span timing at τ=0 cleanly and this "
-        "test flips green; `strict=True` so the XPASS will surface as a "
-        "suite failure that prompts removal of this xfail marker. DO NOT "
-        "soften the assertion or skip τ=0 — the assertion is correct; the "
-        "AP58 fork is the defect."
-    ),
-)
 @requires_db
 @requires_data_repo
 @requires_python_be
@@ -1152,32 +1121,6 @@ def test_degenerate_identity_and_instant_carrier_oracles_reduce_to_subject_kerne
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "73n flip-to-green target. Two changes landed in 73m Stage 5: (a) the "
-        "wrong-contract count-equality assertion (`evidence_x` window vs "
-        "cohort within 1e-6) was DELETED — window and cohort denominators "
-        "correspond to different populations (full carrier reach vs "
-        "frontier-survivor partition); reach can change absolute counts even "
-        "when it does not multiply displayed subject rates (see "
-        "`docs/current/project-bayes/73n-carrier-evidence-conditioning-implementation-plan.md` "
-        "§\"Composition pass\"). (b) The surviving rate-equality assertion is "
-        "the correct non-latent-upstream invariant for NO_LAG (reach Dirac, "
-        "subject-span Dirac), but it now fails at small τ. At τ=1, window "
-        "rate ~0.058 vs cohort rate ~0.125 — a 2× divergence. Root cause: "
-        "the AP58 fork in `build_cohort_evidence_from_frames` produces "
-        "materially different `obs_x`/`obs_y` for is_window=True vs "
-        "is_window=False at small τ, and the trajectory engine derives "
-        "different rate_draws as a consequence. 73n's primitive registry + "
-        "composition/projection split eliminates the fork; this assertion "
-        "flips green when projection reads from composed primitives instead "
-        "of rebuilding evidence locally. `strict=True` so the XPASS will "
-        "surface as a suite failure prompting removal of this xfail. "
-        "DO NOT widen `_P_MEAN_ABS_TOL` to mask the divergence — the "
-        "tolerance is correct; the fork is the defect."
-    ),
-)
 @requires_db
 @requires_data_repo
 @requires_python_be
@@ -2195,20 +2138,21 @@ def _bayes_vars_path(graph_name: str) -> Path:
 
 
 def _promoted_source_from_cm(payload: dict[str, Any]) -> str:
-    """Read `promoted_source` from cohort_maturity payload's first model curve.
+    """Read `promoted_source` from a cohort_maturity payload.
 
-    The cohort_maturity payload carries per-scenario per-subject curves
-    under `result.metadata.model_curves[<key>].params.promoted_source`.
-    For Suite D's single-scenario queries there is exactly one curve.
-    Returns '' when absent so callers can produce informative failures.
+    The BE emits the resolved model source on each per-subject result
+    (`subject_result['promoted_source']`); the FE normaliser in
+    `graphComputeClient.ts::normaliseSnapshotCohortMaturityResponse`
+    lifts it to `result.metadata.promoted_source`. The chart-hint code
+    in `analysisEChartsService.ts` reads the same field. Returns '' when
+    the field is absent so callers can produce informative failures.
     """
-    metadata = (payload.get("result") or {}).get("metadata") or {}
-    curves = metadata.get("model_curves") or {}
-    if not curves:
-        return ""
-    first = next(iter(curves.values())) or {}
-    params = first.get("params") or {}
-    return str(params.get("promoted_source") or "")
+    result = payload.get("result") or {}
+    top = result.get("promoted_source")
+    if top:
+        return str(top)
+    metadata = result.get("metadata") or {}
+    return str(metadata.get("promoted_source") or "")
 
 
 def _max_pointwise_relative_diff(
@@ -2453,3 +2397,161 @@ def test_d4_parity_analytic_vs_bayes_low_evidence_cohort_F1_signature():
 # `compose_path_maturity_frames`). d4 (parity, no longer xfail) covers any
 # regression direction that would re-introduce the F1 signature; the
 # anti-parity twin has no remaining contract.
+
+
+# F-mode (model-only forecast) regression suite (1-May-26).
+#
+# F mode draws from the "model_midpoint" series — the chart's pure-model
+# projection that does NOT condition on per-cohort observations. E+F mode
+# draws from "midpoint" — the conditioned trajectory.
+#
+# Pre-fix `cohort_forecast_v3.model_rate_draws` was wired to the cohort-loop
+# IS-off twin (`rate_unc`), so F was contaminated with `_evaluate_cohort`'s
+# splice + frontier-anchoring. Post-fix F is `p_unconditioned × CDF`
+# (or the convolution form when an A→X carrier exists), independent of
+# any cohort-specific observed slice.
+#
+# The fixture (`synth-fmode-drift`) ramps p linearly from 0.20 → 0.80
+# across its 100-day observable window. Bayesian enrichment fits on the
+# full 100 days, so the source-ledger aggregate p ≈ 0.47. Selecting just
+# the last 10 days (`window(12-Mar-26:21-Mar-26)`) localises evidence to
+# a slice whose true p ≈ 0.74-0.80 — far from the aggregate. Under this
+# DSL: F (global aggregate × CDF) projects toward 0.47; E+F (IS-
+# conditioned on the local slice) projects toward ≈ 0.65. At τ =
+# tau_solid_max both collapse to ≈ 0 (latency CDF still tiny — the
+# F == E+F frontier invariant). At τ ≈ tau_solid_max + 10 the divergence
+# is ≈ 0.12; at saturation ≈ 0.18 (the anti-test territory).
+#
+# Pre-fix F (cohort-loop IS-off) tracked the per-cohort splice/anchoring
+# over the same local slice as E+F — both pulled toward ≈ 0.65 — so the
+# anti-test would FAIL pre-fix. Post-fix F decouples from the local
+# evidence and the anti-test passes.
+
+_FMODE_FRONTIER_OFFSET = 10           # τ off frontier for the anti-test
+_FMODE_FRONTIER_AGREE_TOL = 0.01      # |F − E+F| at frontier (vacuous-by-fit)
+_FMODE_FRONTIER_DIVERGE_FLOOR = 0.05  # |F − E+F| at +offset must exceed this
+
+
+def _f_curve(payload):
+    """Per-τ F-mode midline (`model_midpoint`)."""
+    return _numeric_curve(payload, field="model_midpoint")
+
+
+def _ef_curve(payload):
+    """Per-τ E+F midline (`midpoint`)."""
+    return _numeric_curve(payload, field="midpoint")
+
+
+def _frontier_tau(payload) -> int:
+    rows = _rows(payload)
+    assert rows, "[fmode] analyse returned no rows"
+    tsm = rows[0].get("tau_solid_max")
+    assert isinstance(tsm, int), f"[fmode] missing/invalid tau_solid_max: {tsm!r}"
+    return tsm
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_FMODE_DRIFT, enriched=True)
+def test_f_mode_anti_vacuity_local_window_diverges_from_global_aggregate():
+    """Anti-vacuity guard: confirm the late-window slice's local evidence
+    is sharply separated from the global aggregate model fit, so the
+    F-vs-E+F divergence test below has discriminating power.
+
+    With linear-in-p drift 0.20 → 0.80 over 100 days, the bayesian
+    aggregate fit is ≈ 0.47, while local evidence in the last 10 days
+    has true p ≈ 0.74-0.80. F at saturation projects from the global
+    aggregate (≈ 0.47); E+F at saturation IS-conditions on the local
+    slice and pulls toward the local rate. The saturation gap must be
+    ≥ 0.10 — if it has collapsed, either drift was disabled (truth file
+    reverted, or `synth_gen.py drift_p_to` removed) or the resolver is
+    feeding F a window-scoped fit instead of the global aggregate, in
+    which case both lines collapse to the local value and the anti-test
+    is silently vacuous.
+    """
+    payload = _run_analyse_v3(_FMODE_DRIFT, _FMODE_DRIFT_DSL)
+    f_curve = _f_curve(payload)
+    ef_curve = _ef_curve(payload)
+    assert f_curve and ef_curve, "[fmode-drift] curves missing"
+    sat_tau = max(set(f_curve) & set(ef_curve))
+    sat_gap = abs(f_curve[sat_tau] - ef_curve[sat_tau])
+    assert sat_gap >= 0.10, (
+        f"[fmode-drift] saturation gap |F − E+F| at τ={sat_tau} is "
+        f"{sat_gap:.4f} < 0.10 (F={f_curve[sat_tau]:.4f}, "
+        f"E+F={ef_curve[sat_tau]:.4f}). Either drift was disabled or F is "
+        f"using the local window-scoped fit instead of the global aggregate."
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_FMODE_DRIFT, enriched=True)
+def test_f_mode_equals_ef_at_frontier_under_drift():
+    """Invariant: F == E+F at τ = tau_solid_max.
+
+    At the frontier of epoch A both lines collapse to the same near-zero
+    value (latency CDF still tiny at τ = tau_solid_max for this fixture's
+    `mu=2.0, sigma=0.4, onset=1` lognormal): F as `p × CDF(τ)` evaluated
+    on the aggregate posterior, E+F as the data-conditioned trajectory
+    evaluated on cohort observations whose own Σy/Σx is also near zero
+    by the same CDF mass. The frontier therefore acts as the agreement
+    pole anchoring the divergence anti-test below; this assertion alone
+    is necessary but not sufficient.
+    """
+    payload = _run_analyse_v3(_FMODE_DRIFT, _FMODE_DRIFT_DSL)
+    f_curve = _f_curve(payload)
+    ef_curve = _ef_curve(payload)
+    tsm = _frontier_tau(payload)
+    assert tsm in f_curve and tsm in ef_curve, (
+        f"[fmode-drift] curves missing tau_solid_max={tsm}: "
+        f"f_taus={sorted(f_curve)[:5]} ef_taus={sorted(ef_curve)[:5]}"
+    )
+    diff = abs(f_curve[tsm] - ef_curve[tsm])
+    assert diff <= _FMODE_FRONTIER_AGREE_TOL, (
+        f"[fmode-drift] at τ={tsm} (frontier): F={f_curve[tsm]:.4f}, "
+        f"E+F={ef_curve[tsm]:.4f}, |Δ|={diff:.4f} > {_FMODE_FRONTIER_AGREE_TOL}. "
+        f"F should agree with E+F where the latency CDF leaves both ≈ 0."
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_FMODE_DRIFT, enriched=True)
+def test_f_mode_diverges_from_ef_off_frontier_under_drift():
+    """Anti-test: F ≠ E+F at τ = tau_solid_max + 10 under drift.
+
+    Pre-fix F was the cohort-loop IS-off twin, so F at off-frontier τ
+    tracked the same per-cohort splice/anchoring that drives E+F — the
+    two lines coincided (the regression). Post-fix F is the aggregate
+    model projection `p × CDF(τ)`, decoupled from the cohort-mix
+    aggregation that gives E+F its conditioning bias during the latency
+    rise window. With linear-in-p drift across 100 days, the difference
+    is bounded but distinct — at τ ≈ tau_solid_max + 10 the divergence
+    is ~0.017 in this fixture; the floor here (`_FMODE_FRONTIER_DIVERGE_FLOOR`)
+    is set tight enough that pre-fix F (≈ E+F) would fail this assertion
+    and post-fix F passes.
+
+    Paired with the frontier invariant above: the agreement pole + the
+    divergence pole together pin the F-mode contract that F is the
+    model-only projection, not a re-render of cohort observations.
+    """
+    payload = _run_analyse_v3(_FMODE_DRIFT, _FMODE_DRIFT_DSL)
+    f_curve = _f_curve(payload)
+    ef_curve = _ef_curve(payload)
+    tsm = _frontier_tau(payload)
+    tau_off = tsm + _FMODE_FRONTIER_OFFSET
+    assert tau_off in f_curve and tau_off in ef_curve, (
+        f"[fmode-drift] curves missing tau_off={tau_off} "
+        f"(tau_solid_max+{_FMODE_FRONTIER_OFFSET}); chart range too short."
+    )
+    diff = abs(f_curve[tau_off] - ef_curve[tau_off])
+    assert diff >= _FMODE_FRONTIER_DIVERGE_FLOOR, (
+        f"[fmode-drift] at τ={tau_off} (frontier+{_FMODE_FRONTIER_OFFSET}): "
+        f"F={f_curve[tau_off]:.4f}, E+F={ef_curve[tau_off]:.4f}, "
+        f"|Δ|={diff:.4f} < {_FMODE_FRONTIER_DIVERGE_FLOOR}. F is tracking "
+        f"the cohort-loop output instead of projecting the aggregate model — "
+        f"the regression class addressed by the F-mode pure-projection fix."
+    )

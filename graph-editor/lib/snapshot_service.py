@@ -8,29 +8,40 @@ Design reference: docs/current/project-db/snapshot-db-design.md
 
 Connection pooling & result caching
 ------------------------------------
-Module-level connection pool and TTL result cache survive across warm Vercel
-invocations (~5-15 min).  Cold start = fresh pool + empty cache.
+Module-level connection pool survives across warm Vercel invocations
+(~5-15 min). Cold start = fresh pool. The TTL result cache is registered
+under the shared ``result_cache`` registry (73n Stage 7); ``cache_clear()``
+delegates to ``result_cache.clear_all()`` so snapshot writes flush every
+registered cache (snapshot queries + primitive posteriors + composed
+objects) in lockstep.
 
 Cache is invalidated on writes (append_snapshots, delete_snapshots) and can be
 busted explicitly via ``cache_clear()`` or the ``/api/snapshots/cache-clear``
-endpoint.
+endpoint. Per-request bypass flows through the shared ContextVar via
+``cache_bypass_ctx``; the dev middleware activates it on ``?no-cache=1``
+and ``handle_runner_analyze`` activates it on body-level ``no_cache: true``.
 """
 
 import os
-import json
-import hashlib
 import base64
-import contextvars
-import time as _time
+import hashlib
+import json
 import threading
 import psycopg2
 import psycopg2.pool
 from psycopg2.extras import execute_values
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from datetime import date, datetime, timedelta
 import re
 
 from slice_key_normalisation import normalise_slice_key_for_matching
+import result_cache
+from result_cache import (
+    cache_bypass_ctx,
+    set_cache_bypass,
+    reset_cache_bypass,
+    is_cache_bypassed as _is_cache_bypassed,
+)
 
 
 # =============================================================================
@@ -123,129 +134,45 @@ def get_db_connection():
 
 
 # =============================================================================
-# TTL Result Cache (module-level, survives warm starts)
+# TTL Result Cache (registered under result_cache; survives warm starts)
 # =============================================================================
 
 _CACHE_DEFAULT_TTL_S = 15 * 60   # 15 minutes
 _CACHE_MAX_ENTRIES = 256
 
-_cache: Dict[str, Tuple[float, Any]] = {}   # key -> (expiry_timestamp, result)
-_cache_lock = threading.Lock()
-_cache_stats = {"hits": 0, "misses": 0, "evictions": 0, "invalidations": 0, "bypasses": 0}
-
-# Request-scoped bypass flag. Backed by contextvars so that concurrent async
-# requests sharing an event-loop thread see their own value — threading.local
-# does not give per-request isolation on a single loop thread.
-_bypass_var: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
-    'snapshot_cache_bypass', default=False
+_snapshot_cache = result_cache.make_cache(
+    'snapshot',
+    ttl_s=_CACHE_DEFAULT_TTL_S,
+    max_entries=_CACHE_MAX_ENTRIES,
 )
-
-_CACHE_LOG = bool(os.environ.get('DAGNET_CACHE_LOG'))
-
-
-def set_cache_bypass(bypass: bool = True):
-    """Set the cache bypass flag for the current context.
-
-    Returns a token. Pass it to ``reset_cache_bypass()`` to restore the
-    previous value (typically in a ``finally:`` block).
-    """
-    return _bypass_var.set(bypass)
-
-
-def reset_cache_bypass(token) -> None:
-    """Restore the bypass flag to the value before the matching set_cache_bypass()."""
-    _bypass_var.reset(token)
-
-
-def _is_cache_bypassed() -> bool:
-    return _bypass_var.get()
-
-
-class cache_bypass_ctx:
-    """Context manager that enables cache bypass for the current context.
-
-    Safe under asyncio: the flag lives in a ContextVar, so nested or
-    concurrent requests do not observe each other's state.
-    """
-    def __init__(self, bypass: bool = True):
-        self._bypass = bypass
-        self._token = None
-
-    def __enter__(self):
-        self._token = _bypass_var.set(self._bypass)
-        return self
-
-    def __exit__(self, *exc):
-        if self._token is not None:
-            _bypass_var.reset(self._token)
-            self._token = None
 
 
 def _cache_key(fn_name: str, *args, **kwargs) -> str:
-    """Deterministic cache key from function name + arguments.
-    Key is prefixed with fn_name for log readability."""
-    raw = json.dumps(
-        {"fn": fn_name, "a": args, "kw": kwargs},
-        sort_keys=True, default=str
-    )
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
-    return f"{fn_name}:{digest}"
+    return result_cache.make_key(fn_name, *args, **kwargs)
 
 
-def _cache_get(key: str) -> Tuple[bool, Any]:
-    """Return (hit, value).  Expired entries are treated as misses.
-    Respects per-thread bypass flag."""
-    fn = key.split(':')[0] if ':' in key else key[:24]
-    if _is_cache_bypassed():
-        with _cache_lock:
-            _cache_stats["bypasses"] += 1
-        print(f"[snapshot_cache] BYPASS {fn}")
-        return False, None
-    with _cache_lock:
-        entry = _cache.get(key)
-        if entry is not None:
-            expiry, value = entry
-            if _time.time() < expiry:
-                _cache_stats["hits"] += 1
-                print(f"[snapshot_cache] HIT {fn} ({len(_cache)} entries)")
-                return True, value
-            # Expired — remove.
-            del _cache[key]
-        _cache_stats["misses"] += 1
-        print(f"[snapshot_cache] MISS {fn} ({len(_cache)} entries)")
-        return False, None
+def _cache_get(key: str):
+    return _snapshot_cache.get(key)
 
 
 def _cache_put(key: str, value: Any, ttl_s: int = _CACHE_DEFAULT_TTL_S) -> None:
-    """Store a value with TTL.  Evicts oldest entries if over capacity.
-    Skips storage when bypass is active."""
-    if _is_cache_bypassed():
-        return
-    with _cache_lock:
-        _cache[key] = (_time.time() + ttl_s, value)
-        # Simple eviction: if over capacity, drop oldest (earliest expiry).
-        if len(_cache) > _CACHE_MAX_ENTRIES:
-            oldest_key = min(_cache, key=lambda k: _cache[k][0])
-            del _cache[oldest_key]
-            _cache_stats["evictions"] += 1
+    _snapshot_cache.put(key, value, ttl_s=ttl_s)
 
 
 def cache_clear() -> Dict[str, Any]:
-    """Clear the entire result cache.  Returns stats before clearing."""
-    with _cache_lock:
-        stats = dict(_cache_stats)
-        stats["entries_cleared"] = len(_cache)
-        _cache.clear()
-        _cache_stats["invalidations"] += 1
-        return stats
+    """Bust every registered cache; return aggregate pre-clear stats.
+
+    Snapshot writes (``append_snapshots``, ``delete_snapshots``) call
+    this so caches in other subsystems registered under
+    ``result_cache`` (73n Stage 7's primitive posterior + composed
+    object caches) are flushed in lockstep with the data they consume.
+    """
+    return result_cache.clear_all()
 
 
 def cache_stats() -> Dict[str, Any]:
-    """Return current cache statistics (read-only snapshot)."""
-    with _cache_lock:
-        stats = dict(_cache_stats)
-        stats["entries"] = len(_cache)
-        return stats
+    """Read-only stats snapshot for the snapshot cache."""
+    return _snapshot_cache.stats()
 
 
 def short_core_hash_from_canonical_signature(canonical_signature: str) -> str:

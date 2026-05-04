@@ -315,7 +315,7 @@ describe('buildAnalyticProbabilityBlock — (mean, stdev, α, β) joint consiste
     expect(blockZero.beta).toBeUndefined();
   });
 
-  it('uses `weighted_n` opt over moment-match concentration when both are available', () => {
+  it('uses explicit source-mass opt over moment-match concentration when both are available', () => {
     // Without override, n_effective comes from the moment-match concentration.
     const mean = 0.3;
     const stdev = 0.05;
@@ -323,9 +323,10 @@ describe('buildAnalyticProbabilityBlock — (mean, stdev, α, β) joint consiste
     expect(blockNoOverride.n_effective).toBeDefined();
     const matchedConcentration = blockNoOverride.n_effective!;
 
-    // When `n_effective` is supplied (e.g. weighted_n from FE topo), it is used
-    // verbatim. The Beta α, β are unchanged — the caller is asserting this
-    // entry's source mass for the doc 52 blend, not redefining the Beta shape.
+    // When `n_effective` is supplied (e.g. raw_n from FE topo), it is
+    // used verbatim. The Beta α, β are unchanged — the caller is
+    // asserting this entry's source mass for the doc 52 blend, not
+    // redefining the Beta shape.
     const blockWithOverride = buildAnalyticProbabilityBlock(mean, stdev, {
       n_effective: 250,
     });

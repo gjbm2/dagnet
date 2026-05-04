@@ -86,12 +86,6 @@ const BAND_PATTERN_ICONS: Record<BandPattern, string> = {
   stipple: 'path://M2,2A1,1,0,1,1,2,2.01M6,6A1,1,0,1,1,6,6.01M10,2A1,1,0,1,1,10,2.01M2,6A1,1,0,1,1,2,6.01M10,6A1,1,0,1,1,10,6.01M6,2A1,1,0,1,1,6,2.01',
 };
 
-/** Map source name → band fill pattern. */
-const SOURCE_BAND_PATTERNS: Record<string, BandPattern> = {
-  bayesian: 'diagonal',
-  analytic: 'stipple',
-};
-
 // ─── Builders ───────────────────────────────────────────────────────────────
 
 /**
@@ -107,7 +101,9 @@ const SOURCE_BAND_PATTERNS: Record<string, BandPattern> = {
  *  - 'e': evidence only (no forecast)
  *  - 'f': forecast only (projected_rate as a single dashed line)
  *
- * Optionally overlays a model CDF curve from result.metadata.model_curves.
+ * Renders F-mode predictive bands (`model_*` row fields) when scenario
+ * visibility is 'f', and an optional epistemic model curve (`model_curve_*`
+ * row fields) when `settings.show_model_curve` is true.
  */
 export function buildCohortMaturityEChartsOption(
   result: any,
@@ -192,6 +188,10 @@ export function buildCohortMaturityEChartsOption(
     modelFanUpper: number | null;
     modelFanLower: number | null;
     modelBands: FanBands | null;
+    modelCurveMidpoint: number | null;
+    modelCurveFanUpper: number | null;
+    modelCurveFanLower: number | null;
+    modelCurveBands: FanBands | null;
   };
   const byScenario = new Map<string, RowPoint[]>();
   for (const r of filteredRows) {
@@ -240,6 +240,21 @@ export function buildCohortMaturityEChartsOption(
         if (r?.model_bands && typeof r.model_bands === 'object') {
           const mb: FanBands = {};
           for (const [level, bounds] of Object.entries(r.model_bands)) {
+            if (Array.isArray(bounds) && bounds.length === 2) {
+              mb[level] = [Number(bounds[0]), Number(bounds[1])];
+            }
+          }
+          return mb;
+        }
+        return null;
+      })(),
+      modelCurveMidpoint: parse(r?.model_curve_midpoint),
+      modelCurveFanUpper: parse(r?.model_curve_fan_upper),
+      modelCurveFanLower: parse(r?.model_curve_fan_lower),
+      modelCurveBands: (() => {
+        if (r?.model_curve_bands && typeof r.model_curve_bands === 'object') {
+          const mb: FanBands = {};
+          for (const [level, bounds] of Object.entries(r.model_curve_bands)) {
             if (Array.isArray(bounds) && bounds.length === 2) {
               mb[level] = [Number(bounds[0]), Number(bounds[1])];
             }
@@ -387,6 +402,75 @@ export function buildCohortMaturityEChartsOption(
       if (sModelMid) seriesOut.push(sModelMid);
       // Fan polygons use model_bands — rendered in the fan section below
       // (mode !== 'e' gate lets it through).
+    }
+
+    // Optional epistemic model-curve overlay (toggle: show_model_curve).
+    // Tighter posterior-uncertainty-only bands; gated by user setting,
+    // independent of mode. Distinct dot-dash pattern to differentiate
+    // from F-mode predictive bands. Bands rendered inline here (the
+    // shared fan section keys off mode for predictive vs blended).
+    if (settings.show_model_curve) {
+      const modelCurveMidPts = points
+        .filter(p => p.modelCurveMidpoint !== null)
+        .map(p => ({ value: [p.tauDays, p.modelCurveMidpoint] as [number, number | null], ...toMeta(p) }));
+      const sModelCurveMid = mkLine({
+        id: `${scenarioId}::modelCurveMidpoint`,
+        name: `${name} (model curve)`,
+        colour, lineType: 'dotted', opacity: 0.85,
+        data: modelCurveMidPts,
+        smooth: true,
+      });
+      if (sModelCurveMid) seriesOut.push(sModelCurveMid);
+
+      // Model-curve bands use the established stipple pattern (the
+      // default promoted-source styling pre-73n). Distinct from F-mode
+      // predictive bands which use solid alpha fills, so both render
+      // simultaneously and remain visually distinguishable.
+      // Always 90% — the model curve is a fixed-level epistemic overlay,
+      // not a user-tunable surface like the F-mode fan.
+      const stroke = colour || (c.text === '#e0e0e0' ? '#c8c8c8' : '#646464');
+      {
+        const level = '90';
+        const poly: Array<[number, number, number]> = [];
+        for (const p of points) {
+          const bands = p.modelCurveBands;
+          if (bands && bands[level]) {
+            const [lo, hi] = bands[level];
+            if (Number.isFinite(lo) && Number.isFinite(hi)) poly.push([p.tauDays, hi, lo]);
+          } else if (p.modelCurveFanUpper !== null && p.modelCurveFanLower !== null) {
+            poly.push([p.tauDays, p.modelCurveFanUpper, p.modelCurveFanLower]);
+          }
+        }
+        if (poly.length > 0) {
+          seriesOut.push({
+            id: `${scenarioId}::modelCurveFan::${level}`,
+            type: 'custom' as any,
+            coordinateSystem: 'cartesian2d',
+            encode: { x: 0, y: 1 },
+            color: stroke,
+            renderItem: (params: any, api: any) => {
+              if (params.dataIndex !== 0) return;
+              const pts: number[][] = [];
+              for (let i = 0; i < poly.length; i++) pts.push(api.coord([poly[i][0], poly[i][1]]));
+              for (let i = poly.length - 1; i >= 0; i--) pts.push(api.coord([poly[i][0], poly[i][2]]));
+              const gr = params.coordSys;
+              return {
+                type: 'group',
+                children: [{
+                  type: 'group',
+                  children: generatePatternChildren(pts, 'stipple', stroke),
+                  clipPath: { type: 'polygon', shape: { points: pts, smooth: false } },
+                }],
+                clipPath: { type: 'rect', shape: { x: gr.x, y: gr.y, width: gr.width, height: gr.height } },
+                silent: true,
+              };
+            },
+            data: poly,
+            z: 2,
+            silent: true,
+          });
+        }
+      }
     }
 
     if (mode !== 'f') {
@@ -634,307 +718,22 @@ export function buildCohortMaturityEChartsOption(
   // Model overlay neutral colour — always in scope for legend data builder.
   const modelColour = c.text === '#e0e0e0' ? '#9ca3af' : '#6b7280'; // grey-400 / grey-500
 
-  // Model CDF overlay
-  // Per scenario: scenarios may resolve to different model vars (different
-  // posterior slices for context-qualified scenarios; different alpha/beta for
-  // window vs cohort temporal modes; etc.). We iterate visible scenarios and
-  // render each scenario's overlay in that scenario's colour. Source
-  // distinction continues via dash pattern (overlays the scenario colour).
-  const modelCurves = result?.metadata?.model_curves;
-  let promotedBandRendered = false;
-  let promotedSource: string = 'analytic';
-  if (modelCurves && typeof modelCurves === 'object') {
-    // ── Model overlay styling ──────────────────────────────────────────
-    // Per-scenario rendering: each scenario uses its own colour for model
-    // lines and bands. Source is distinguished by dash pattern within a
-    // scenario's colour.
-    const MODEL_DASH: Record<string, number[]> = {
-      bayesian: [3, 3],
-      analytic: [12, 5, 3, 5],
-    };
-    const MODEL_LABEL: Record<string, string> = {
-      bayesian: 'Bayesian', analytic: 'Analytic',
-    };
-    // In 'f' mode, always show the model curve — it IS the chart content.
-    const hasForecastOnlyScenario = Array.from(byScenario.keys()).some(sid => {
-      const m = extra?.scenarioVisibilityModes?.[sid]
-        ?? (scenarioMeta?.[sid]?.visibility_mode as any)
-        ?? 'f+e';
-      return m === 'f';
-    });
-    const showPromoted = hasForecastOnlyScenario || settings.show_model_promoted !== false;
-
-    // Iterate visible scenarios. effectiveSubjectId is the same across
-    // scenarios (subject == edge); model_curves is keyed by composite
-    // `${scenarioId}::${subjectId}`.
-    const visibleScenarioIdsForOverlay = Array.from(byScenario.keys());
-    for (const _scenarioId of visibleScenarioIdsForOverlay) {
-      const _modelKey = `${_scenarioId}::${effectiveSubjectId}`;
-      const entry = (modelCurves as Record<string, any>)[_modelKey];
-      if (!entry) continue;
-      // Scenario colour for this scenario's overlays. Falls back to neutral
-      // when the scenario has no colour assigned (rare).
-      const _scenarioColour = (scenarioMeta?.[_scenarioId]?.colour as string) || modelColour;
-      const _scenarioName = (scenarioMeta?.[_scenarioId]?.name as string) || String(_scenarioId);
-      const _entryPromotedSource = entry?.params?.promoted_source || entry?.promotedSource || 'analytic';
-      const _isBayesianPromoted = _entryPromotedSource === 'bayesian';
-      // Track the LAST scenario's promoted source as the chart-level promoted_source
-      // (used for legend hint rendering downstream). When scenarios disagree,
-      // this picks an arbitrary one — informational only.
-      promotedSource = _entryPromotedSource;
-
-      if (showPromoted && entry?.curve && Array.isArray(entry.curve) && entry.curve.length > 0) {
-        const data = entry.curve
-          .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
-          .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
-        if (data.length > 0) {
-          const dash = MODEL_DASH[_entryPromotedSource] || MODEL_DASH.analytic;
-          const _label = MODEL_LABEL[_entryPromotedSource] || _entryPromotedSource;
-          seriesOut.push({
-            id: `model_cdf::${_scenarioId}`,
-            name: visibleScenarioIdsForOverlay.length > 1 ? `${_scenarioName} · ${_label}` : _label,
-            type: 'line',
-            showSymbol: false,
-            smooth: true,
-            connectNulls: false,
-            lineStyle: { width: 2, color: _scenarioColour, type: dash as any, opacity: 0.85 },
-            itemStyle: { color: _scenarioColour },
-            color: _scenarioColour,
-            emphasis: { disabled: true },
-            z: 10,
-            data,
-          });
-          if (maxTau !== null) {
-            const curveMax = data[data.length - 1]?.value?.[0];
-            if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
-              maxTau = curveMax;
-            }
-          }
-        }
-      }
-      // Method B comparison curve — only relevant when promoted source is analytic.
-      if (showPromoted && !_isBayesianPromoted && entry?.methodBCurve && Array.isArray(entry.methodBCurve) && entry.methodBCurve.length > 0) {
-        const methodBData = entry.methodBCurve
-          .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
-          .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
-        if (methodBData.length > 0) {
-          seriesOut.push({
-            id: `model_cdf_method_b::${_scenarioId}`,
-            name: visibleScenarioIdsForOverlay.length > 1 ? `${_scenarioName} · Analytic B (old)` : 'Analytic B (old)',
-            type: 'line',
-            showSymbol: false,
-            smooth: true,
-            connectNulls: false,
-            lineStyle: { width: 2, color: _scenarioColour, type: [2, 2] as any, opacity: 0.5 },
-            itemStyle: { color: _scenarioColour },
-            color: _scenarioColour,
-            emphasis: { disabled: true },
-            z: 10,
-            data: methodBData,
-          });
-          if (maxTau !== null) {
-            const curveMax = methodBData[methodBData.length - 1]?.value?.[0];
-            if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
-              maxTau = curveMax;
-            }
-          }
-        }
-      }
-      // Promoted-source confidence band for this scenario.
-      const _srcPromotedBand = entry?.sourceModelCurves?.[_entryPromotedSource]?.band_upper;
-      const _srcBayesBand = entry?.sourceModelCurves?.bayesian?.band_upper;
-      const hasDispersion = showPromoted && (entry?.bayesBandUpper || entry?.params?.bayes_mu_sd > 0 || _srcPromotedBand || _srcBayesBand);
-      let bandUpper = hasDispersion ? entry?.bayesBandUpper : undefined;
-      let bandLower = hasDispersion ? entry?.bayesBandLower : undefined;
-      if (hasDispersion && !bandUpper) {
-        const srcPromoted = entry?.sourceModelCurves?.[_entryPromotedSource];
-        const srcBayes = entry?.sourceModelCurves?.bayesian;
-        const srcWithBands = srcPromoted?.band_upper ? srcPromoted : srcBayes;
-        if (srcWithBands?.band_upper) bandUpper = srcWithBands.band_upper;
-        if (srcWithBands?.band_lower) bandLower = srcWithBands.band_lower;
-      }
-      if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
-        const upperPts = bandUpper
-          .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
-        const lowerPts = bandLower
-          .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
-        if (upperPts.length > 0 && lowerPts.length > 0) {
-          promotedBandRendered = true;
-          const polyData = upperPts.map((p: any, i: number) => {
-            const lower = i < lowerPts.length ? lowerPts[i].model_rate : p.model_rate;
-            return [p.tau_days, p.model_rate, lower];
-          });
-          const promotedPattern: BandPattern = SOURCE_BAND_PATTERNS[_entryPromotedSource] || 'diagonal';
-          seriesOut.push({
-            id: `bayes_band::${_scenarioId}`,
-            name: visibleScenarioIdsForOverlay.length > 1 ? `${_scenarioName} · 90% band` : `Promoted 90% band`,
-            type: 'custom' as any,
-            coordinateSystem: 'cartesian2d',
-            encode: { x: 0, y: 1 },
-            color: _scenarioColour,
-            renderItem: (params: any, api: any) => {
-              if (params.dataIndex !== 0) return;
-              const pts: number[][] = [];
-              for (let i = 0; i < polyData.length; i++) pts.push(api.coord([polyData[i][0], polyData[i][1]]));
-              for (let i = polyData.length - 1; i >= 0; i--) pts.push(api.coord([polyData[i][0], polyData[i][2]]));
-              const gr = params.coordSys;
-              return {
-                type: 'group',
-                children: [{
-                  type: 'group',
-                  children: generatePatternChildren(pts, promotedPattern, _scenarioColour),
-                  clipPath: { type: 'polygon', shape: { points: pts, smooth: false } },
-                }],
-                clipPath: { type: 'rect', shape: { x: gr.x, y: gr.y, width: gr.width, height: gr.height } },
-                silent: true,
-              };
-            },
-            data: polyData,
-            z: 1,
-            silent: true,
-          });
-        }
-      }
-      // --- Per-source model curve overlays for this scenario ---
-      const sourceModelCurves = entry?.sourceModelCurves;
-      if (sourceModelCurves && typeof sourceModelCurves === 'object') {
-        const sourceStyles: Record<string, { dash: number[]; name: string; settingKey: string; z: number }> = {
-          analytic: { dash: MODEL_DASH.analytic, name: 'Analytic',  settingKey: 'show_model_analytic', z: 10 },
-          bayesian: { dash: MODEL_DASH.bayesian, name: 'Bayesian',  settingKey: 'show_model_bayesian', z: 11 },
-        };
-        for (const [srcName, srcData] of Object.entries(sourceModelCurves)) {
-          const style = sourceStyles[srcName];
-          if (!style) continue;
-          if (!settings[style.settingKey]) continue;
-          if (showPromoted && srcName === _entryPromotedSource) continue;
-          const srcCurve = (srcData as any)?.curve;
-          if (!Array.isArray(srcCurve) || srcCurve.length === 0) continue;
-          const curveData = srcCurve
-            .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
-            .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
-          if (curveData.length === 0) continue;
-          seriesOut.push({
-            id: `model_cdf_${srcName}::${_scenarioId}`,
-            name: visibleScenarioIdsForOverlay.length > 1 ? `${_scenarioName} · ${style.name}` : style.name,
-            type: 'line',
-            showSymbol: false,
-            smooth: true,
-            connectNulls: false,
-            lineStyle: { width: 2, color: _scenarioColour, type: style.dash as any, opacity: 0.85 },
-            itemStyle: { color: _scenarioColour },
-            color: _scenarioColour,
-            emphasis: { disabled: true },
-            z: style.z,
-            data: curveData,
-          });
-          if (maxTau !== null) {
-            const curveMax = curveData[curveData.length - 1]?.value?.[0];
-            if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
-              maxTau = curveMax;
-            }
-          }
-          // Per-source confidence band for this scenario × source.
-          {
-            const bandUpperSrc = (srcData as any)?.band_upper;
-            const bandLowerSrc = (srcData as any)?.band_lower;
-            if (Array.isArray(bandUpperSrc) && bandUpperSrc.length > 0 && Array.isArray(bandLowerSrc) && bandLowerSrc.length > 0) {
-              const upperPtsSrc = bandUpperSrc.filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
-              const lowerPtsSrc = bandLowerSrc.filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
-              if (upperPtsSrc.length > 0 && lowerPtsSrc.length > 0) {
-                const polyDataSrc = upperPtsSrc.map((p: any, i: number) => {
-                  const lower = i < lowerPtsSrc.length ? lowerPtsSrc[i].model_rate : p.model_rate;
-                  return [p.tau_days, p.model_rate, lower];
-                });
-                const srcPattern: BandPattern = SOURCE_BAND_PATTERNS[srcName] || 'diagonal';
-                seriesOut.push({
-                  id: `band_${srcName}::${_scenarioId}`,
-                  name: visibleScenarioIdsForOverlay.length > 1 ? `${_scenarioName} · ${style.name} 90% band` : `${style.name} 90% band`,
-                  type: 'custom' as any,
-                  coordinateSystem: 'cartesian2d',
-                  encode: { x: 0, y: 1 },
-                  color: _scenarioColour,
-                  renderItem: (params: any, api: any) => {
-                    if (params.dataIndex !== 0) return;
-                    const pts: number[][] = [];
-                    for (let i = 0; i < polyDataSrc.length; i++) pts.push(api.coord([polyDataSrc[i][0], polyDataSrc[i][1]]));
-                    for (let i = polyDataSrc.length - 1; i >= 0; i--) pts.push(api.coord([polyDataSrc[i][0], polyDataSrc[i][2]]));
-                    const gr = params.coordSys;
-                    return {
-                      type: 'group',
-                      children: [{
-                        type: 'group',
-                        children: generatePatternChildren(pts, srcPattern, _scenarioColour),
-                        clipPath: { type: 'polygon', shape: { points: pts, smooth: false } },
-                      }],
-                      clipPath: { type: 'rect', shape: { x: gr.x, y: gr.y, width: gr.width, height: gr.height } },
-                      silent: true,
-                    };
-                  },
-                  data: polyDataSrc,
-                  z: 9,
-                  silent: true,
-                });
-              }
-            }
-          }
-        }
-      } else {
-        // Legacy fallback: use bayesCurve from old format
-        if (entry?.bayesCurve && Array.isArray(entry.bayesCurve) && entry.bayesCurve.length > 0) {
-          const bayesData = entry.bayesCurve
-            .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
-            .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
-          if (bayesData.length > 0) {
-            seriesOut.push({
-              id: `model_cdf_bayes::${_scenarioId}`,
-              name: visibleScenarioIdsForOverlay.length > 1 ? `${_scenarioName} · Bayesian Model` : 'Bayesian Model',
-              type: 'line',
-              showSymbol: false,
-              smooth: true,
-              connectNulls: false,
-              lineStyle: { width: 2, color: _scenarioColour, type: MODEL_DASH.bayesian as any, opacity: 0.85 },
-              itemStyle: { color: _scenarioColour },
-              color: _scenarioColour,
-              emphasis: { disabled: true },
-              z: 11,
-              data: bayesData,
-            });
-            if (maxTau !== null) {
-              const curveMax = bayesData[bayesData.length - 1]?.value?.[0];
-              if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
-                maxTau = curveMax;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+  // Model curve rendering happens inline per-scenario above (see the
+  // `if (settings.show_model_curve)` block in the per-scenario loop).
+  // The legacy metadata.model_curves rendering path was deleted post-73n
+  // along with the source-curves / method-B / per-source-band data shapes
+  // it consumed.
 
   // Y-axis max: scan ONLY rendered series in seriesOut.  Everything in
   // seriesOut is visible; everything not in seriesOut is hidden.  No raw
   // metadata scan — the axis adapts purely to what's on screen.
   let maxRate = 0;
   for (const s of seriesOut) {
-    // Fan series: [tau, upper, lower] — check upper (index 1)
-    if (typeof s.id === 'string' && s.id.endsWith('::fan')) {
-      for (const d of (s.data || [])) {
-        const v = Array.isArray(d) ? d[1] : undefined;
-        if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
-      }
-      continue;
-    }
-    // Band series (bayes_band, band_*): custom render [tau, upper, lower]
-    if (s.id === 'bayes_band' || (typeof s.id === 'string' && s.id.startsWith('band_'))) {
-      for (const d of (s.data || [])) {
-        const v = Array.isArray(d) ? d[1] : undefined;
-        if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
-      }
-      continue;
-    }
-    // Standard series: { value: [x, y] }
+    // Fan / band custom-render polygons store raw [tau, upper, lower]
+    // triples in `data`. Standard line series store {value: [x, y]}.
+    // Try both shapes; the first matching extracts the upper bound.
     for (const d of (s.data || [])) {
-      const v = d?.value?.[1];
+      const v = Array.isArray(d) ? d[1] : d?.value?.[1];
       if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
     }
   }
@@ -1002,14 +801,13 @@ export function buildCohortMaturityEChartsOption(
           : `As at ${bd}`;
 
         // Per-scenario series IDs carry a `::scenarioId` suffix; strip before
-        // checking against the model/band exclusion set.
-        const excludeBaseIds = new Set(['model_cdf', 'bayes_band']);
+        // filtering. Model midline series (predictive F-mode + optional
+        // epistemic curve) get rendered separately below.
+        const modelBaseIds = new Set(['modelMidpoint', 'modelCurveMidpoint']);
         const scenarioItems = items.filter((it: any) => {
           const sid = String(it?.seriesId || '');
           const baseSid = sid.split('::')[0];
-          if (excludeBaseIds.has(baseSid)) return false;
-          if (baseSid.startsWith('model_cdf') || baseSid.startsWith('band_')) return false;
-          return true;
+          return !modelBaseIds.has(baseSid);
         });
         const lines = scenarioItems
           .filter((it: any, idx: number, arr: any[]) => arr.findIndex((x: any) => String(x?.seriesName) === String(it?.seriesName)) === idx)
@@ -1023,16 +821,17 @@ export function buildCohortMaturityEChartsOption(
           const fRate = meta.forecastX > 0 ? meta.forecastY / meta.forecastX : null;
           extra_.push(`forecast n=${meta.forecastX.toFixed(1)}, k=${meta.forecastY.toFixed(1)} (${fmtPercent(fRate)})`);
         }
-        // Model CDF item — id is now `model_cdf::${scenarioId}` per scenario.
-        // Show one line per visible scenario's model CDF.
+        // Model midline items (predictive F-mode and optional epistemic
+        // curve). One line per visible scenario per model layer.
         const modelItems = items.filter((it: any) => {
           const sid = String(it?.seriesId || '');
-          return sid === 'model_cdf' || sid.startsWith('model_cdf::');
+          const baseSid = sid.split('::')[0];
+          return baseSid === 'modelMidpoint' || baseSid === 'modelCurveMidpoint';
         });
         for (const modelItem of modelItems) {
           const mv = modelItem?.value?.[1];
           if (typeof mv === 'number' && Number.isFinite(mv)) {
-            const label = modelItem?.seriesName ? `${modelItem.seriesName}` : 'Model CDF';
+            const label = modelItem?.seriesName ? `${modelItem.seriesName}` : 'Model';
             extra_.push(`${label}: <strong>${fmtPercent(mv)}</strong>`);
           }
         }
@@ -1105,22 +904,11 @@ export function buildCohortMaturityEChartsOption(
         : { top: 14, left: 12 }),
       textStyle: { fontSize: 8, color: c.text }, itemGap: 6, itemWidth: 36, itemHeight: 8,
       data: seriesOut.filter(s => s.name && !s.name.startsWith('_')).map(s => {
-        // Series IDs may carry a `::scenarioId` suffix for per-scenario overlays.
-        // Strip the suffix to recover the base id for classification.
+        // Strip ::scenarioId suffix to recover base id.
         const baseId = typeof s.id === 'string' ? s.id.split('::')[0] : '';
-        const isModel = baseId.startsWith('model_cdf') || baseId === 'bayes_band' || baseId.startsWith('band_');
-        const isBand = baseId === 'bayes_band' || baseId.startsWith('band_');
-        if (isBand) {
-          // Pattern-specific legend icon based on source
-          const bandSrcName = baseId.startsWith('band_') ? baseId.slice(5) : 'bayesian';
-          const bandPattern: BandPattern = SOURCE_BAND_PATTERNS[bandSrcName] || 'diagonal';
-          const icon = BAND_PATTERN_ICONS[bandPattern];
-          // Inherit the scenario colour from the series itself (set on s.color).
-          const _swatchColour = (typeof (s as any).color === 'string' ? (s as any).color : undefined) || modelColour;
-          return { name: s.name, icon, itemStyle: { color: 'none', borderColor: _swatchColour, borderWidth: 1 } };
-        }
-        // Scenario series: coloured rectangle. Model series: no icon override
-        // so ECharts draws the actual lineStyle (dash pattern) from the series.
+        // Model lines (predictive midline + optional epistemic model curve)
+        // omit the icon override so ECharts draws the actual lineStyle.
+        const isModel = baseId === 'modelMidpoint' || baseId === 'modelCurveMidpoint';
         return isModel ? { name: s.name } : { name: s.name, icon: 'roundRect' };
       }),
     } : { show: false },

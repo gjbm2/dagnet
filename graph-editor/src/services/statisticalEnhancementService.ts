@@ -2548,21 +2548,71 @@ export function enhanceGraphLatencies(
       // Compute edge LAG stats with anchor-adjusted ages (NOT path_t95!)
       // For local latency edges, pass edgeT95 if available (authoritative) and DEFAULT_T95_DAYS as default.
       // For downstream edges, effectiveHorizonDays is path_t95 (used as horizon, not as edge t95).
-      const latencyStats = computeEdgeLatencyStats(
-        cohortsScoped,
-        aggregateMedianLag,
-        aggregateMeanLag,
-        MODEL.DEFAULT_T95_DAYS,  // Default t95 if fit is invalid
-        anchorMedianLag,  // Use observed anchor lag, NOT path_t95
-        totalKForFit,     // Fit quality gate should consider full-history converters when available
-        cohortsForFit, // keep p∞ estimation aligned with the same evidence window
-        edgeT95,  // Authoritative t95 from edge.p.latency.t95 if set
-        MODEL.RECENCY_HALF_LIFE_DAYS,
-        edgeOnsetDeltaDays ?? 0,
-        MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO,
-        // Window mode cohorts are not anchored at A, so do NOT apply anchor travel-time adjustment.
-        !isWindowMode
-      );
+      //
+      // Graceful degradation: fitLagDistribution throws when it's given garbage
+      // (non-finite median, ratio outside lognormal regime, computed σ invalid)
+      // or when it lacks the inputs needed to fit σ honestly (mean missing).
+      // Previously the fitter substituted LATENCY_DEFAULT_SIGMA = 0.5, which
+      // fabricated fitted-looking output from no fit. We now throw at the
+      // source and catch at the topo-loop boundary: log to the session log
+      // so the failure is auditable, then propagate path through this edge
+      // (same pattern as the no-paramValues skip at line 2336) and continue.
+      // Other edges are unaffected; this edge gets no μ/σ written.
+      let latencyStats: ReturnType<typeof computeEdgeLatencyStats>;
+      try {
+        latencyStats = computeEdgeLatencyStats(
+          cohortsScoped,
+          aggregateMedianLag,
+          aggregateMeanLag,
+          MODEL.DEFAULT_T95_DAYS,  // Default t95 if fit is invalid
+          anchorMedianLag,  // Use observed anchor lag, NOT path_t95
+          totalKForFit,     // Fit quality gate should consider full-history converters when available
+          cohortsForFit, // keep p∞ estimation aligned with the same evidence window
+          edgeT95,  // Authoritative t95 from edge.p.latency.t95 if set
+          MODEL.RECENCY_HALF_LIFE_DAYS,
+          edgeOnsetDeltaDays ?? 0,
+          MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO,
+          // Window mode cohorts are not anchored at A, so do NOT apply anchor travel-time adjustment.
+          !isWindowMode
+        );
+      } catch (err) {
+        sessionLogService.warning(
+          'graph',
+          'FE_TOPO_FIT_FAILED',
+          `Edge ${edgeId}: latency fit failed — ${err instanceof Error ? err.message : String(err)}`,
+          err instanceof Error ? err.stack ?? err.message : String(err),
+          {
+            edgeId,
+            latencyEnabled,
+            aggregateMedianLag,
+            aggregateMeanLag,
+            totalKForFit,
+          } as any,
+        );
+        // Propagate path through this edge (mirror the no-paramValues skip
+        // at line 2336). Skip writing edgeLAGValues for this edge — no
+        // synthetic μ/σ leaves the topo pass.
+        const skipFromMu = nodePathMu.get(nodeId);
+        const skipFromSigma = nodePathSigma.get(nodeId);
+        const skipFromOnset = nodePathOnset.get(nodeId) ?? 0;
+        edgePathMuInPass.set(edgeId, skipFromMu);
+        edgePathSigmaInPass.set(edgeId, skipFromSigma);
+        const skipEdgeT95 = edgePathT95InPass.get(edgeId) ?? precomputedPathT95.get(edgeId) ?? 0;
+        if (skipEdgeT95 >= (nodePathT95.get(toNodeId) ?? 0)) {
+          nodePathMu.set(toNodeId, skipFromMu);
+          nodePathSigma.set(toNodeId, skipFromSigma);
+          nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset));
+          nodePathMuSd.set(toNodeId, nodePathMuSd.get(nodeId) ?? 0);
+          nodePathSigmaSd.set(toNodeId, nodePathSigmaSd.get(nodeId) ?? 0);
+          nodePathOnsetSd.set(toNodeId, nodePathOnsetSd.get(nodeId) ?? 0);
+        }
+        const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
+        inDegree.set(toNodeId, newInDegree);
+        if (newInDegree === 0 && !queue.includes(toNodeId)) {
+          queue.push(toNodeId);
+        }
+        continue;
+      }
 
       // ---------------------------------------------------------------------
       // Compute path_t95 for this edge (Option A: anchor+edge convolution)
@@ -2609,7 +2659,22 @@ export function enhanceGraphLatencies(
             ) / (totalWNForAnchor || 1);
 
           // Anchor fit: A→X distribution inferred from anchor moments on downstream cohort data.
-          const anchorFitInitial = fitLagDistribution(anchorMedian, anchorMean, totalWNForAnchor);
+          // On throw (Cat 3/4 fail), log + skip the anchor-empirical path_t95
+          // enhancement; the topo accumulation fallback at edgePathT95 above stands.
+          let anchorFitInitial: LagDistributionFit | null;
+          try {
+            anchorFitInitial = fitLagDistribution(anchorMedian, anchorMean, totalWNForAnchor);
+          } catch (err) {
+            sessionLogService.warning(
+              'graph',
+              'FE_TOPO_FIT_FAILED',
+              `Edge ${edgeId}: anchor fit (A→X) failed — ${err instanceof Error ? err.message : String(err)}`,
+              err instanceof Error ? err.stack ?? err.message : String(err),
+              { edgeId, fitKind: 'anchor_initial', anchorMedian, anchorMean, totalWNForAnchor } as any,
+            );
+            anchorFitInitial = null;
+          }
+          if (anchorFitInitial !== null) {
 
           // Join-aware horizon constraint for A→X:
           // Use upstream computed path horizons (A→X) from inbound edges to X, weighted by their p.mean,
@@ -2656,6 +2721,7 @@ export function enhanceGraphLatencies(
               topoFallback: (pathT95ToNode + latencyStats.t95).toFixed(2),
             });
           }
+          } // close: if (anchorFitInitial !== null)
         }
       }
       // Persist the in-pass path_t95 for join-aware downstream constraints.
@@ -2802,13 +2868,29 @@ export function enhanceGraphLatencies(
             const anchorMedian = Math.max(0.01, anchorMedianRaw - upstreamOnset);
             const anchorMean = Math.max(anchorMedian, anchorMeanRaw - upstreamOnset);
 
-            const anchorFit = fitLagDistribution(
-              anchorMedian,
-              anchorMean,
-              totalNForAnchor,
-              MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO
-            );
-            const ayFit = approximateLogNormalSumFit(anchorFit, latencyStats.fit);
+            // Graceful degradation: on throw (Cat 3/4 fail), log + treat
+            // anchor fit as unavailable; ayFit stays undefined and the
+            // surrounding fallback chain (FW, passthrough, self-seed) takes
+            // over.
+            let anchorFit: LagDistributionFit | null;
+            try {
+              anchorFit = fitLagDistribution(
+                anchorMedian,
+                anchorMean,
+                totalNForAnchor,
+                MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO
+              );
+            } catch (err) {
+              sessionLogService.warning(
+                'graph',
+                'FE_TOPO_FIT_FAILED',
+                `Edge ${edgeId}: A→Y anchor fit failed — ${err instanceof Error ? err.message : String(err)}`,
+                err instanceof Error ? err.stack ?? err.message : String(err),
+                { edgeId, fitKind: 'anchor_path_ay', anchorMedian, anchorMean, totalNForAnchor } as any,
+              );
+              anchorFit = null;
+            }
+            const ayFit = anchorFit ? approximateLogNormalSumFit(anchorFit, latencyStats.fit) : undefined;
 
             if (ayFit) {
               pathMu = ayFit.mu;
@@ -3014,6 +3096,16 @@ export function enhanceGraphLatencies(
       const pathSigmaSd = Math.sqrt(latencyStats.sigma_sd ** 2 + upSigmaSd ** 2);
       const pathOnsetSd = Math.sqrt(latencyStats.onset_sd ** 2 + upOnsetSd ** 2);
 
+      // AP18 guard: a `latency_parameter: false` edge is δ(0) — instant,
+      // no μ, no σ, no spread. The fitter still runs (one-path design,
+      // line 2305) and may return `LATENCY_DEFAULT_SIGMA = 0.5` from one
+      // of fitLagDistribution's eight default-σ fallback paths. Writing
+      // that synthetic σ onto edge.p.latency / model_vars[analytic].latency
+      // poisons downstream cohort-mode rate trajectories: the BE primitive
+      // composer reads σ > 0 → builds a non-Dirac timing CDF → cohort mode
+      // shows phantom multi-day lag (test_single_hop_non_latent_upstream_collapses_to_window).
+      // Path-level fields stay populated — they reflect upstream
+      // cumulative timing through this edge's δ(0) contribution.
       const edgeLAGValues: EdgeLAGValues = {
         edgeUuid,
         // Doc 73b §3.3.4 / §12.2 row S5: the FE topo Step 2 blend yields
@@ -3021,29 +3113,51 @@ export function enhanceGraphLatencies(
         // Promote it to `edge.p.stdev` (epistemic). `stdev_pred` stays
         // absent — the analytic blend has no kappa-aware predictive flavour.
         stdev: latencyStats.p_sd,
-        latency: {
-          median_lag_days: aggregateMedianLag,
-          mean_lag_days: aggregateMeanLag,
-          t95: latencyStats.t95,
-          completeness: completenessUsed,
-          path_t95: edgePathT95,
-          mu: latencyStats.completeness_cdf.mu,
-          sigma: latencyStats.completeness_cdf.sigma,
-          promoted_onset_delta_days: edgeOnsetDeltaDays,
-          path_mu: pathMu,
-          path_sigma: pathSigma,
-          path_onset_delta_days: pathOnset,
-          // Edge-level heuristic dispersion
-          mu_sd: latencyStats.mu_sd,
-          sigma_sd: latencyStats.sigma_sd,
-          onset_sd: latencyStats.onset_sd,
-          onset_mu_corr: latencyStats.onset_mu_corr,
-          p_sd: latencyStats.p_sd,
-          // Path-level heuristic dispersion (quadrature sum)
-          path_mu_sd: pathMuSd > 0 ? pathMuSd : undefined,
-          path_sigma_sd: pathSigmaSd > 0 ? pathSigmaSd : undefined,
-          path_onset_sd: pathOnsetSd > 0 ? pathOnsetSd : undefined,
-        },
+        latency: latencyEnabled
+          ? {
+              median_lag_days: aggregateMedianLag,
+              mean_lag_days: aggregateMeanLag,
+              t95: latencyStats.t95,
+              completeness: completenessUsed,
+              path_t95: edgePathT95,
+              mu: latencyStats.completeness_cdf.mu,
+              sigma: latencyStats.completeness_cdf.sigma,
+              promoted_onset_delta_days: edgeOnsetDeltaDays,
+              path_mu: pathMu,
+              path_sigma: pathSigma,
+              path_onset_delta_days: pathOnset,
+              mu_sd: latencyStats.mu_sd,
+              sigma_sd: latencyStats.sigma_sd,
+              onset_sd: latencyStats.onset_sd,
+              onset_mu_corr: latencyStats.onset_mu_corr,
+              p_sd: latencyStats.p_sd,
+              path_mu_sd: pathMuSd > 0 ? pathMuSd : undefined,
+              path_sigma_sd: pathSigmaSd > 0 ? pathSigmaSd : undefined,
+              path_onset_sd: pathOnsetSd > 0 ? pathOnsetSd : undefined,
+            }
+          : {
+              // δ(0) edge: zero edge-level latency, completeness ≡ 1,
+              // path-level fields propagate upstream cumulative timing.
+              median_lag_days: 0,
+              mean_lag_days: 0,
+              t95: 0,
+              completeness: 1,
+              path_t95: edgePathT95,
+              mu: 0,
+              sigma: 0,
+              promoted_onset_delta_days: 0,
+              path_mu: pathMu,
+              path_sigma: pathSigma,
+              path_onset_delta_days: pathOnset,
+              mu_sd: 0,
+              sigma_sd: 0,
+              onset_sd: 0,
+              onset_mu_corr: 0,
+              p_sd: latencyStats.p_sd,
+              path_mu_sd: pathMuSd > 0 ? pathMuSd : undefined,
+              path_sigma_sd: pathSigmaSd > 0 ? pathSigmaSd : undefined,
+              path_onset_sd: pathOnsetSd > 0 ? pathOnsetSd : undefined,
+            },
         debug: {
           queryDate: queryDate.toISOString().split('T')[0],
           cohortWindow: cohortWindow 
@@ -3666,21 +3780,35 @@ export function enhanceGraphLatencies(
 
         // Compute t95 and completeness using same logic as base edge (thread onset)
         const cpEdgeT95 = cp.p?.latency?.t95;
-        const cpLatencyStats = computeEdgeLatencyStats(
-          cpCohortsScoped,
-          cpMedianLag,
-          cpMeanLag,
-          MODEL.DEFAULT_T95_DAYS,
-          anchorMedianLag,
-          undefined, // fitTotalKOverride
-          cpCohortsAll.length > 0 ? cpCohortsAll : cpCohortsScoped, // p∞ estimation
-          cpEdgeT95, // Authoritative t95 if set
-          MODEL.RECENCY_HALF_LIFE_DAYS,
-          cpOnsetDeltaDays ?? 0,
-          MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO,
-          // Window mode cohorts are not anchored at A, so do NOT apply anchor travel-time adjustment.
-          !isWindowMode
-        );
+        // Graceful degradation: skip writing this conditional-probability
+        // entry if the fit fails, rather than fabricating defaults.
+        let cpLatencyStats: ReturnType<typeof computeEdgeLatencyStats>;
+        try {
+          cpLatencyStats = computeEdgeLatencyStats(
+            cpCohortsScoped,
+            cpMedianLag,
+            cpMeanLag,
+            MODEL.DEFAULT_T95_DAYS,
+            anchorMedianLag,
+            undefined, // fitTotalKOverride
+            cpCohortsAll.length > 0 ? cpCohortsAll : cpCohortsScoped, // p∞ estimation
+            cpEdgeT95, // Authoritative t95 if set
+            MODEL.RECENCY_HALF_LIFE_DAYS,
+            cpOnsetDeltaDays ?? 0,
+            MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO,
+            // Window mode cohorts are not anchored at A, so do NOT apply anchor travel-time adjustment.
+            !isWindowMode
+          );
+        } catch (err) {
+          sessionLogService.warning(
+            'graph',
+            'FE_TOPO_FIT_FAILED',
+            `Edge ${edgeId} cp[${cpIdx}]: conditional fit failed — ${err instanceof Error ? err.message : String(err)}`,
+            err instanceof Error ? err.stack ?? err.message : String(err),
+            { edgeId, cpIdx, fitKind: 'conditional_probability', cpMedianLag, cpMeanLag } as any,
+          );
+          continue;
+        }
         
         // Use the computed completeness from cpLatencyStats
         const cpCompleteness = cpLatencyStats.completeness;

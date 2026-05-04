@@ -4,7 +4,7 @@ How the live graph-enrichment pipeline coordinates its two statistical writers �
 
 Previously this note also covered a "quick BE topo pass" that ran in parallel and wrote an `analytic_be` source. That branch was removed on `24-Apr-26` per [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md); CF is now the sole BE writer on the Stage 2 path.
 
-**See also**: [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) (canonical four-subsystem map and "which Python entry point do I call" table), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what FE topo computes — t95, mu/sigma, lag fit detail), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (broader statistical architecture), [PROBABILITY_BLENDING.md](PROBABILITY_BLENDING.md) (how computed values feed into blended probabilities).
+**See also**: [stats-pipeline-schematic.md](stats-pipeline-schematic.md) (single-canvas field-flow schematic), [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) (canonical four-subsystem map and "which Python entry point do I call" table), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what FE topo computes — t95, mu/sigma, lag fit detail), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (broader statistical architecture), [PROBABILITY_BLENDING.md](PROBABILITY_BLENDING.md) (how computed values feed into blended probabilities).
 
 ## Two logical steps in one pass (FE topo)
 
@@ -88,7 +88,7 @@ See [STATS_SUBSYSTEMS.md §5 Confusion 7](STATS_SUBSYSTEMS.md) for the full scop
 - **Service**: `conditionedForecastService.ts` → `runConditionedForecast()`
 - **Endpoint**: `POST /api/forecast/conditioned` → `handle_conditioned_forecast` (doc 45)
 - **Triggered by**: `fetchDataService.ts` Stage 2, fired alongside the FE topo pass
-- **Writes to**: per-edge `p.mean`, `p.sd`, `latency.completeness`, `latency.completeness_stdev` (CF owns these scalars per doc 45)
+- **Writes to**: per-edge `p.mean`, `p.stdev`, `p.stdev_pred`, `latency.completeness`, `latency.completeness_stdev` (CF owns these scalars per doc 45 / I12)
 - **Blocks UI**: partially — raced against a **500ms** deadline (`CF_FAST_DEADLINE_MS`). Fast path merges CF scalars into the same FE apply (single render); slow path renders FE fallback and overwrites on arrival.
 - **Source of truth**: CF `p.mean` / completeness supersede FE's blended equivalents when CF returns non-empty results.
 

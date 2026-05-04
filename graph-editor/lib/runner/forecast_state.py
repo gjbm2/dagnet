@@ -18,6 +18,72 @@ import numpy as np
 
 from .forecast_runtime import PreparedForecastRuntimeBundle, serialise_runtime_bundle
 from .model_resolver import ResolvedLatency, ResolvedModelParams
+from .primitives import (
+    DrawFamilyKey,
+    PrimitiveScope,
+    TransitionIdentity,
+    make_rng,
+)
+
+
+# Legacy-trajectory fallback DrawFamilyKey retired:
+# `compute_forecast_trajectory` constructs its key inline from the
+# resolved model when callers do not supply one (see body); the helper
+# / shared transition identity that previously fronted that fallback
+# are gone.
+_TRAJECTORY_FALLBACK_TRANSITION = TransitionIdentity(
+    source_node='__legacy_trajectory__',
+    destination_node='__legacy_trajectory__',
+    edge_id='__legacy_trajectory__',
+)
+
+
+def _trajectory_fallback_draw_family_key(
+    resolved: Optional[ResolvedModelParams],
+    *,
+    draw_count: int,
+    suffix: str,
+) -> DrawFamilyKey:
+    """Construct a deterministic fallback DrawFamilyKey from the resolved
+    model, used only when ``compute_forecast_trajectory`` is invoked
+    without a request-scoped key. Two calls with matching resolved
+    parameters reuse the same RNG stream."""
+    if resolved is not None:
+        scenario_id = (
+            f'__legacy_trajectory__'
+            f'|alpha={float(resolved.alpha):.6f}'
+            f'|beta={float(resolved.beta):.6f}'
+            f'|n_eff={resolved.n_effective}'
+            f'|src={resolved.source}'
+            f'|s={suffix}'
+        )
+        scope = PrimitiveScope(
+            scenario_id=scenario_id,
+            evidence_role='WINDOW_SUBJECT_HELPER',
+            date_from='', date_to='',
+            as_at=None,
+            context_key=None, regime_key=None,
+            model_source_preference='best_available',
+            resolved_source_identity=resolved.source or None,
+            selected_anchor_days=(),
+        )
+    else:
+        scope = PrimitiveScope(
+            scenario_id=f'__legacy_trajectory__|s={suffix}',
+            evidence_role='WINDOW_SUBJECT_HELPER',
+            date_from='', date_to='',
+            as_at=None,
+            context_key=None, regime_key=None,
+            model_source_preference='best_available',
+            resolved_source_identity=None,
+            selected_anchor_days=(),
+        )
+    return DrawFamilyKey(
+        transition_identity=_TRAJECTORY_FALLBACK_TRANSITION,
+        scope=scope,
+        draw_count=draw_count,
+        scenario_seed=0,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -113,65 +179,17 @@ def _compute_completeness_at_age(
     return 0.5 * math.erfc(-z / math.sqrt(2))
 
 
-def _normalise_log_weights(log_weights: np.ndarray) -> Optional[np.ndarray]:
-    """Convert a vector of log-weights into normalised weights.
-
-    Returns None when the input is empty or numerically degenerate
-    (non-finite max, or zero/non-finite sum after exponentiation).
-    Used by the aggregate tempered IS step in `compute_forecast_trajectory`.
-    """
-    if log_weights.size == 0:
-        return None
-    max_log_weight = float(np.max(log_weights))
-    if not math.isfinite(max_log_weight):
-        return None
-    shifted = np.clip(log_weights - max_log_weight, -745.0, 0.0)
-    weights = np.exp(shifted)
-    weight_sum = float(np.sum(weights))
-    if not math.isfinite(weight_sum) or weight_sum <= 0:
-        return None
-    return weights / weight_sum
-
-
-def _weights_and_ess(
-    log_likelihood: np.ndarray,
-    tempering_lambda: float,
-) -> Tuple[Optional[np.ndarray], float]:
-    """Tempered weights and ESS for a given log-likelihood vector.
-
-    Used by the aggregate tempered-IS bisection step in
-    `compute_forecast_trajectory` (replaces the per-cohort sequential IS
-    that previously lived inside `_evaluate_cohort`).
-    """
-    weights = _normalise_log_weights(log_likelihood * tempering_lambda)
-    if weights is None:
-        return (None, 0.0)
-    ess = float(1.0 / np.sum(np.square(weights)))
-    return (weights, ess)
-
-
-def _cohort_binomial_log_likelihood(
-    p_draws: np.ndarray,
-    completeness_draws: np.ndarray,
-    n_i: float,
-    k_i: float,
-) -> np.ndarray:
-    """Per-draw log likelihood for single-retrieval Cohort evidence.
-
-    Completeness is conditional latency mass for eventual converters, so it
-    belongs in the success probability: k_i ~ Binomial(n_i, p_s * c_i_s).
-    The Binomial coefficient is omitted because it is constant across draws.
-    """
-    n_obs = max(float(n_i), 0.0)
-    k_obs = min(max(float(k_i), 0.0), n_obs)
-    c_clip = np.clip(completeness_draws, 0.0, 1.0)
-    p_effective = np.clip(p_draws * c_clip, 1e-15, 1 - 1e-15)
-    return k_obs * np.log(p_effective) + (n_obs - k_obs) * np.log1p(-p_effective)
+# 73n stage 9 — the IS-conditioning helpers `_normalise_log_weights`,
+# `_weights_and_ess`, and `_cohort_binomial_log_likelihood` are owned
+# by `runner.primitive_conditioning` (see its private mirrors). The
+# trajectory engine no longer conditions, so the duplicates are gone.
 
 
 def compute_completeness_with_sd(
     age_days: float,
     latency: ResolvedLatency,
+    *,
+    draw_family_key: Optional[DrawFamilyKey] = None,
 ) -> tuple:
     """Compute completeness point estimate and SD from latency dispersions.
 
@@ -179,6 +197,13 @@ def compute_completeness_with_sd(
     Returns (completeness, completeness_sd).
 
     When SDs are all zero, returns (point_estimate, 0.0).
+
+    The legacy fixed-seed completeness-SD site was retired in favour of
+    ``make_rng(key, 'primitive_completeness_sd')``. Callers may pass
+    ``draw_family_key`` to share an RNG stream with other primitive
+    draws under the same scope; when None, a deterministic fallback
+    derived from the latency moments is used so legacy callers remain
+    reproducible.
     """
     mu = latency.mu
     sigma = latency.sigma
@@ -190,7 +215,29 @@ def compute_completeness_with_sd(
     if latency.mu_sd <= 0 and latency.sigma_sd <= 0 and latency.onset_sd <= 0:
         return (point, 0.0)
 
-    rng = np.random.default_rng(seed=71)
+    if draw_family_key is None:
+        scope = PrimitiveScope(
+            scenario_id=(
+                f'__completeness_sd__|mu={float(mu):.6f}'
+                f'|sigma={float(sigma):.6f}|onset={float(onset):.6f}'
+            ),
+            evidence_role='WINDOW_SUBJECT_HELPER',
+            date_from='',
+            date_to='',
+            as_at=None,
+            context_key=None,
+            regime_key=None,
+            model_source_preference='best_available',
+            resolved_source_identity=None,
+            selected_anchor_days=(),
+        )
+        draw_family_key = DrawFamilyKey(
+            transition_identity=_LEGACY_TRAJECTORY_TRANSITION,
+            scope=scope,
+            draw_count=_COMPLETENESS_SD_DRAWS,
+            scenario_seed=0,
+        )
+    rng = make_rng(draw_family_key, 'primitive_completeness_sd')
     S = _COMPLETENESS_SD_DRAWS
 
     # Draw mu and onset jointly (correlated via onset_mu_corr)
@@ -289,7 +336,7 @@ def _convolve_completeness_at_age(
 
     C(τ) = Σ_u f_upstream(u) × CDF_edge(τ - u)
 
-    The carrier CDF from build_upstream_carrier is conditional (goes to
+    The carrier CDF from shared timing composition is conditional (goes to
     1.0, meaning "given you reach this node, probability of arriving by
     age u"). Its derivative f_upstream is a proper PDF (integrates to 1).
 
@@ -387,10 +434,9 @@ def build_node_arrival_cache(
 ) -> Dict[str, NodeArrivalState]:
     """Build per-node arrival cache.
 
-    Stage 3 (73m): each non-anchor node's carrier comes from a single
-    call to ``compose_carrier_to_x(anchor_id → node_id)`` so the cached
-    CDF reflects the full A → node convolution rather than just the
-    immediate-incoming edges. The anchor itself remains a Dirac
+    Each non-anchor node's arrival comes from the shared timing algebra
+    so the cached CDF reflects the full A → node convolution rather than
+    just the immediate-incoming edges. The anchor itself remains a Dirac
     delta-at-zero with reach 1.0.
 
     Cache keys are graph node identifiers (uuid where present; id
@@ -398,11 +444,45 @@ def build_node_arrival_cache(
     consumers (whole-graph CF, scoped CF, surprise-gauge per-node
     arrival lookups) keep working.
     """
-    from .carrier_composition import compose_carrier_to_x
+    from .timing_span import compose_timing_span_from_graph
+    from .primitives import (
+        DrawFamilyKey,
+        PrimitiveScope,
+        TransitionIdentity,
+        make_rng,
+    )
 
     nodes = graph.get('nodes', [])
 
-    rng = np.random.default_rng(seed=42)
+    # Fixed-seed retirement: whole-graph node arrival cache RNG keyed
+    # off the graph anchor identity rather than the legacy ``seed=42``
+    # constant. Two invocations with the same anchor produce the same
+    # draws (same determinism contract); two invocations with different
+    # anchors produce independent streams.
+    _request_scoped_transition = TransitionIdentity(
+        source_node=str(anchor_id),
+        destination_node='__node_arrival_cache__',
+        edge_id=f'__request_scoped::node_arrival_cache::{anchor_id}',
+    )
+    _request_scoped_scope = PrimitiveScope(
+        scenario_id=str(anchor_id),
+        evidence_role='WINDOW_SUBJECT_HELPER',
+        date_from='',
+        date_to='',
+        as_at=None,
+        context_key=None,
+        regime_key=None,
+        model_source_preference='best_available',
+        resolved_source_identity=None,
+        selected_anchor_days=(),
+    )
+    _request_scoped_key = DrawFamilyKey(
+        transition_identity=_request_scoped_transition,
+        scope=_request_scoped_scope,
+        draw_count=int(num_draws),
+        scenario_seed=0,
+    )
+    rng = make_rng(_request_scoped_key, 'node_arrival_cache')
 
     # Anchor arrival: instant (delta), reach=1.0.
     # Deterministic CDF = [1.0, 1.0, ...] (everyone arrives at the anchor
@@ -422,36 +502,46 @@ def build_node_arrival_cache(
         if not node_id or node_id == anchor_id:
             continue
 
-        carrier = compose_carrier_to_x(
+        timing = compose_timing_span_from_graph(
             graph=graph,
-            anchor_node_id=anchor_id,
-            denominator_node_id=node_id,
-            is_window=False,
+            root_node_id=anchor_id,
+            end_node_id=node_id,
             max_tau=max_tau,
+            horizon_blocking_floor=0.95,
             num_draws=num_draws,
             rng=rng,
         )
 
-        if carrier.is_active:
+        if timing.is_composed:
             det_cdf = (
-                carrier.deterministic_cdf.tolist()
-                if carrier.deterministic_cdf is not None
+                timing.conditional_cdf.tolist()
+                if timing.conditional_cdf is not None
                 else None
             )
-            mc_cdf = carrier.mc_cdf
             cache[node_id] = NodeArrivalState(
                 deterministic_cdf=det_cdf,
-                mc_cdf=mc_cdf,
-                reach=carrier.reach,
-                tier=carrier.diagnostics.tier,
+                mc_cdf=(
+                    timing.mc_cdf
+                    if timing.mc_cdf is not None
+                    else np.tile(det_cdf, (num_draws, 1))
+                    if det_cdf is not None
+                    else None
+                ),
+                reach=timing.reach,
+                tier=timing.topology_case,
             )
         else:
             # Identity / no-path / horizon-inadequate — surface tier so
             # downstream consumers can distinguish "no upstream" from
             # "horizon too small to compose safely".
             cache[node_id] = NodeArrivalState(
-                reach=carrier.reach if carrier.is_identity else 0.0,
-                tier=carrier.diagnostics.tier,
+                reach=timing.reach if timing.is_identity else 0.0,
+                tier=(
+                    'identity' if timing.is_identity
+                    else 'horizon_inadequate'
+                    if timing.horizon_ratio < 0.95 and timing.composed_edges > 0
+                    else 'no_path'
+                ),
             )
 
     return cache
@@ -529,14 +619,18 @@ class ForecastTrajectory:
 
     Coordinate A: rate_draws (S, T) is the per-draw aggregate rate
     at each τ. Consumers take quantiles for midpoint/fan bands.
-    model_rate_draws (S, T) is the unconditioned equivalent.
+    model_rate_draws (S, T) is the F-mode pure-model projection —
+    p × CDF (window / cohort A=X) or carrier-convolved (cohort A≠X) —
+    using only the engine's already-composed model objects. No cohort
+    observations enter at any level: no IS resampling, no
+    `_evaluate_cohort` splice, no N_i / k_i frontier anchoring.
 
     Coordinate B: cohort_evals is a list of per-cohort draws at each
     cohort's eval_age (when CohortEvidence.eval_age was set). Empty
     for pure coordinate A consumers (cohort maturity chart).
     """
-    rate_draws: np.ndarray           # (S, T) conditioned — coord A
-    model_rate_draws: np.ndarray     # (S, T) unconditioned — coord A
+    rate_draws: np.ndarray           # (S, T) conditioned — coord A (E+F)
+    model_rate_draws: np.ndarray     # (S, T) F-mode pure-model projection — coord A
     # Coordinate A totals (median across draws)
     det_y_total: Optional[np.ndarray] = None  # (T,) median Y across draws
     det_x_total: Optional[np.ndarray] = None  # (T,) median X across draws
@@ -600,20 +694,20 @@ class ForecastTrajectory:
     subject_probability_source: Optional[str] = None
     is_completeness_source: Optional[str] = None
     evidence_denominator: Optional[str] = None
-    # 73m §"Stage 6" projection-and-field-audit diagnostics. Stage 4 owns
-    # the subject-side / evidence-denominator labels above; Stage 6 adds the
-    # carrier-side / path-completeness / router-bypass parallels so the
-    # four 73h F14 forensic-trace questions can be answered from the
-    # trajectory return alone (without re-walking the runtime bundle).
+    # Projection-and-field-audit diagnostics. The subject-side /
+    # evidence-denominator labels above are paired with the carrier-side
+    # / path-completeness / router-bypass labels below so the four 73h
+    # F14 forensic-trace questions can be answered from the trajectory
+    # return alone (without re-walking the runtime bundle).
     #
     # carrier_reach: scalar reach probability from anchor to X for the
     # active carrier. None when no carrier object is constructed
     # (window/A=X cases short-circuit to identity before composition).
-    # Pulled from PreparedCarrierToX.reach.
+    # Pulled from the prepared carrier object reach.
     #
     # carrier_cdf_source: provenance label for the carrier's conditional
-    # CDF — 'composed' (compose_carrier_to_x via composed transition
-    # primitives), 'identity' (no carrier; reach=1 trivial Dirac for
+    # CDF — 'composed' (shared timing algebra), 'identity'
+    # (no carrier; reach=1 trivial Dirac for
     # window/A=X), 'horizon_inadequate' (composed but failed
     # near-saturation contract), 'no_path' (anchor and X disconnected),
     # 'empirical_tier_<tier>' (Phase-1-forbidden empirical-tier fallback,
@@ -630,11 +724,11 @@ class ForecastTrajectory:
     # subject_span for active cohort(A!=X) evidence; the label will then
     # expand to 'subject_span_only' | 'composed_path_completeness'.
     #
-    # legacy_non_latency_router_bypassed: True post-73m Stage 5 — the v3
-    # latency/non-latency router fork was retired and all cohort_maturity
-    # v3 rows now flow through the trajectory engine. The diagnostic
-    # surfaces this so a forensic trace can assert "no closed-form
-    # shortcut was taken" without inspecting code paths.
+    # legacy_non_latency_router_bypassed: always True since the v3
+    # latency/non-latency router fork was retired (73m Stage 5) and all
+    # cohort_maturity v3 rows now flow through the trajectory engine.
+    # The diagnostic surfaces this so a forensic trace can assert "no
+    # closed-form shortcut was taken" without inspecting code paths.
     carrier_reach: Optional[float] = None
     carrier_cdf_source: Optional[str] = None
     path_completeness_source: Optional[str] = None
@@ -647,24 +741,26 @@ _SWEEP_DRAWS = 2000
 _last_forensic: Optional[Dict[str, Any]] = None
 _SWEEP_DRIFT_FRACTION = 0.20
 
-# Subset-conditioning blend (doc 52) — seeded independently of the
-# existing seed=42 streams used for MC/IS so the permutation is
-# reproducible without perturbing anything else.
-_BLEND_SEED = 43
+# Subset-conditioning blend (doc 52). The legacy `_BLEND_SEED = 43`
+# constant was retired; the permutation now seeds from
+# `make_rng(key, 'doc52_blend_permutation')`, with key derived from
+# the resolved subject (legacy callers) or the primitive identity
+# (primitive-backed callers).
 
 
-def _stage_6_carrier_diagnostics(
+def _carrier_runtime_diagnostics(
     runtime_bundle: Optional[PreparedForecastRuntimeBundle],
 ) -> Tuple[Optional[float], Optional[str], str]:
-    """73m §"Stage 6" carrier-side diagnostic extraction.
+    """Carrier-side diagnostic extraction.
 
     Returns ``(carrier_reach, carrier_cdf_source, path_completeness_source)``
     for the trajectory return. The labels follow the dataclass docstring on
     ``ForecastTrajectory.carrier_*`` / ``path_completeness_source``.
 
     Phase 1 always reports ``path_completeness_source='subject_span_only'``;
-    73n will expand to ``'subject_span_only' | 'composed_path_completeness'``
-    once the joint A→end completeness object lands.
+    a follow-up will expand to ``'subject_span_only' |
+    'composed_path_completeness'`` once the joint A→end completeness
+    object lands.
     """
     if runtime_bundle is None or runtime_bundle.carrier_to_x is None:
         return None, None, 'subject_span_only'
@@ -717,19 +813,6 @@ def _mass_from_cohorts(cohorts) -> float:
     population mass."""
     return float(sum(float(c.evidence_n) for c in cohorts
                      if c.evidence_n and c.evidence_n > 0))
-
-
-def _make_blend_permutation(S: int, r: float) -> Tuple[int, np.ndarray]:
-    """Return (n_cond, permutation) for the (1 − r):r row-wise mix.
-
-    The permutation is reproducible (seed=43) so the mix is
-    deterministic for tests. First `n_cond` entries index the
-    conditioned arrays; the remainder index the unconditioned arrays.
-    """
-    n_cond = int(round((1.0 - r) * S))
-    n_cond = max(0, min(S, n_cond))
-    blend_rng = np.random.default_rng(seed=_BLEND_SEED)
-    return n_cond, blend_rng.permutation(S)
 
 
 def _evaluate_cohort(
@@ -954,28 +1037,29 @@ def compute_forecast_trajectory(
     det_norm_cdf: Optional[list] = None,
     edge_cdf_arr: Optional[np.ndarray] = None,
     runtime_bundle: Optional[PreparedForecastRuntimeBundle] = None,
-    extra_evidence: Optional[List[tuple]] = None,
+    draw_family_key: Optional[DrawFamilyKey] = None,
 ) -> ForecastTrajectory:
     """Per-cohort population model sweep — generalised from v2.
 
+    POST-73n STATUS — DO NOT ADD NEW CALLERS. The CF row/scalar path
+    (``compute_cohort_maturity_rows_v3`` / ``handle_conditioned_forecast``)
+    no longer reaches this function: those surfaces project from
+    ``ResolvedCFRuntime``'s composed primitive objects directly. The
+    only surviving public-path callers are ``daily_conversions`` row
+    annotation + latency bands and ``surprise_gauge`` (plus the v2 dev
+    parity oracle, which is itself slated for retirement). Migrating
+    those two analyses onto the primitive runtime is the precondition
+    for deleting this engine and its ``XProvider`` / ``from_node_arrival``
+    / ``compose_timing_span_from_graph`` plumbing — see TODO.md
+    "73n follow-up".
+
     SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
     STATS_SUBSYSTEMS.md §3.4):
-      - This is an INNER KERNEL. Intended callers are
-        `compute_cohort_maturity_rows_v3` (chart row builder) and
-        `handle_conditioned_forecast` (BE CF pass enrichment handler).
-      - New analysis runners SHOULD NOT call this directly. Instead
-        call `handle_conditioned_forecast` (or its /api/forecast/
-        conditioned endpoint) with an `analytics_dsl` scoped to your
-        analysis path. That handler wraps this function with the
-        topo-sequencing, upstream-carrier caching, span-kernel
-        composition, and subject resolution that multi-hop paths
-        require for correctness (doc 47). Calling this function
-        directly per-edge from an analysis runner bypasses all of
-        that coordination and produces subtly wrong numbers.
+      - This is an INNER KERNEL with the closure described above; new
+        analysis runners must not call it directly.
       - Surprise gauge (doc 55) reads its conditioned and unconditioned
         scalars (`completeness_*`, `pp_rate_unconditioned`) directly off
-        the trajectory return; new consumers of a full cohort-population
-        forecast should go through the handler instead.
+        the trajectory return — pending the runtime migration.
 
     Reproduces cohort_forecast_v2.py lines 796-912. For each draw,
     for each cohort, for each τ:
@@ -987,8 +1071,13 @@ def compute_forecast_trajectory(
     Returns rate_draws (S, T) = Y_total / X_total for quantile
     extraction by consumers.
 
-    Also returns model_rate_draws (S, T) — same computation without
-    IS conditioning, for unconditioned model-only fan bands.
+    Also returns model_rate_draws (S, T) — F-mode pure-model
+    projection: p × CDF (window / cohort A=X) or carrier-convolved
+    (cohort A≠X) — using only the engine's already-composed model
+    objects. No cohort observations at any level (no IS, no
+    `_evaluate_cohort` splice, no N_i / k_i anchoring). This is the
+    "model only" surface F mode displays; E+F displays
+    `rate_draws`.
 
     Args:
         resolved: from resolve_model_params (edge-level params).
@@ -1028,7 +1117,22 @@ def compute_forecast_trajectory(
     lat = resolved.latency
     S = num_draws
     T = max_tau + 1
-    rng = np.random.default_rng(seed=42)
+    # Legacy fixed-seed RNG retired in favour of three keyed streams.
+    # Primitive-backed callers supply ``draw_family_key`` from the
+    # primitive registry; legacy callers fall back to a key derived
+    # from the resolved model.
+    if draw_family_key is None:
+        draw_family_key = _trajectory_fallback_draw_family_key(
+            resolved, draw_count=S, suffix='trajectory',
+        )
+    rng = make_rng(draw_family_key, 'primitive_p_draws')
+    # Probability and timing streams are registered as separate keyed
+    # RNGs. Currently the (p, μ, σ, onset) draws share `rng` via the
+    # joint multivariate_normal call below; the timing-stream key is
+    # registered here so primitive composition consumers can read the
+    # same identity once per-stream consumption is wired through.
+    _timing_rng = make_rng(draw_family_key, 'primitive_timing_draws')
+    _ = _timing_rng  # noqa: F841 — keep the keyed-stream registration live
 
     # Diagnostic: trace what's passed to the sweep
     _has_mc = mc_cdf_arr is not None
@@ -1050,19 +1154,19 @@ def compute_forecast_trajectory(
         print(_mc_msg)
         import sys; sys.stderr.write(_mc_msg + '\n')
 
-    # 73m Stage 4: when the prepared runtime has composed a subject-span CDF
+    # When the prepared runtime has composed a subject-span CDF
     # (per-draw `mc_cdf_arr` or deterministic `det_norm_cdf`), the
     # trajectory engine must consume that object — even when the resolved
     # terminal-edge `lat.sigma` is zero (multi-hop spans whose terminal
-    # edge is non-latency, the upcoming Stage 5 router retirement). The
-    # legacy early return here was the 73h "computed and discarded"
-    # pattern: it dropped the prepared subject-span object whenever the
-    # terminal edge happened to lack latency. Only fall back to the empty
-    # trajectory when no prepared subject-span CDF is available.
+    # edge is non-latency). The legacy early return here was the 73h
+    # "computed and discarded" pattern: it dropped the prepared
+    # subject-span object whenever the terminal edge happened to lack
+    # latency. Only fall back to the empty trajectory when no prepared
+    # subject-span CDF is available.
     if lat.sigma <= 0 and mc_cdf_arr is None and det_norm_cdf is None:
         empty = np.zeros((S, T))
         _carrier_reach, _carrier_cdf_source, _path_completeness_source = (
-            _stage_6_carrier_diagnostics(runtime_bundle)
+            _carrier_runtime_diagnostics(runtime_bundle)
         )
         return ForecastTrajectory(
             rate_draws=empty,
@@ -1189,104 +1293,17 @@ def compute_forecast_trajectory(
 
     reach = from_node_arrival.reach if from_node_arrival else 0.0
 
-    # ── Aggregate tempered IS conditioning (doc 73f F14) ─────────────
-    # Replaces the per-cohort sequential IS that previously lived inside
-    # `_evaluate_cohort`. The likelihood per cohort i is
-    #   y_i ~ Binomial(n_i, p∞ · c_i_s)
-    # with `c_i_s = lag_cdf(τ_i, μ_s, σ_s, onset_s)` per draw — i.e.
-    # completeness inside the binomial parameter, NOT as an external
-    # cohort weight. Immature cohorts therefore contribute appropriately
-    # reduced certainty rather than amplified weight.
-    #
-    # Tempered resampling (binary search on λ for ESS ≥ target) prevents
-    # the degenerate posterior the per-cohort sequential IS was prone to
-    # over many cohorts (doc 29g §aggregate IS). After resampling, the
-    # conditioned (p, μ, σ, onset, cdf_arr, upstream_cdf_mc, edge_cdf_arr)
-    # tuple is consistent with the same particle indices.
-    p_draws_unconditioned = p_draws.copy()
-    mu_draws_unconditioned = mu_draws.copy()
-    sigma_draws_unconditioned = sigma_draws.copy()
-    onset_draws_unconditioned = onset_draws.copy()
-    cdf_arr_unconditioned = cdf_arr.copy()
-    upstream_cdf_mc_unconditioned = (
-        upstream_cdf_mc.copy() if upstream_cdf_mc is not None else None
-    )
-    edge_cdf_arr_unconditioned = (
-        edge_cdf_arr.copy() if edge_cdf_arr is not None else None
-    )
-
+    # No aggregate-IS conditioning here. Conditioning is owned by
+    # `runner.primitive_conditioning.condition_primitive`; the
+    # trajectory engine is a pure projector. Callers supply already-
+    # conditioned draws via ``mc_p_s`` (and the prepared subject-span
+    # draws via ``mc_cdf_arr``). When neither is supplied, the engine
+    # samples from the resolved prior — that produces an unconditioned
+    # F-mode projection only.
     is_ess_global = float(S)
     is_tempering_lambda = 1.0
     n_cohorts_conditioned = 0
-
     _evidence: List[tuple] = []
-    for _c in cohorts:
-        try:
-            _tau_i = int(_c.frontier_age) if _c.frontier_age is not None else 0
-        except (TypeError, ValueError):
-            _tau_i = 0
-        _n_i = float(_c.evidence_n or 0.0)
-        _k_i = float(_c.evidence_k or 0.0)
-        if _tau_i > 0 and _n_i > 0 and _k_i >= 0:
-            _evidence.append((_tau_i, _n_i, _k_i))
-    for _item in list(extra_evidence or []):
-        try:
-            _tau_i, _n_i, _k_i = _item
-            _tau_i = int(_tau_i)
-            _n_i = float(_n_i or 0.0)
-            _k_i = float(_k_i or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if _tau_i > 0 and _n_i > 0 and _k_i >= 0:
-            _evidence.append((_tau_i, _n_i, _k_i))
-
-    if _evidence:
-        _IS_TARGET_ESS = 20.0
-        log_lik = np.zeros(S)
-        # 73m Stage 4: per-draw IS likelihood completeness must come from the
-        # prepared subject-span draw matrix `cdf_arr`. In the no-`mc_cdf_arr`
-        # branch this is a no-op equivalence (cdf_arr was built from the same
-        # mu/sigma/onset draws). In the prepared-mc branch it is the actual
-        # fix: mu/sigma/onset draws there are constants (means), so the
-        # previous _compute_completeness_at_age recompute returned a constant
-        # per draw and silently discarded the per-draw span-level variation
-        # that mc_cdf_arr carries. Recomputing was the 73h "computed and
-        # discarded" pattern this plan §"Stage 4" forbids.
-        for tau_i, n_i, k_i in _evidence:
-            _t_idx = min(int(tau_i), T - 1)
-            c_i = np.asarray(cdf_arr[:S, _t_idx], dtype=np.float64)
-            cohort_log_w = _cohort_binomial_log_likelihood(p_draws, c_i, n_i, k_i)
-            log_lik += cohort_log_w
-            n_cohorts_conditioned += 1
-
-        if n_cohorts_conditioned > 0:
-            lo, hi = 0.0, 1.0
-            best_w, best_ess, best_lam = None, 0.0, 0.0
-            for _ in range(20):  # bisection
-                mid = (lo + hi) / 2.0
-                w, ess = _weights_and_ess(log_lik, mid)
-                if w is not None and ess >= _IS_TARGET_ESS:
-                    best_w, best_ess, best_lam = w, ess, mid
-                    lo = mid
-                else:
-                    hi = mid
-            w_full, ess_full = _weights_and_ess(log_lik, 1.0)
-            if w_full is not None and ess_full >= _IS_TARGET_ESS:
-                best_w, best_ess, best_lam = w_full, ess_full, 1.0
-
-            if best_w is not None and best_ess >= _IS_TARGET_ESS:
-                indices = rng.choice(S, size=S, replace=True, p=best_w)
-                p_draws = p_draws[indices]
-                mu_draws = mu_draws[indices]
-                sigma_draws = sigma_draws[indices]
-                onset_draws = onset_draws[indices]
-                cdf_arr = cdf_arr[indices]
-                if upstream_cdf_mc is not None:
-                    upstream_cdf_mc = upstream_cdf_mc[indices]
-                if edge_cdf_arr is not None:
-                    edge_cdf_arr = edge_cdf_arr[indices]
-                is_ess_global = best_ess
-                is_tempering_lambda = best_lam
 
     # Transform draws to unconstrained space (POST aggregate IS so
     # `theta_transformed` carries the conditioned `p` particle indices).
@@ -1302,7 +1319,19 @@ def compute_forecast_trajectory(
         ])
 
     theta_transformed = _build_theta_transformed(p_draws)
-    theta_transformed_unconditioned = _build_theta_transformed(p_draws_unconditioned)
+    # 73n stage 9 — engine-internal "unconditioned twin" retired. Without
+    # an internal IS step the engine has only one set of (p, μ, σ, onset)
+    # draws — whatever the caller supplied or the prior produced. The
+    # ``*_unconditioned`` aliases below preserve the existing forensic /
+    # F-mode plumbing without owning a parallel conditioning policy.
+    p_draws_unconditioned = p_draws
+    mu_draws_unconditioned = mu_draws
+    sigma_draws_unconditioned = sigma_draws
+    onset_draws_unconditioned = onset_draws
+    cdf_arr_unconditioned = cdf_arr
+    upstream_cdf_mc_unconditioned = upstream_cdf_mc
+    edge_cdf_arr_unconditioned = edge_cdf_arr
+    theta_transformed_unconditioned = theta_transformed
 
     # [v3-debug] resolver + carrier shape — used to diff FE vs CLI payloads
     print(
@@ -1353,9 +1382,12 @@ def compute_forecast_trajectory(
         supplies either the conditioned draws (for the conditioned rate
         family) or the unconditioned snapshots (for the model-only fan).
 
-        Uses a fresh rng(42) for drift, matching v2's per-cohort loop
-        (cohort_forecast_v2.py:720) which creates its own rng(42)
-        independent of mc_span_cdfs' rng.
+        Uses a keyed-RNG stream for per-cohort drift via
+        ``make_rng(draw_family_key, 'primitive_drift')``. This site
+        formerly held a fixed-seed RNG matching v2's per-cohort loop;
+        the keyed seam preserves determinism while letting primitive-
+        backed callers route per-primitive identities through the
+        same stream.
 
         When record_projection_diag is True, returns the per-cohort
         projection diagnostics list as a 5th tuple element. Index aligns
@@ -1364,7 +1396,7 @@ def compute_forecast_trajectory(
         to surface arithmetic for `--diag`; the unconditioned pass does
         not need it.
         """
-        _loop_rng = np.random.default_rng(seed=42)
+        _loop_rng = make_rng(draw_family_key, 'primitive_drift')
         Y_total = np.zeros((S, T))
         X_total = np.zeros((S, T))
         _cohort_evals: List[CohortForecastAtEval] = []
@@ -1462,66 +1494,74 @@ def compute_forecast_trajectory(
     )
     is_ess = is_ess_global
     n_conditioned = n_cohorts_conditioned
-    # Model-only draw family: same specific-Cohort population model as
-    # `rate_draws`, but driven by the UNCONDITIONED draws preserved
-    # before aggregate IS. Keeps `model_midpoint` carrier-aware in cohort
-    # mode instead of collapsing onto the generic p×CDF shortcut.
-    rate_unc, Y_unc, X_unc, cohort_evals_unc, _ = _run_cohort_loop(
-        p_local=p_draws_unconditioned,
-        theta_local=theta_transformed_unconditioned,
-        cdf_local=cdf_arr_unconditioned,
-        upstream_local=upstream_cdf_mc_unconditioned,
-        edge_cdf_local=edge_cdf_arr_unconditioned,
-        label='unconditioned',
-    )
-    rate_model = rate_unc
 
-    # Doc 52 §14.4.1: blend conditioned and unconditioned draw rows when
-    # the evidence-mass heuristic says the fully conditioned sweep is too
-    # brittle. Reuse the same unconditioned cohort-loop output that backs
-    # `model_rate_draws`.
-    blend_info = _compute_blend_params(resolved, _mass_from_cohorts(cohorts))
-    if blend_info['applied']:
-        n_cond, perm = _make_blend_permutation(S, blend_info['r'])
-        cond_idx = perm[:n_cond]
-        unc_idx = perm[n_cond:]
-        # Row-wise blend rate_draws, Y_total, X_total with the same
-        # permutation so per-draw rate/(Y,X) coupling is preserved.
-        rate_draws_out = np.empty_like(rate_conditioned)
-        rate_draws_out[:n_cond, :] = rate_conditioned[cond_idx, :]
-        rate_draws_out[n_cond:, :] = rate_unc[unc_idx, :]
-        Y_final = np.empty_like(Y_cond)
-        X_final = np.empty_like(X_cond)
-        Y_final[:n_cond, :] = Y_cond[cond_idx, :]
-        Y_final[n_cond:, :] = Y_unc[unc_idx, :]
-        X_final[:n_cond, :] = X_cond[cond_idx, :]
-        X_final[n_cond:, :] = X_unc[unc_idx, :]
-        # Per-Cohort y/x draws — same permutation per entry; assume
-        # both lists have the same Cohort ordering because
-        # _run_cohort_loop iterates `cohorts` in order.
-        cohort_evals: List[CohortForecastAtEval] = []
-        if len(cohort_evals_cond) == len(cohort_evals_unc):
-            for ce_c, ce_u in zip(cohort_evals_cond, cohort_evals_unc):
-                y_blend = np.empty(S)
-                x_blend = np.empty(S)
-                y_blend[:n_cond] = ce_c.y_draws[cond_idx]
-                y_blend[n_cond:] = ce_u.y_draws[unc_idx]
-                x_blend[:n_cond] = ce_c.x_draws[cond_idx]
-                x_blend[n_cond:] = ce_u.x_draws[unc_idx]
-                cohort_evals.append(CohortForecastAtEval(
-                    y_draws=y_blend,
-                    x_draws=x_blend,
-                    eval_age=ce_c.eval_age,
-                    conditioned=ce_c.conditioned,
-                ))
-        else:
-            # Mismatch should not occur; fall back to conditioned only.
-            cohort_evals = cohort_evals_cond
+    # F-mode (model-only) trajectory: project the engine's already-composed
+    # model objects directly. No `_evaluate_cohort` splice over τ ≤ a_i,
+    # no `Y_forecast = k_i + …` / `X_forecast = N_i + …` frontier
+    # anchoring, no IS resampling. F is the model's prediction; cohort-
+    # mode evidence belongs in the E+F lane only.
+    #
+    # Window / cohort A=X (identity carrier):
+    #   rate(s, t) = p[s] × subject_cdf(s, t)
+    # Cohort A≠X with real A→X carrier:
+    #   rate(s, t) = (arrival_inc ⊛ p × subject_cdf)(s, t) / upstream_cdf(s, t)
+    # The constants a_pop and reach cancel between numerator and denominator.
+    #
+    # Inputs are the engine's composed model objects, snapshotted before
+    # IS at lines above:
+    #   p_draws_unconditioned        — drawn from the resolved model's
+    #                                  Beta (predictive (α_pred, β_pred)
+    #                                  per doc 49 default; epistemic vs
+    #                                  predictive basis is a separate
+    #                                  decision parked for later).
+    #   cdf_arr_unconditioned        — per-draw composed subject-span CDF
+    #                                  (terminal edge for single-hop;
+    #                                  composed span for multi-hop).
+    #   upstream_cdf_mc_unconditioned — composed carrier CDF tiled across
+    #                                  draws when present.
+    if upstream_cdf_mc_unconditioned is not None and reach > 0:
+        _arrival_inc_pure = np.diff(
+            np.concatenate(
+                [
+                    np.zeros((S, 1), dtype=np.float64),
+                    upstream_cdf_mc_unconditioned[:S, :T],
+                ],
+                axis=1,
+            ),
+            axis=1,
+        )
+        _arrival_inc_pure = np.maximum(_arrival_inc_pure, 0.0)
+        _Y_pure = np.zeros((S, T))
+        for _s in range(S):
+            _Y_pure[_s] = p_draws_unconditioned[_s] * np.convolve(
+                _arrival_inc_pure[_s],
+                cdf_arr_unconditioned[_s, :T],
+                mode='full',
+            )[:T]
+        _X_pure = upstream_cdf_mc_unconditioned[:S, :T]
+        rate_pure_draws = np.where(
+            _X_pure > 1e-9,
+            _Y_pure / np.maximum(_X_pure, 1e-9),
+            0.0,
+        )
     else:
-        rate_draws_out = rate_conditioned
-        Y_final = Y_cond
-        X_final = X_cond
-        cohort_evals = cohort_evals_cond
+        rate_pure_draws = (
+            p_draws_unconditioned[:, None] * cdf_arr_unconditioned[:S, :T]
+        )
+    rate_pure_draws = np.clip(rate_pure_draws, 0.0, 1.0)
+    rate_model = rate_pure_draws
+
+    # 73n stage 9 — doc-52 row-wise blend retired from the trajectory
+    # engine. Subset / effective-evidence / mass-ratio policy belongs in
+    # ``runner.primitive_conditioning`` (plan §223 "doc-52 subset
+    # correction is applied at primitive level and not by composed
+    # consumers"). The trajectory engine projects whatever conditioned
+    # draws the substrate produced; it does not re-run conditioning
+    # policy here.
+    rate_draws_out = rate_conditioned
+    Y_final = Y_cond
+    X_final = X_cond
+    cohort_evals = cohort_evals_cond
 
     # Deterministic totals: median across blended draws
     _det_y = np.median(Y_final, axis=0)
@@ -1750,12 +1790,12 @@ def compute_forecast_trajectory(
     except Exception:
         pass
 
-    # 73m Stage 4: subject-span CDF ownership diagnostics. These label the
-    # objects the trajectory engine actually consumed for subject-side
-    # progression, subject probability, and IS likelihood completeness, so
-    # the test surfaces and forensic dumps can prove the prepared object
-    # was honoured rather than silently re-derived from terminal-edge
-    # parameters.
+    # Subject-span CDF ownership diagnostics. These label the objects
+    # the trajectory engine actually consumed for subject-side
+    # progression, subject probability, and IS likelihood completeness,
+    # so the test surfaces and forensic dumps can prove the prepared
+    # object was honoured rather than silently re-derived from terminal-
+    # edge parameters.
     if mc_cdf_arr is not None:
         _subject_span_source = 'prepared_mc'
     elif det_norm_cdf is not None:
@@ -1766,7 +1806,7 @@ def compute_forecast_trajectory(
     _is_completeness_source = 'prepared_cdf_arr'
     _evidence_denominator = 'x_at_x'
     _carrier_reach, _carrier_cdf_source, _path_completeness_source = (
-        _stage_6_carrier_diagnostics(runtime_bundle)
+        _carrier_runtime_diagnostics(runtime_bundle)
     )
 
     return ForecastTrajectory(
@@ -1788,11 +1828,16 @@ def compute_forecast_trajectory(
         sigma_draws=sigma_draws,
         onset_draws=onset_draws,
         _forensic=_forensic,
-        r=blend_info.get('r'),
-        m_S=blend_info.get('m_S'),
-        m_G=blend_info.get('m_G'),
-        blend_applied=bool(blend_info.get('applied')),
-        blend_skip_reason=blend_info.get('skip_reason'),
+        # Doc-52 blend now lives entirely in primitive_conditioning.condition_primitive
+        # (73n stage 9 — trajectory engine is a pure projector). The
+        # ForecastTrajectory still carries the legacy fields so existing
+        # consumers don't crash, but they are surfaced as None / False
+        # because the engine no longer applies the blend itself.
+        r=None,
+        m_S=None,
+        m_G=None,
+        blend_applied=False,
+        blend_skip_reason='primitive_substrate_owns_doc52_blend',
         runtime_bundle_diag=serialise_runtime_bundle(runtime_bundle),
         subject_span_source=_subject_span_source,
         subject_probability_source=_subject_probability_source,
