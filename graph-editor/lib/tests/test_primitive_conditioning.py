@@ -594,6 +594,117 @@ def test_latent_primitive_emits_lognormal_cdf_mean():
     assert cdf[-1] > 0.99  # Saturates by tau=90 for mu=2, sigma=0.5.
 
 
+# ─── §7 multinomial parity (m=1 reduces to per-row Binomial) ────────────
+
+
+def test_multinomial_m1_reduces_to_per_row_binomial():
+    """Proposal §7 / §3 reduction property: when each cohort has exactly
+    one retrieval, the new multinomial cell decomposition is bit-
+    identical to the legacy per-row Binomial form
+    ``k·log(p·F(τ)) + (n-k)·log(1−p·F(τ))``.
+
+    Asserts the plan structure is correct (one cell at τ with k
+    arrivals; residual cell at the same τ) and that the §3 cell sum
+    equals the per-row Binomial form for fixed p · F values.
+    """
+    from runner.primitive_conditioning import _build_cohort_likelihood_plan
+
+    res = _build_resolution(
+        candidates=[_candidate(
+            observed_date='2026-03-15', n=50, k=20,
+            retrieved_at='2026-03-25',
+        )],
+    )
+    plan = _build_cohort_likelihood_plan(
+        weighted_view=res.weighted_view,
+        timing_family=TimingFamily.LATENT,
+        timing_max_tau=30,
+    )
+
+    assert len(plan.cohort_buckets) == 1, (
+        f"expected one cohort bucket for m=1 fixture, "
+        f"got {len(plan.cohort_buckets)}"
+    )
+    bucket = plan.cohort_buckets[0]
+
+    # Tau between observed and retrieved is 10 days.
+    assert bucket.last_observed_tau_idx == 10
+    assert len(bucket.increments) == 1
+    tau_idx, inc = bucket.increments[0]
+    assert tau_idx == 10
+    assert inc == pytest.approx(20.0)
+    assert bucket.last_k_weighted == pytest.approx(20.0)
+    assert bucket.n_weighted == pytest.approx(50.0)
+
+    # Algebraic parity: for arbitrary (p, F(τ)) the §3 cell sum equals
+    # the per-row Binomial. Compute both for a sweep and assert
+    # element-wise equality.
+    p_grid = np.array([0.05, 0.2, 0.5, 0.8, 0.95])
+    F_grid = np.array([0.1, 0.4, 0.7, 0.9, 0.99])
+    for p, F in zip(p_grid, F_grid):
+        # §3 multinomial form (single positive cell at τ, residual at τ):
+        #   k · log(p·(F-0)) + (n-k) · log(1 − p·F)
+        cell = inc * np.log(p * F)
+        residual = (bucket.n_weighted - bucket.last_k_weighted) * np.log1p(-p * F)
+        multinomial_logl = cell + residual
+
+        # Per-row Binomial form (HEAD pre-rewrite):
+        #   k · log(p·F(τ)) + (n−k) · log(1 − p·F(τ))
+        binomial_logl = (
+            20.0 * np.log(p * F)
+            + 30.0 * np.log1p(-p * F)
+        )
+        assert multinomial_logl == pytest.approx(binomial_logl, rel=1e-12), (
+            f"§3 multinomial m=1 reduction failed at p={p}, F={F}: "
+            f"multinomial={multinomial_logl}, binomial={binomial_logl}"
+        )
+
+
+def test_multinomial_plateau_preserves_survival_pressure():
+    """Proposal §3: when a cohort's trajectory ends on a plateau (kₘ = kₘ₋₁),
+    the residual cell must evaluate at τₘ (trajectory's final
+    retrieval), not at τₘ₋₁ (last positive cell). Zero-count cells must
+    appear in ``increments`` so the multinomial loop advances ``prev_F``
+    through the plateau.
+    """
+    from runner.primitive_conditioning import _build_cohort_likelihood_plan
+
+    res = _build_resolution(
+        candidates=[
+            _candidate(
+                observed_date='2026-03-15', n=50, k=20,
+                retrieved_at='2026-03-20',
+            ),
+            _candidate(
+                observed_date='2026-03-15', n=50, k=20,
+                retrieved_at='2026-03-30',
+            ),
+        ],
+    )
+    plan = _build_cohort_likelihood_plan(
+        weighted_view=res.weighted_view,
+        timing_family=TimingFamily.LATENT,
+        timing_max_tau=30,
+    )
+
+    assert len(plan.cohort_buckets) == 1
+    bucket = plan.cohort_buckets[0]
+
+    # Trajectory has retrievals at τ=5 and τ=15. Both at k=20 →
+    # increment at τ=5 is 20, increment at τ=15 is 0 (plateau).
+    assert len(bucket.increments) == 2, (
+        f"expected 2 cells (positive + zero plateau), "
+        f"got {len(bucket.increments)}: {bucket.increments}"
+    )
+    assert bucket.increments[0] == (5, pytest.approx(20.0))
+    assert bucket.increments[1][0] == 15
+    assert bucket.increments[1][1] == pytest.approx(0.0)
+    # Residual reference is the trajectory's final τ, not the last
+    # positive cell.
+    assert bucket.last_observed_tau_idx == 15
+    assert bucket.last_k_weighted == pytest.approx(20.0)
+
+
 # ─── Subset and compatibility blend named separately ───────────────────
 
 

@@ -181,6 +181,9 @@ export function buildCohortMaturityEChartsOption(
     cohortsCoveredProjected: number | null;
     evidenceY: number | null;
     evidenceX: number | null;
+    coverage: number | null;
+    evidenceXCoverage: number | null;
+    evidenceYCoverage: number | null;
     forecastY: number | null;
     forecastX: number | null;
     ratePure: number | null;
@@ -230,6 +233,9 @@ export function buildCohortMaturityEChartsOption(
       cohortsCoveredProjected: parse(r?.cohorts_covered_projected),
       evidenceY: parse(r?.evidence_y),
       evidenceX: parse(r?.evidence_x),
+      coverage: parse(r?.coverage),
+      evidenceXCoverage: parse(r?.evidence_x_coverage),
+      evidenceYCoverage: parse(r?.evidence_y_coverage),
       forecastY: parse(r?.forecast_y),
       forecastX: parse(r?.forecast_x),
       ratePure: parse(r?.rate_pure),
@@ -327,14 +333,12 @@ export function buildCohortMaturityEChartsOption(
         ? Number(extSetting)
         : (maxTau ?? sFutureMax);
 
-      let lastEvidenceY = 0;
       const evidenceData: number[][] = [];
       const forecastData: number[][] = [];
       for (const p of points) {
         if (p.tauDays >= countTauMax) continue;
-        const ey = p.evidenceY ?? lastEvidenceY;
-        if (p.evidenceY != null) lastEvidenceY = p.evidenceY;
-        const fy = p.forecastY ?? ey;
+        const ey = p.evidenceY ?? null;
+        const fy = p.forecastY ?? null;
         evidenceData.push([p.tauDays, ey]);
         forecastData.push([p.tauDays, fy]);
       }
@@ -343,8 +347,8 @@ export function buildCohortMaturityEChartsOption(
       // Stacked bars per scenario: evidence (solid base) + forecast-only
       // (striated top).  Different scenarios sit side by side.
       const forecastOnlyData = evidenceData.map(([tau, ey], i) => {
-        const fy = forecastData[i]?.[1] ?? ey;
-        return [tau, Math.max(0, fy - ey)];
+        const fy = forecastData[i]?.[1] ?? null;
+        return [tau, fy];
       });
       seriesOut.push({
         id: `${scenarioId}::evidence_count`,
@@ -383,6 +387,9 @@ export function buildCohortMaturityEChartsOption(
       cohortsCoveredProjected: p.cohortsCoveredProjected,
       evidenceY: p.evidenceY,
       evidenceX: p.evidenceX,
+      coverage: p.coverage,
+      evidenceXCoverage: p.evidenceXCoverage,
+      evidenceYCoverage: p.evidenceYCoverage,
       forecastY: p.forecastY,
       forecastX: p.forecastX,
     });
@@ -476,9 +483,10 @@ export function buildCohortMaturityEChartsOption(
     if (mode !== 'f') {
       // Solid line (epoch A): complete evidence — all cohorts present.
       const solidPts = points.filter(p => p.tauDays <= sSolidMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+      const realEvidenceCount = solidPts.filter(p => p.value[1] !== null).length;
       const sSolid = mkLine({
         id: `${scenarioId}::solid`, name, colour, lineType: 'solid',
-        data: solidPts, showSymbol: solidPts.length <= 12,
+        data: solidPts, showSymbol: realEvidenceCount > 0,
         smooth: true,
       });
       if (sSolid) seriesOut.push(sSolid);
@@ -491,9 +499,17 @@ export function buildCohortMaturityEChartsOption(
       const dashedPurePts = points
         .filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax && p.ratePure !== null)
         .map(p => ({ value: [p.tauDays, p.ratePure] as [number, number | null], ...toMeta(p) }));
+      // showSymbol on so the coverage × fadeOpacity rewrite below
+      // (cohort-maturity-evidence-coverage-design.md §5.1) actually has
+      // markers to fade. mkLine defaults showSymbol to false, which
+      // suppresses epoch-B blobs at series level before the alpha
+      // mapping can act — the legacy "binary visible/hidden" toggle the
+      // design replaces.
+      const realDashedPureCount = dashedPurePts.filter(p => p.value[1] !== null).length;
       const sDashedPure = mkLine({
         id: `${scenarioId}::dashedEvidence`, colour, lineType: 'dashed', opacity: 0.75,
         data: dashedPurePts,
+        showSymbol: realDashedPureCount > 0,
         smooth: true,
       });
       if (sDashedPure) seriesOut.push(sDashedPure);
@@ -503,9 +519,15 @@ export function buildCohortMaturityEChartsOption(
       // Dashed line (epoch B): incomplete evidence — some cohorts dropped out.
       // Uses blended rate (observed x for mature, projected x for immature).
       const dashedEvidencePts = points.filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+      // See §5.1 / §4.6: coverage modulates opacity, not visibility.
+      // showSymbol must be on so the rewrite below can fade markers;
+      // coverage = 0 still produces opacity 0 (invisible) via the alpha
+      // mapping rather than series-level suppression.
+      const realDashedEvCount = dashedEvidencePts.filter(p => p.value[1] !== null).length;
       const sDashedEv = mkLine({
         id: `${scenarioId}::dashedEvidence`, colour, lineType: 'dashed', opacity: 0.75,
         data: dashedEvidencePts,
+        showSymbol: realDashedEvCount > 0,
         smooth: true,
       });
       if (sDashedEv) seriesOut.push(sDashedEv);
@@ -614,14 +636,43 @@ export function buildCohortMaturityEChartsOption(
         const t = (tau - sSolidMax) / Math.max(1, sFutureMax - sSolidMax);
         return base * (1 - 0.2 * t);
       };
+      // Evidence-line series carry the coverage signal through their
+      // per-point meta (toMeta.coverage); other series do not. Per the
+      // evidence coverage design (§4.3), coverage × fadeOpacity applies
+      // ONLY to evidence-line symbols — midpoint, fan, and model overlays
+      // keep their existing per-point opacity behaviour unchanged.
+      const isEvidenceLineSeries = (id: string): boolean =>
+        id === `${scenarioId}::solid`
+        || id === `${scenarioId}::dashedEvidence`;
       for (const s of seriesOut) {
         if (typeof s.id !== 'string' || !s.id.startsWith(`${scenarioId}::`)) continue;
         if (s.id.includes('shading')) continue;
         if (!Array.isArray(s.data)) continue;
         const baseOpacity = s.itemStyle?.opacity ?? 1.0;
+        const evidenceLine = isEvidenceLineSeries(s.id);
         s.data = s.data.map((d: any) => {
           const tau = Array.isArray(d) ? d[0] : d?.value?.[0];
-          if (typeof tau !== 'number' || tau <= sSolidMax) return d;
+          if (typeof tau !== 'number') return d;
+          // Evidence-line series: composite coverage × fadeOpacity across
+          // all τ. Coverage = 1 reproduces the existing fadeOpacity-only
+          // behaviour; coverage = 0 zeros the symbol regardless of τ
+          // (covered-but-stale past last retrieval, design §4.2).
+          if (evidenceLine) {
+            const cov = (d as any)?.coverage;
+            if (typeof cov === 'number' && Number.isFinite(cov)) {
+              const fade = fadeOpacity(tau, baseOpacity);
+              const val = Array.isArray(d) ? d : d?.value;
+              return {
+                ...d,
+                value: val,
+                itemStyle: { ...d?.itemStyle, opacity: fade * cov },
+              };
+            }
+            // No coverage signal on this row (Absent state per design
+            // §3.1 or pre-coverage payload): fall through to the
+            // default fadeOpacity-only path below.
+          }
+          if (tau <= sSolidMax) return d;
           const val = Array.isArray(d) ? d : d?.value;
           return { value: val, itemStyle: { ...d?.itemStyle, opacity: fadeOpacity(tau, baseOpacity) } };
         });

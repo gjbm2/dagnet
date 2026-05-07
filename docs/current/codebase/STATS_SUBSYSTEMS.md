@@ -93,7 +93,12 @@ Key invariants:
 
 ### 3.3 BE CF pass (conditioned forecast — sophisticated MC enrichment)
 
-> **See also**: [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) — the canonical post-73b data-flow and interface-contract reference (interfaces I1–I17). For the per-scenario request graph, the CF response → graph apply mapping, and the full BE analyse dispatch surface, that doc is the maintained artefact; this section here is a narrative overview.
+> **See also**:
+> - [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) — semantic source of truth for `cohort()` / `window()`, carrier vs subject, factorised vs gross-fitted, and the "Implementation invariants" section that any CF runtime change must preserve.
+> - [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) — the canonical reference for what happens *inside* the CF kernel boundary: `ResolvedCFRuntime`, primitive conditioning and composition, selected-Cohort reduction, selected A-clock evidence, row projection. This is the runtime-engineering doc; STATS_SUBSYSTEMS gives the subsystem-level placement, that doc gives the per-edge runtime.
+> - [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) — the canonical post-73b data-flow and interface-contract reference (interfaces I1–I17). For the per-scenario request graph, the CF response → graph apply mapping, and the full BE analyse dispatch surface, that doc is the maintained artefact; this section here is a narrative overview.
+>
+> Reading order for new contributors to the CF subsystem: semantics → runtime → data flow.
 
 **What it is**: the sophisticated topologically-sequenced MC enrichment that runs the full cohort_maturity v3 pipeline per edge, across the whole graph, using snapshot DB evidence and per-edge IS conditioning on query-DSL-scoped evidence. Writes per-edge conditioned scalars back to the graph. **This is a graph enrichment endpoint, not an analysis type** — the docstring at [api_handlers.py:2513](../../graph-editor/lib/api_handlers.py#L2513) is explicit.
 
@@ -122,15 +127,21 @@ Key invariants:
 **Runtime-bundle conditioning seam (current live behaviour)**: before the
 row-builder or summary solve runs, the live callers assemble
 `PreparedForecastRuntimeBundle.p_conditioning_evidence` in
-`graph-editor/lib/runner/forecast_runtime.py`. The current WP8 landing is
-intentionally narrow:
+`graph-editor/lib/runner/forecast_runtime.py`. WP8 (direct-`cohort()`-for-`p`
+rate conditioning, doc 60) is **planned, not yet landed** — no production
+request builder enables `direct_cohort_enabled` (or any WP8-adjacent
+dispatch flag); the flag exists in WP8-only tests outside the standard
+acceptance gates, per [`FORECAST_STACK_DATA_FLOW.md`](FORECAST_STACK_DATA_FLOW.md)
+§B.3 [I10] "WP8 discipline". Until WP8 lands:
 
-- exact single-hop `cohort()` subjects enable
+- every live cohort and window request goes through the pre-existing
+  `snapshot_frames` / `frame_evidence` / `aggregate_evidence` seam
+  depending on the caller
+- when WP8 lands, the design intent (per doc 60) is intentionally narrow:
+  exact single-hop `cohort()` subjects would enable
   `direct_cohort_enabled = true` and tag the seam as
-  `direct_cohort_exact_subject`
-- `window()` and multi-hop `cohort()` queries keep the pre-existing
-  `snapshot_frames` / `frame_evidence` / `aggregate_evidence` seam depending
-  on the caller
+  `direct_cohort_exact_subject`; `window()` and multi-hop `cohort()`
+  queries would keep the pre-WP8 seam
 - the same helper is used by `handle_conditioned_forecast`,
   `_handle_cohort_maturity_v3`, `compute_cohort_maturity_rows_v3` when it
   synthesises its own bundle, and `_compute_surprise_gauge`, so the live
@@ -221,13 +232,13 @@ is unchanged.
 For the post-73n CF substrate end-to-end picture, read
 [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) §B.6.
 
-**Dispersion contract (doc 49)**: `p_sd` and `p_sd_epistemic` are both closed-form Beta σ, derived from the resolved α/β pair — **not MC stds of the conditioned draws**. Historically `p_sd` was `np.std(rate_draws[:, -1])` on the IS-conditioned set, which collapses to the epistemic posterior width regardless of how diffuse the sampling prior was (IS-conditioning on O(n) observed evidence dominates the prior). Closed form is the only way to expose predictive dispersion (Beta(α_pred, β_pred)) distinctly from epistemic (Beta(α, β)). The non-latency fallback (`_non_latency_rows` in cohort_forecast_v3.py) derives `p_sd_epistemic` from the conjugate-updated posterior and `p_sd` from the unupdated predictive α_pred/β_pred so that kappa-inflated width is not collapsed by query-window evidence. See docs 45b §Phase C, 47 §5g.
+**Dispersion contract (doc 49)**: `p_sd` and `p_sd_epistemic` are both closed-form Beta σ, derived from the resolved α/β pair — **not MC stds of the conditioned draws**. Historically `p_sd` was `np.std(rate_draws[:, -1])` on the IS-conditioned set, which collapses to the epistemic posterior width regardless of how diffuse the sampling prior was (IS-conditioning on O(n) observed evidence dominates the prior). Closed form is the only way to expose predictive dispersion (Beta(α_pred, β_pred)) distinctly from epistemic (Beta(α, β)). The runtime path derives these scalar dispersions from `ResolvedCFRuntime.public_moments`; row fan widths remain empirical quantiles of the selected-Cohort draw family. See docs 45b §Phase C, 47 §5g.
 
 **Naming note (doc 61)**: the `p_sd` / `p_sd_epistemic` pair on the CF response retains the doc 49 convention, which is **inverted** from the doc 61 convention used for latency dispersions (where bare name = epistemic, `_pred` suffix = predictive). On the CF response `p_sd` is predictive and `p_sd_epistemic` is epistemic; on the Bayes latency posterior and `model_vars.latency.mu_sd`, bare name is epistemic and `_pred` is predictive. The two conventions live at different architectural layers (CF inner kernel output vs Bayes-webhook posterior block) and have not been unified. Consumers reading `p_sd` from a CF response should treat it as predictive; consumers reading `mu_sd` from a posterior block should treat it as epistemic. A future extension of doc 61 to the CF-response layer would eliminate this asymmetry. See doc 61 §11 "Acceptance criteria" for the residual.
 
 **Outputs**: per-edge per-scenario `{p_mean, p_sd, p_sd_epistemic, completeness, completeness_sd, tau_max, n_rows, n_cohorts, conditioned}` returned via API response. Applied to graph via `conditionedForecastService.applyConditionedForecastToGraph` per the I12 mapping: `p_mean → edge.p.mean`, `p_sd → edge.p.stdev_pred`, `p_sd_epistemic → edge.p.stdev`, `completeness → edge.p.latency.completeness`, `completeness_sd → edge.p.latency.completeness_stdev`, and `evidence_k/evidence_n → edge.p.evidence.{k,n}`. CF does not write `p.forecast.*`; response-only fields include `conditioning{...}`, `cf_mode`, `cf_reason`, `tau_max`, `n_rows`, `n_cohorts`, `conditioned`, and `skipped_edges`.
 
-**`conditioned` field**: boolean on every per-edge CF result. True when observed evidence was applied to the prior (the usual case when snapshot rows exist for the edge's regime in the query window); false when the result is the unconditioned prior unchanged (no rows found, or the resolver could not bind a regime). Set in both the closed-form path (`NonLatencyResult.conditioned` in `cohort_forecast_v3.py`, written as `(fe is not None and sum_x > 0)`) and the MC sweep path (`bool(sweep.n_cohorts_conditioned)`). Consumers use it diagnostically — it surfaces "no evidence applied" cases that would otherwise be invisible because the prior-mean and unconditioned-mean coincide when the prior is well-calibrated. The funnel runner consumes `conditioned` for logging but does not branch on it: the completeness-weighted variance mixture already widens bands correctly when completeness=0.
+**`conditioned` field**: boolean on every per-edge CF result. True when observed evidence was applied to the prior (the usual case when snapshot rows exist for the edge's regime in the query window); false when the result is the unconditioned prior unchanged (no rows found, or the resolver could not bind a regime). The unified runtime reports this from primitive/runtime provenance rather than from a closed-form row-builder branch. Consumers use it diagnostically — it surfaces "no evidence applied" cases that would otherwise be invisible because the prior-mean and unconditioned-mean coincide when the prior is well-calibrated. The funnel runner consumes `conditioned` for logging but does not branch on it: the completeness-weighted variance mixture already widens bands correctly when completeness=0.
 
 **Per-edge vs path-cumulative completeness (gotcha)**: when a caller invokes CF with a single-edge `analytics_dsl: from(X).to(Y)` plus a path-level cohort window, the returned `completeness` is **edge-local** (has this edge's source cohort had time to traverse this single edge?), not path-cumulative (has the original cohort at S₀ had time to reach this stage along the full path?). Edge-local completeness is 1.0 for non-latency edges and ≈1.0 for short-lag edges on historic data. Multi-hop consumers that need path-cumulative completeness should read `latency.completeness` from the scenario graph edge (populated by the fetch pipeline's whole-graph CF pass with the full path DSL in scope), not from per-edge CF responses. The conversion_funnel runner applies this overlay before calling `compute_bars_ef`.
 

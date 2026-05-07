@@ -137,7 +137,7 @@ This schematic reuses the `FORECAST_STACK_DATA_FLOW.md` interface labels and int
 
 **73n primitive substrate (Stages 1-8 landed 1-May-26, default OFF)**: a typed `ConditionedTransitionPrimitive` substrate sits inside the CF kernel boundary. Subset / effective-evidence policy and the conjugate update apply **once at primitive construction** (`primitive_conditioning.py`); the primitives are then composed by `compose_subject_span` (and 73m's `compose_carrier_to_x` for active cohort `A != X`) into per-readout outputs. Four flag-gated readouts at the shared row-builder seam: `DAGNET_SINGLE_HOP_PRIMITIVE_READOUT`, `DAGNET_MULTI_HOP_SUBJECT_COMPOSITION`, `DAGNET_MULTI_HOP_WINDOW_READOUT`, `DAGNET_ACTIVE_COHORT_CARRIER_READOUT`. Each accepts `OFF` (live path), `SHADOW` (compute substrate readout in parallel and emit divergence diagnostics, return live result), or `ON` (return substrate readout). Production flag-ON for any of the four is currently blocked on the maturity-aware likelihood migration follow-up; SHADOW is the highest mode recommended in production.
 
-**See**: [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) §B.6 for the full post-73n CF substrate; [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) §3.3a for the narrative; [BE_RUNNER_CLUSTER.md](BE_RUNNER_CLUSTER.md) §3a for the file map.
+**See**: [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) for the semantic contract and "Implementation invariants" the runtime must preserve; [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) for the live `cohort_forecast_v3` runtime (`ResolvedCFRuntime`, primitive composition, selected-Cohort reduction, row projection); [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) §B.6 for the full post-73n CF substrate; [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) §3.3a for the narrative; [BE_RUNNER_CLUSTER.md](BE_RUNNER_CLUSTER.md) §3a for the file map.
 
 ## Parent Docs
 
@@ -145,6 +145,9 @@ Use this page for the cross-pipeline schematic, then jump to the parent doc for 
 
 - [TOPOLOGY.md](TOPOLOGY.md): where statistical compute sits in the app-wide architecture.
 - [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md): subsystem narratives, field-authority notes, and entry-point disambiguation.
-- [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md): labelled interface contracts `I1`-`I17`.
+- **CF / forecast-runtime trio (read in this order if working on the conditioned-forecast surface)**:
+  - [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md): semantic contract + canonical engineering invariants.
+  - [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md): the live `cohort_forecast_v3` runtime inside the CF kernel boundary.
+  - [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md): labelled interface contracts `I1`-`I17`.
 - [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md): Stage 2 orchestration, FE topo / CF race mechanics, and `--no-be`.
 - [BE_RUNNER_CLUSTER.md](BE_RUNNER_CLUSTER.md): backend runner and forecast-engine file map.

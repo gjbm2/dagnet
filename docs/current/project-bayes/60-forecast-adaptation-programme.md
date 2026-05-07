@@ -1190,7 +1190,23 @@ must nevertheless support `direct_cohort_exact_subject` in its role model
 so the WP8 implementation can enable it by flag/admission-policy decision
 without redesigning file/snapshot deduplication.
 
-### A.3 How to use this appendix when working in this area
+### A.3 Future-work item FW1 — multi-hop exact-prefix evidence composition
+
+FW1 lives here in the WP8 ledger because it concerns exact
+`cohort(A, X -> end)` observed-prefix admission, not the Phase 3
+model-projection fix. Phase 3 can project active multi-hop cohorts from
+the resolved runtime's composed carrier and subject spans without
+observed-prefix composition. If later work admits exact selected
+A-clock observations, multi-hop carrier observed prefixes require a
+count-flow composition over upstream edge arrivals; they must not be
+approximated with Fenton-Wilkinson or by reusing window rows on the
+wrong clock.
+
+Reference:
+[`cohort-maturity-selected-cohort-projection-pattern.md`](../cohort-maturity-selected-cohort-projection-pattern.md)
+§"Phase 3 Implementation Plan" / "Future work (not Phase 3)".
+
+### A.4 How to use this appendix when working in this area
 
 - If you are about to add an `xfail`, a `# WP8` comment, or a "skip
   for now" branch in the engine or its tests, add a row to the table

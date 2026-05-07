@@ -536,11 +536,21 @@ def merge_evidence_candidates(
             continue
         eligible.append(c)
 
-    # Steps 2-5: dedupe by (identity, observed_date); snapshot beats
-    # non-snapshot; within same source kind, latest retrieval wins.
+    # Steps 2-5: per-retrieval preserve. Group by
+    # (identity, observed_date, retrieved_at, asat_materialised) so the
+    # full per-cohort retrieval trajectory survives. Source precedence
+    # (snapshot beats non-snapshot at the same triple) and exact-duplicate
+    # collapse still apply within each per-retrieval bucket. The downstream
+    # conditioner is responsible for nested-cumulative likelihood handling
+    # across retrievals of the same cohort observed_date.
     grouped: dict[tuple, list[EvidenceCandidate]] = defaultdict(list)
     for c in eligible:
-        grouped[(_dedupe_key(c.identity), c.coordinate.observed_date)].append(c)
+        grouped[(
+            _dedupe_key(c.identity),
+            c.coordinate.observed_date,
+            c.coordinate.retrieved_at,
+            bool(c.coordinate.asat_materialised),
+        )].append(c)
 
     points: list[EvidencePoint] = []
     for _key, group in grouped.items():
@@ -548,18 +558,16 @@ def merge_evidence_candidates(
         non_snapshots = [c for c in group if c.source != SourceKind.SNAPSHOT]
 
         if snapshots:
-            snapshots.sort(key=_retrieval_sort_key, reverse=True)
             winner = snapshots[0]
             for loser in snapshots[1:]:
-                skipped.append(SkippedCandidate(loser, "superseded_by_later_retrieval"))
+                skipped.append(SkippedCandidate(loser, "exact_duplicate"))
             for ns in non_snapshots:
                 skipped.append(SkippedCandidate(ns, "covered_by_snapshot"))
             points.append(EvidencePoint(winner))
         else:
-            non_snapshots.sort(key=_retrieval_sort_key, reverse=True)
             winner = non_snapshots[0]
             for loser in non_snapshots[1:]:
-                skipped.append(SkippedCandidate(loser, "superseded_by_later_retrieval"))
+                skipped.append(SkippedCandidate(loser, "exact_duplicate"))
             points.append(EvidencePoint(winner))
 
     # Step 6: totals + provenance

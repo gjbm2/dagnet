@@ -56,10 +56,11 @@ from __future__ import annotations
 
 import math
 import sys as _sys
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import date as _date
 from pathlib import Path as _Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -295,12 +296,6 @@ def _condition_primitive_uncached(
     )
 
     weighted_view = resolution.weighted_view
-    n_w = float(weighted_view.n_weighted_total)
-    k_w = float(weighted_view.k_weighted_total)
-    # Doc-52 overlap accounting is raw/raw: the selected-set numerator is
-    # the admitted raw row mass, while n_w/k_w remain the arrival-weighted
-    # likelihood totals used by the conditioning update.
-    m_S_doc52 = float(sum(float(row.n) for row in weighted_view.rows))
     raw_scope_key = weighted_view.evidence_scope_key
 
     # Degraded topology: raw points existed but every one was rejected
@@ -328,7 +323,35 @@ def _condition_primitive_uncached(
             ),
         )
 
-    if n_w <= 0.0:
+    # ── Plan stage ──
+    plan = _build_cohort_likelihood_plan(
+        weighted_view=weighted_view,
+        timing_family=timing_family,
+        timing_max_tau=options.timing_cdf_max_tau,
+    )
+
+    # ── Evaluate stage ──
+    outcome = _evaluate_likelihood_plan(
+        plan,
+        resolved_latency=resolved_model.latency,
+        prior_alpha=prior_alpha,
+        prior_beta=prior_beta,
+        prior_alpha_pred=(
+            float(resolved_model.alpha_pred)
+            if resolved_model.alpha_pred and resolved_model.alpha_pred > 0
+            else None
+        ),
+        prior_beta_pred=(
+            float(resolved_model.beta_pred)
+            if resolved_model.beta_pred and resolved_model.beta_pred > 0
+            else None
+        ),
+        draw_count=options.draw_count,
+        draw_family_key=draw_family_key,
+    )
+
+    # ── Materialise stage ──
+    if outcome.status == 'prior_only':
         return _make_prior_only_primitive(
             transition=transition,
             scope=primitive_scope,
@@ -342,48 +365,23 @@ def _condition_primitive_uncached(
             raw_evidence_scope_key=raw_scope_key,
             weighted_view=weighted_view,
             draw_family_key=draw_family_key,
+            prior_only_reason=outcome.reason,
+            plan_provenance=plan.provenance,
         )
 
+    # CONDITIONED branch: doc-52 subset policy + blend, then build the
+    # primitive with cohort-aggregate-driven effective totals.
     subset_policy = _compute_subset_policy(
-        m_S=m_S_doc52,
+        m_S=plan.m_S_doc52,
         n_effective=resolved_model.n_effective,
-    )
-
-    (
-        cond_p_draws,
-        cond_cdf_draws,
-        prior_p_draws,
-        prior_cdf_draws,
-        maturity_provenance,
-    ) = _maturity_aware_conditioned_draws(
-        weighted_view=weighted_view,
-        resolved_latency=resolved_model.latency,
-        timing_family=timing_family,
-        timing_max_tau=options.timing_cdf_max_tau,
-        prior_alpha=prior_alpha,
-        prior_beta=prior_beta,
-        prior_alpha_pred=(
-            float(resolved_model.alpha_pred)
-            if resolved_model.alpha_pred and resolved_model.alpha_pred > 0
-            else None
-        ),
-        prior_beta_pred=(
-            float(resolved_model.beta_pred)
-            if resolved_model.beta_pred and resolved_model.beta_pred > 0
-            else None
-        ),
-        n_w_total=n_w,
-        k_w_total=k_w,
-        draw_count=options.draw_count,
-        draw_family_key=draw_family_key,
     )
 
     posterior_p_draws, posterior_cdf_draws, n_cond, blend_applied = (
         _apply_doc52_blend(
-            cond_p_draws=cond_p_draws,
-            prior_p_draws=prior_p_draws,
-            cond_cdf_draws=cond_cdf_draws,
-            prior_cdf_draws=prior_cdf_draws,
+            cond_p_draws=outcome.cond_p_draws,
+            prior_p_draws=outcome.prior_p_draws,
+            cond_cdf_draws=outcome.cond_cdf_draws,
+            prior_cdf_draws=outcome.prior_cdf_draws,
             subset_policy=subset_policy,
             draw_family_key=draw_family_key,
         )
@@ -413,16 +411,20 @@ def _condition_primitive_uncached(
     else:
         timing_obj_posterior = timing_obj
 
+    # ``effective_evidence_totals`` is post-blend: cohort-aggregate
+    # weighted totals scaled by (1 − r). The (1 − r) factor preserves
+    # the doc-52 compatibility blend; the substitution from row-level
+    # totals to cohort-aggregate totals is operand-only and removes the
+    # per-retrieval over-count that fell out of the per-retrieval merge
+    # rekey.
+    n_cohort, k_cohort = outcome.cohort_aggregate
     if subset_policy.r is None:
-        # Subset skipped — full E pressure applied; e == E by construction.
-        eff_n = n_w
-        eff_k = k_w
+        eff_n = n_cohort
+        eff_k = k_cohort
     else:
-        # Effective evidence pressure: the conditioned-portion contribution
-        # to the mixed posterior. (1 - r) of the draws are conditioned.
         eff_factor = max(0.0, 1.0 - float(subset_policy.r))
-        eff_n = n_w * eff_factor
-        eff_k = k_w * eff_factor
+        eff_n = n_cohort * eff_factor
+        eff_k = k_cohort * eff_factor
 
     compatibility_blend = CompatibilityBlendProvenance(
         applied=blend_applied,
@@ -461,22 +463,34 @@ def _condition_primitive_uncached(
             'bound_point_count': resolution.diagnostics.bound_point_count,
             'off_clock_rejection_count':
                 resolution.diagnostics.off_clock_rejection_count,
+            **(
+                {'plan_provenance': list(plan.provenance)}
+                if plan.provenance else {}
+            ),
         },
         notes=(
             f'topology_case={resolution.diagnostics.topology_case}',
             # ``n_eff_posterior`` is the posterior informational mass —
             # the conjugate equivalent of an ESS health diagnostic
-            # (plan §648). For both the conjugate non-latent path and
-            # the maturity-aware IS path the total weighted evidence
-            # mass plus the prior mass is the right summary; IS-based
-            # closure ESS is reported separately in the next note.
-            f'n_eff_posterior={prior_alpha + prior_beta + n_w:.4f}',
+            # (plan §648). After the per-retrieval merge rekey and the
+            # plan/evaluate/materialise refactor, the cohort-aggregate
+            # weighted total is what drove the posterior; the row-level
+            # admitted total is preserved on the next line as a
+            # diagnostic.
+            f'n_eff_posterior={prior_alpha + prior_beta + n_cohort:.4f}',
+            f'cohort_aggregate_pre_blend=({n_cohort:.4f},{k_cohort:.4f})',
             (
-                f'maturity_aware_mode={maturity_provenance["mode"]} '
-                f'rows_used={maturity_provenance["rows_used"]} '
-                f'tempering_lambda={maturity_provenance["tempering_lambda"]:.4f} '
-                f'ess={maturity_provenance["ess"]:.2f}'
+                f'row_level_admitted_total='
+                f'({plan.row_level_n_weighted_total:.4f},'
+                f'{plan.row_level_k_weighted_total:.4f})'
             ),
+            (
+                f'maturity_aware_mode={outcome.provenance["mode"]} '
+                f'cohorts_used={outcome.provenance["cohorts_used"]} '
+                f'tempering_lambda={outcome.provenance["tempering_lambda"]:.4f} '
+                f'ess={outcome.provenance["ess"]:.2f}'
+            ),
+            *(f'plan_provenance: {entry}' for entry in plan.provenance),
         ),
     )
 
@@ -730,53 +744,377 @@ def _row_age_days(row: 'WeightedEvidenceRow') -> Optional[int]:
     return (retrieved - observed).days
 
 
-def _maturity_aware_conditioned_draws(
-    *,
+# ─── Cohort likelihood plan + outcome (plan → evaluate → materialise) ──
+#
+# One resolution path; cases differ by degeneration, not branching
+# (Implementation Invariant 1 of COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_
+# SEMANTICS §"Implementation invariants", AP58). Non-latent is a
+# degeneration of latent; "no evidence", "no timing grid", "no latent
+# rows", and "IS failed" are all reasons-as-data on a prior-only
+# outcome rather than separate code paths.
+
+
+@dataclass(frozen=True)
+class _CohortLatest:
+    """Latest retrieval per (observed_date) within a primitive's evidence view."""
+
+    observed_date: str
+    retrieved_at: Optional[str]
+    n_raw: int
+    k_raw: int
+    n_weighted: float
+    k_weighted: float
+
+
+@dataclass(frozen=True)
+class _CohortBucket:
+    """Multinomial cell decomposition for one cohort under latent timing.
+
+    ``increments`` carries one entry per retrieval after Pass-2 dedup
+    (zero-increment cells preserved so the cell decomposition advances
+    the CDF lower bound through plateau intervals as the multinomial
+    requires). Sorted by τ ascending.
+
+    ``last_observed_tau_idx`` is the τ at the trajectory's actual
+    final retrieval — used as the residual cell's upper bound so a
+    plateau at the trajectory tail does not evaluate residual survival
+    too early.
+
+    ``last_k_weighted`` is the cumulative weighted observed count at
+    the trajectory's final retrieval; residual count is
+    ``n_weighted − last_k_weighted`` (clamped at 0).
+    """
+
+    observed_date: str
+    n_weighted: float
+    increments: Tuple[Tuple[int, float], ...]
+    last_observed_tau_idx: int
+    last_k_weighted: float
+
+
+@dataclass(frozen=True)
+class _CohortLikelihoodPlan:
+    """Single canonical description of the evidence consumed by the
+    evaluator and the materialise stages.
+
+    Two passes feed it: (1) timing-family-independent aggregation by
+    full-timestamp ordering, producing ``cohort_latest`` /
+    ``cohort_*_weighted_total`` / ``m_S_doc52``; (2) latent-only τ-bucket
+    construction, producing ``cohort_buckets``.
+
+    ``evaluable`` is the load-bearing semantic flag — true iff this
+    plan has evidence capable of moving the posterior. When false,
+    ``unevaluable_reason`` names the degeneration; the evaluator will
+    return prior-only with that reason.
+    """
+
+    cohort_latest: Tuple[_CohortLatest, ...]
+    cohort_buckets: Tuple[_CohortBucket, ...]
+    cohort_n_weighted_total: float
+    cohort_k_weighted_total: float
+    m_S_doc52: float
+    row_level_n_weighted_total: float
+    row_level_k_weighted_total: float
+    timing_family: TimingFamily
+    timing_max_tau: int
+    evaluable: bool
+    unevaluable_reason: Optional[str]
+    provenance: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ConditioningOutcome:
+    """Result of evaluating a likelihood plan.
+
+    ``status`` is the load-bearing field. ``'prior_only'`` outcomes
+    carry a ``reason`` that names the degeneration; ``'conditioned'``
+    outcomes carry the conditioned and prior draw families plus the
+    cohort aggregate that drove the posterior.
+    """
+
+    status: str
+    reason: Optional[str] = None
+    cond_p_draws: Optional[np.ndarray] = None
+    cond_cdf_draws: Optional[np.ndarray] = None
+    prior_p_draws: Optional[np.ndarray] = None
+    prior_cdf_draws: Optional[np.ndarray] = None
+    cohort_aggregate: Optional[Tuple[float, float]] = None
+    provenance: Optional[Dict[str, object]] = None
+
+
+def _build_cohort_likelihood_plan(
     weighted_view: WeightedPrimitiveEvidenceView,
-    resolved_latency: ResolvedLatency,
     timing_family: TimingFamily,
     timing_max_tau: int,
+) -> _CohortLikelihoodPlan:
+    """Read evidence once and produce the canonical plan.
+
+    Pass 1 is timing-family-independent: requires only
+    ``(observed_date, retrieved_at)`` parseable. Resolves
+    same-retrieval conflicts and selects the latest retrieval per
+    ``observed_date``. Drives ``cohort_aggregate`` and ``m_S_doc52``.
+
+    Pass 2 is latent-only: requires ``τ = retrieved_at − observed_date
+    > 0``. Builds the multinomial τ-cell decomposition per cohort.
+
+    Same-retrieval conflict rule (applied in Pass 1 *before* monotone-k
+    clamping so the clamp cannot mask the diagnostic values):
+
+    1. Identical (n_weighted, k_weighted) under exact float equality →
+       coalesce silently.
+    2. Distinct full timestamps → keep the row with the later
+       full-timestamp ``retrieved_at``; record dropped row's timestamp.
+    3. Same full timestamp, non-identical (n_weighted, k_weighted) →
+       skip the entire cohort group (do not partially admit) and
+       record provenance.
+    """
+    rows = list(weighted_view.rows)
+
+    row_level_n_total = float(sum(float(r.n_weighted) for r in rows))
+    row_level_k_total = float(sum(float(r.k_weighted) for r in rows))
+
+    provenance: list[str] = []
+
+    # ── Pass 1: aggregation (timing-family-independent) ──
+    #
+    # Group by observed_date; drop rows with unparseable dates or
+    # zero/negative cohort weight; resolve same-retrieval conflicts;
+    # pick the latest retrieval per observed_date.
+    by_obs: Dict[str, list] = defaultdict(list)
+    parse_failed = 0
+    zero_weight = 0
+    for row in rows:
+        if not row.retrieved_at or not row.observed_date:
+            parse_failed += 1
+            continue
+        try:
+            _date.fromisoformat(str(row.retrieved_at)[:10])
+            _date.fromisoformat(str(row.observed_date)[:10])
+        except (TypeError, ValueError):
+            parse_failed += 1
+            continue
+        if float(row.n_weighted) <= 0.0:
+            zero_weight += 1
+            continue
+        by_obs[row.observed_date].append(row)
+
+    if parse_failed:
+        provenance.append(f'rows_with_unparseable_dates={parse_failed}')
+    if zero_weight:
+        provenance.append(f'rows_with_zero_weight={zero_weight}')
+
+    # Per-trajectory same-timestamp dedup (§5 rules across the whole
+    # trajectory): for every retrieved_at within each cohort group,
+    # apply the §5 collision rules. Identical-value collisions coalesce
+    # silently; non-identical-value collisions skip the entire cohort.
+    # The result is ``by_obs_deduped`` — at most one row per
+    # (od, retrieved_at) — which both Pass 1 and Pass 2 consume.
+    by_obs_deduped: Dict[str, list] = {}
+    cohort_skipped_obs: set[str] = set()
+    skipped_groups = 0
+    for od, group in by_obs.items():
+        by_retrieved: Dict[str, list] = defaultdict(list)
+        for row in group:
+            by_retrieved[str(row.retrieved_at)].append(row)
+
+        cohort_must_skip = False
+        deduped_rows: list = []
+        for retrieved_ts, rows_at_ts in by_retrieved.items():
+            if len(rows_at_ts) > 1:
+                ref_n = float(rows_at_ts[0].n_weighted)
+                ref_k = float(rows_at_ts[0].k_weighted)
+                all_equal = all(
+                    float(r.n_weighted) == ref_n
+                    and float(r.k_weighted) == ref_k
+                    for r in rows_at_ts
+                )
+                if not all_equal:
+                    provenance.append(
+                        f'same_retrieval_conflict_skipped['
+                        f'od={od},retrieved_at={retrieved_ts},'
+                        f'pairs={[(float(r.n_weighted), float(r.k_weighted)) for r in rows_at_ts]}]'
+                    )
+                    cohort_must_skip = True
+                    break
+            deduped_rows.append(rows_at_ts[0])
+
+        if cohort_must_skip:
+            cohort_skipped_obs.add(od)
+            skipped_groups += 1
+            continue
+        by_obs_deduped[od] = deduped_rows
+
+    if skipped_groups:
+        provenance.append(f'cohort_groups_skipped_by_conflict={skipped_groups}')
+
+    # Pass 1 proper: pick latest retrieved_at per cohort from the
+    # deduped trajectory. Multiple retrievals per cohort is the normal
+    # case under the per-retrieval merge — not flagged as a "conflict".
+    cohort_latest_list: list[_CohortLatest] = []
+    for od, deduped_rows in by_obs_deduped.items():
+        sorted_rows = sorted(
+            deduped_rows,
+            key=lambda r: str(r.retrieved_at),
+            reverse=True,
+        )
+        latest = sorted_rows[0]
+        cohort_latest_list.append(_CohortLatest(
+            observed_date=latest.observed_date,
+            retrieved_at=latest.retrieved_at,
+            n_raw=int(latest.n),
+            k_raw=int(latest.k),
+            n_weighted=float(latest.n_weighted),
+            k_weighted=float(latest.k_weighted),
+        ))
+
+    cohort_n_total = float(sum(c.n_weighted for c in cohort_latest_list))
+    cohort_k_total = float(sum(c.k_weighted for c in cohort_latest_list))
+    m_S_doc52 = float(sum(c.n_raw for c in cohort_latest_list))
+
+    # ── Pass 2: τ-bucket construction (latent only) ──
+    #
+    # Iterates ``by_obs_deduped`` so the trajectory passed to bucket
+    # construction is already conflict-free at full-timestamp
+    # granularity. Emits one entry per dedup'd retrieval — including
+    # zero-count plateau cells — so the multinomial loop can advance
+    # the CDF lower bound through plateaus per §3:
+    #
+    #   log_lik_d = Σᵢ (kᵢ − kᵢ₋₁) · log(p · (F(τᵢ) − F(τᵢ₋₁)))
+    #             + (n_d − kₘ) · log(1 − p · F(τₘ))
+    #
+    # where i ranges over **all** retrievals (k₀ ≡ 0, F(τ₀) ≡ 0). The
+    # residual cell uses ``last_observed_tau_idx`` — the trajectory's
+    # actual final τ — so plateau-tail cohorts evaluate survival at the
+    # correct upper bound rather than at an earlier last-positive cell.
+    cohort_buckets_list: list[_CohortBucket] = []
+    if timing_family == TimingFamily.LATENT and timing_max_tau >= 1:
+        T = int(timing_max_tau) + 1
+        for od, deduped_rows in by_obs_deduped.items():
+            tau_rows: list[tuple[int, object]] = []
+            for row in deduped_rows:
+                tau = _row_age_days(row)
+                if tau is None or tau <= 0:
+                    continue
+                tau_rows.append((min(int(tau), T - 1), row))
+            if not tau_rows:
+                continue
+            tau_rows.sort(key=lambda x: (x[0], str(x[1].retrieved_at)))
+            # Collapse rows that share an integer τ but have distinct
+            # sub-day full timestamps. ``by_obs_deduped`` already
+            # enforced full-timestamp uniqueness, so this only fires
+            # when distinct timestamps round to the same τ_int.
+            deduped: list[tuple[int, object]] = []
+            i = 0
+            while i < len(tau_rows):
+                j = i + 1
+                while j < len(tau_rows) and tau_rows[j][0] == tau_rows[i][0]:
+                    j += 1
+                same_tau = tau_rows[i:j]
+                if len(same_tau) == 1:
+                    deduped.append(same_tau[0])
+                else:
+                    same_tau_latest = max(
+                        same_tau,
+                        key=lambda x: str(x[1].retrieved_at),
+                    )
+                    deduped.append(same_tau_latest)
+                i = j
+            n_d = float(deduped[-1][1].n_weighted)
+            last_observed_tau_idx = int(deduped[-1][0])
+            increments: list[tuple[int, float]] = []
+            prev_k = 0.0
+            for tau_idx, row in deduped:
+                k = float(row.k_weighted)
+                if k < prev_k:
+                    provenance.append(
+                        f'monotone_k_clamp_fired['
+                        f'od={od},tau={tau_idx},'
+                        f'k_observed={k:.6f},k_clamped_to={prev_k:.6f}]'
+                    )
+                    k = prev_k
+                inc = k - prev_k
+                # Append every retrieval (positive AND zero increments).
+                # Zero cells contribute 0·log(p·ΔF) = 0 to the
+                # likelihood but must remain in the trajectory so the
+                # next positive cell uses the correct ΔF lower bound.
+                increments.append((tau_idx, inc))
+                prev_k = k
+            if not increments:
+                continue
+            last_k = min(prev_k, n_d)
+            cohort_buckets_list.append(_CohortBucket(
+                observed_date=od,
+                n_weighted=n_d,
+                increments=tuple(increments),
+                last_observed_tau_idx=last_observed_tau_idx,
+                last_k_weighted=last_k,
+            ))
+
+    # ── Reason precedence: no_evidence wins regardless of family ──
+    evaluable = False
+    unevaluable_reason: Optional[str] = None
+    if cohort_n_total <= 0.0:
+        unevaluable_reason = 'no_evidence'
+    elif timing_family == TimingFamily.LATENT and timing_max_tau < 1:
+        unevaluable_reason = 'no_timing_grid'
+    elif timing_family == TimingFamily.LATENT and not cohort_buckets_list:
+        unevaluable_reason = 'no_latent_rows'
+    else:
+        evaluable = True
+
+    return _CohortLikelihoodPlan(
+        cohort_latest=tuple(cohort_latest_list),
+        cohort_buckets=tuple(cohort_buckets_list),
+        cohort_n_weighted_total=cohort_n_total,
+        cohort_k_weighted_total=cohort_k_total,
+        m_S_doc52=m_S_doc52,
+        row_level_n_weighted_total=row_level_n_total,
+        row_level_k_weighted_total=row_level_k_total,
+        timing_family=timing_family,
+        timing_max_tau=int(timing_max_tau),
+        evaluable=evaluable,
+        unevaluable_reason=unevaluable_reason,
+        provenance=tuple(provenance),
+    )
+
+
+def _evaluate_likelihood_plan(
+    plan: _CohortLikelihoodPlan,
+    *,
+    resolved_latency: ResolvedLatency,
     prior_alpha: float,
     prior_beta: float,
     prior_alpha_pred: Optional[float],
     prior_beta_pred: Optional[float],
-    n_w_total: float,
-    k_w_total: float,
     draw_count: int,
     draw_family_key: DrawFamilyKey,
-) -> Tuple[np.ndarray, Optional[np.ndarray], np.ndarray, Optional[np.ndarray], dict]:
-    """Per-cohort maturity-aware likelihood pass with joint conditioning.
+) -> _ConditioningOutcome:
+    """Evaluate the plan and emit one ``_ConditioningOutcome``.
 
-    For latent timing the proposal samples joint particles
-    ``(p_s, μ_s, σ_s, onset_s)`` — ``p_s`` from the κ-inflated
-    predictive Beta(α_pred, β_pred), and the timing parameters jointly
-    from a multivariate normal at the resolved latency moments with
-    onset/μ correlation per ``onset_mu_corr``. From those particles a
-    per-draw shifted-lognormal CDF array ``cdf_arr[s, t]`` is built on
-    the timing grid. The per-row likelihood evaluates
-    ``Bin(k_w | n_w, p_s · cdf_arr[s, τ_row])`` so timing dispersion
-    informs the posterior alongside the rate. Tempered IS finds the
-    highest λ ∈ [0, 1] with ESS ≥ target, then a single index vector
-    is drawn from the importance weights and applied to **both** the
-    probability draws and the per-particle CDF rows. Plan §583, §591
-    require draw-family coherence: the same row index must select a
-    matching ``(p, cdf_curve)`` particle.
+    Cases on plan data, not on incidental row presence:
 
-    For non-latent timing CDF ≡ 1.0, so the maturity-aware kernel
-    degenerates to Bin(k|n, p) and the closed-form Beta-Binomial
-    conjugate update on summed totals is exact at finite S. That fast
-    path absorbs all dispersion into ``p`` and emits no per-draw CDF.
+    - ``not plan.evaluable`` → prior_only(reason=plan.unevaluable_reason).
+      Covers ``no_evidence``, ``no_timing_grid``, ``no_latent_rows``.
+    - non-latent timing → cohort-level Beta-Binomial conjugate update on
+      ``plan.cohort_*_weighted_total``. The F ≡ 1 degeneration of the
+      multinomial.
+    - latent timing → multinomial IS over ``plan.cohort_buckets``.
+      If IS cannot find an ESS-feasible λ → prior_only(reason='is_failed').
 
-    Returns ``(cond_p_draws, cond_cdf_draws_or_None, prior_p_draws,
-    prior_cdf_draws_or_None, provenance)``. The prior arrays are the
-    unconditioned proposal samples used by the doc-52 blend.
+    The non-latent path is the only remaining caller of
+    ``_conjugate_p_only`` after this refactor (AP53: dead-caller residue
+    on the latent side has been removed).
     """
+    if not plan.evaluable:
+        return _ConditioningOutcome(
+            status='prior_only',
+            reason=plan.unevaluable_reason,
+            provenance={'mode': f'prior_only_{plan.unevaluable_reason}'},
+        )
+
     p_rng = make_rng(draw_family_key, 'primitive_p_draws')
     prior_alpha_safe = max(prior_alpha, 1e-12)
     prior_beta_safe = max(prior_beta, 1e-12)
-    # κ-inflated predictive proposal for IS. Falls back to epistemic
-    # Beta if predictive moments are absent (analytic source without a
-    # predictive surface, or zero/negative input).
     proposal_alpha = (
         float(prior_alpha_pred)
         if prior_alpha_pred and prior_alpha_pred > 0
@@ -790,50 +1128,37 @@ def _maturity_aware_conditioned_draws(
     proposal_alpha = max(proposal_alpha, 1e-12)
     proposal_beta = max(proposal_beta, 1e-12)
 
-    def _conjugate_p_only(mode: str) -> Tuple[
-        np.ndarray, None, np.ndarray, None, dict,
-    ]:
-        cond_alpha = max(prior_alpha + k_w_total, 1e-12)
-        cond_beta = max(prior_beta + (n_w_total - k_w_total), 1e-12)
+    cohort_aggregate = (
+        plan.cohort_n_weighted_total,
+        plan.cohort_k_weighted_total,
+    )
+
+    if plan.timing_family == TimingFamily.NON_LATENT:
+        # F ≡ 1 degeneration: cohort-level Beta-Binomial conjugate on
+        # cohort-distinct totals (Σ n_weighted_d, Σ kₘ_weighted).
+        n_w = plan.cohort_n_weighted_total
+        k_w = plan.cohort_k_weighted_total
+        cond_alpha = max(prior_alpha + k_w, 1e-12)
+        cond_beta = max(prior_beta + (n_w - k_w), 1e-12)
         cond_p = p_rng.beta(cond_alpha, cond_beta, size=draw_count)
         prior_p = p_rng.beta(prior_alpha_safe, prior_beta_safe, size=draw_count)
-        return (cond_p, None, prior_p, None, {
-            'mode': mode,
-            'rows_used': 0,
-            'tempering_lambda': 1.0,
-            'ess': float(draw_count),
-        })
+        return _ConditioningOutcome(
+            status='conditioned',
+            cond_p_draws=cond_p,
+            cond_cdf_draws=None,
+            prior_p_draws=prior_p,
+            prior_cdf_draws=None,
+            cohort_aggregate=cohort_aggregate,
+            provenance={
+                'mode': 'conjugate_non_latent',
+                'cohorts_used': len(plan.cohort_latest),
+                'tempering_lambda': 1.0,
+                'ess': float(draw_count),
+            },
+        )
 
-    if timing_family == TimingFamily.NON_LATENT:
-        # All dispersion in p; no per-particle CDF particle family.
-        return _conjugate_p_only('conjugate_non_latent')
-
-    T = int(timing_max_tau) + 1
-    if T <= 1:
-        return _conjugate_p_only('conjugate_no_timing_grid')
-
-    row_evidence: List[Tuple[int, float, float]] = []
-    for row in weighted_view.rows:
-        tau = _row_age_days(row)
-        if tau is None or tau <= 0:
-            # τ=0 latent cohorts have c=0 and cannot inform p
-            # (log(0) divergence). Skip.
-            continue
-        n_row = float(row.n_weighted)
-        k_row = float(row.k_weighted)
-        if n_row <= 0.0 or k_row < 0.0:
-            continue
-        row_evidence.append((min(int(tau), T - 1), n_row, k_row))
-
-    if not row_evidence:
-        return _conjugate_p_only('conjugate_no_usable_rows')
-
-    # Joint proposal: p ~ Beta(α_pred, β_pred), (μ, σ, onset) ~
-    # multivariate normal at the resolved moments with onset/μ
-    # correlation. When all latency dispersions are zero the timing
-    # particles collapse to a deterministic curve; we still build the
-    # per-draw CDF array (every row identical) so the IS pass and the
-    # downstream composer share one code path.
+    # ── Latent path: multinomial IS over τ-cells per cohort ──
+    T = int(plan.timing_max_tau) + 1
     proposal_p_draws = p_rng.beta(proposal_alpha, proposal_beta, size=draw_count)
     prior_p_draws = p_rng.beta(prior_alpha_safe, prior_beta_safe, size=draw_count)
 
@@ -855,8 +1180,6 @@ def _maturity_aware_conditioned_draws(
             max(onset_sd, 1e-10),
         ], dtype=np.float64)
         cov = np.diag(sds ** 2)
-        # onset/μ correlation off-diagonal (mirrors
-        # forecast_state.compute_forecast_trajectory's covariance build).
         cov[2, 0] = cov[0, 2] = onset_mu_corr * sds[2] * sds[0]
         timing_particles = timing_rng.multivariate_normal(
             means, cov, size=draw_count,
@@ -876,12 +1199,44 @@ def _maturity_aware_conditioned_draws(
         T=T,
     )
 
-    # Per-row joint likelihood: Bin(k_w | n_w, p_s · cdf_arr[s, τ_row]).
+    # Per-cohort multinomial likelihood over τ-cells (proposal §3):
+    # For one cohort with size n_d and retrievals (τ₁ < … < τₘ) with
+    # cumulative counts (k₁, …, kₘ),
+    #   log_lik_d = Σᵢ (kᵢ − kᵢ₋₁) · log(p · (F(τᵢ) − F(τᵢ₋₁)))
+    #             + (n_d − kₘ) · log(1 − p · F(τₘ))
+    # with k₀ ≡ 0, F(τ₀) ≡ 0. Sum is over **all** retrievals; residual
+    # at τₘ (the trajectory's actual final retrieval).
+    #
+    # ``bucket.increments`` carries one entry per retrieval after Pass-2
+    # dedup (zero-count plateau cells included). The loop walks through
+    # every retrieval so ``prev_F`` advances correctly through plateaus
+    # — that is the §3-required ΔF lower bound. Zero-increment cells
+    # are skipped via the ``inc_k > 0`` guard since their contribution
+    # is 0·log(p·ΔF) = 0; ``prev_F`` still advances to ``cur_F`` so the
+    # next positive cell uses the correct neighbour-cell boundary.
+    #
+    # The residual cell uses ``bucket.last_observed_tau_idx`` —
+    # equivalently ``bucket.increments[-1][0]`` once zero cells are
+    # preserved. Named explicitly here to make the §3 mapping obvious.
     log_lik = np.zeros(draw_count, dtype=np.float64)
-    for tau_idx, n_row, k_row in row_evidence:
-        c_per_draw = proposal_cdf_draws[:, tau_idx]
-        p_eff = np.clip(proposal_p_draws * c_per_draw, 1e-15, 1.0 - 1e-15)
-        log_lik += k_row * np.log(p_eff) + (n_row - k_row) * np.log1p(-p_eff)
+    for bucket in plan.cohort_buckets:
+        prev_F = np.zeros(draw_count, dtype=np.float64)
+        for tau_idx, inc_k in bucket.increments:
+            cur_F = proposal_cdf_draws[:, tau_idx]
+            if inc_k > 0.0:
+                cell_prob = np.clip(
+                    proposal_p_draws * (cur_F - prev_F),
+                    1e-15, 1.0 - 1e-15,
+                )
+                log_lik += inc_k * np.log(cell_prob)
+            prev_F = cur_F
+        p_arrived_total = np.clip(
+            proposal_p_draws * proposal_cdf_draws[:, bucket.last_observed_tau_idx],
+            1e-15, 1.0 - 1e-15,
+        )
+        residual = bucket.n_weighted - bucket.last_k_weighted
+        if residual > 0.0:
+            log_lik += residual * np.log1p(-p_arrived_total)
 
     is_target_ess = 20.0
     best_w: Optional[np.ndarray] = None
@@ -907,33 +1262,31 @@ def _maturity_aware_conditioned_draws(
         )
         cond_p_draws = proposal_p_draws[indices]
         cond_cdf_draws = proposal_cdf_draws[indices, :]
-        return (
-            cond_p_draws,
-            cond_cdf_draws,
-            prior_p_draws,
-            proposal_cdf_draws,
-            {
+        return _ConditioningOutcome(
+            status='conditioned',
+            cond_p_draws=cond_p_draws,
+            cond_cdf_draws=cond_cdf_draws,
+            prior_p_draws=prior_p_draws,
+            prior_cdf_draws=proposal_cdf_draws,
+            cohort_aggregate=cohort_aggregate,
+            provenance={
                 'mode': 'maturity_aware_is_joint',
-                'rows_used': len(row_evidence),
+                'cohorts_used': len(plan.cohort_buckets),
                 'tempering_lambda': float(best_lam),
                 'ess': float(best_ess),
             },
         )
 
-    # IS failed to reach target ESS at any λ — fall back to the
-    # conjugate result on totals. p still gets a posterior; timing
-    # collapses back to the unconditioned proposal CDF.
-    cond_alpha = max(prior_alpha + k_w_total, 1e-12)
-    cond_beta = max(prior_beta + (n_w_total - k_w_total), 1e-12)
-    cond_p_draws = p_rng.beta(cond_alpha, cond_beta, size=draw_count)
-    return (
-        cond_p_draws,
-        proposal_cdf_draws,
-        prior_p_draws,
-        proposal_cdf_draws,
-        {
-            'mode': 'conjugate_is_failed',
-            'rows_used': len(row_evidence),
+    # IS could not find an ESS-feasible λ. The only safe answer is
+    # prior-only — kₘ alone does not marginalise the latent likelihood
+    # to a Bin(kₘ | n_d, p) form unless τₘ is mature, and we cannot
+    # determine maturity here without re-introducing F=1 substitution.
+    return _ConditioningOutcome(
+        status='prior_only',
+        reason='is_failed',
+        provenance={
+            'mode': 'prior_only_is_failed',
+            'cohorts_used': len(plan.cohort_buckets),
             'tempering_lambda': 0.0,
             'ess': 0.0,
         },
@@ -979,6 +1332,8 @@ def _make_prior_only_primitive(
     raw_evidence_scope_key: Optional[str],
     weighted_view: WeightedPrimitiveEvidenceView,
     draw_family_key: DrawFamilyKey,
+    prior_only_reason: Optional[str] = None,
+    plan_provenance: Tuple[str, ...] = (),
 ) -> ConditionedTransitionPrimitive:
     """Build a PRIOR_ONLY primitive (n_weighted_total == 0).
 
@@ -1036,8 +1391,27 @@ def _make_prior_only_primitive(
         draw_family_mode=DrawFamilyMode.KEYED_PRIOR,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
-        skipped_evidence_summary={},
-        notes=('status=prior_only',),
+        skipped_evidence_summary=(
+            {
+                **(
+                    {'prior_only_reason': prior_only_reason}
+                    if prior_only_reason else {}
+                ),
+                **(
+                    {'plan_provenance': list(plan_provenance)}
+                    if plan_provenance else {}
+                ),
+            }
+        ),
+        notes=(
+            'status=prior_only',
+            *(
+                (f'prior_only_reason={prior_only_reason}',)
+                if prior_only_reason
+                else ()
+            ),
+            *(f'plan_provenance: {entry}' for entry in plan_provenance),
+        ),
     )
 
 

@@ -532,6 +532,64 @@ describe('buildCohortMaturityEChartsOption', () => {
     expect(ids).not.toContain('current::fan');
   });
 
+  it('should render raw evidence_y and forecast_y counts in count mode', () => {
+    const result = {
+      ...COHORT_MATURITY_RESULT,
+      data: [
+        {
+          scenario_id: 'current',
+          subject_id: 'edge1',
+          tau_days: 0,
+          rate: 0.10,
+          midpoint: 0.12,
+          evidence_y: 10,
+          evidence_x: 100,
+          forecast_y: 12,
+          tau_solid_max: 0,
+          tau_future_max: 3,
+          boundary_date: '2025-10-01',
+        },
+        {
+          scenario_id: 'current',
+          subject_id: 'edge1',
+          tau_days: 1,
+          rate: 0.08,
+          midpoint: 0.11,
+          evidence_y: 8,
+          evidence_x: 100,
+          forecast_y: null,
+          tau_solid_max: 0,
+          tau_future_max: 3,
+          boundary_date: '2025-10-01',
+        },
+        {
+          scenario_id: 'current',
+          subject_id: 'edge1',
+          tau_days: 2,
+          rate: 0.15,
+          midpoint: 0.20,
+          evidence_y: 15,
+          evidence_x: 100,
+          forecast_y: 21,
+          tau_solid_max: 0,
+          tau_future_max: 3,
+          boundary_date: '2025-10-01',
+        },
+      ],
+    };
+
+    const option = buildCohortMaturityEChartsOption(
+      result,
+      { chart_mode: 'count', tau_extent: 3, show_forecast_shading: false },
+      { visibleScenarioIds: ['current'] },
+    );
+
+    const evidence = option.series.find((s: any) => s.id === 'current::evidence_count');
+    const forecast = option.series.find((s: any) => s.id === 'current::forecast_count');
+    expect(evidence?.data).toEqual([10, 8, 15]);
+    expect(forecast?.data).toEqual([12, null, 21]);
+  });
+
   it('should embed dagnet_meta with subject_id and date ranges', () => {
     const option = buildCohortMaturityEChartsOption(COHORT_MATURITY_RESULT, {}, { visibleScenarioIds: ['current'] });
     expect(option.dagnet_meta.subject_id).toBe('edge1');

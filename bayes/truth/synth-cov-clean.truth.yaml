@@ -1,0 +1,70 @@
+# Ground truth for synth-cov-clean — clean fixture for cohort coverage testing
+#
+# Identical structure to synth-lat4 (4-node linear chain with latency on every
+# edge), but with the simulation noise levers turned OFF so every fetch night
+# emits rows for every anchor across the entire observable window:
+#
+#   failure_rate:           0.0   (no simulated fetch drops)
+#   snapshot_start_offset:  0     (snapshots emitted from day 1, not last-N)
+#
+# This is the clean baseline for the cohort-maturity coverage transparency
+# invariant test (cohort-maturity-evidence-coverage-design.md §2.4):
+#
+#   epoch A coverage = 1 (every cohort fresh at every τ ≥ min(carrier_onset))
+#   epoch B coverage decays linearly as cohorts age past last fresh snapshot
+#   epoch C coverage = 0
+#
+# Same edge latency parameters as synth-lat4 — keeps multi-hop carrier+subject
+# composition realistic (positive onset means τ=0 is structurally Absent for
+# every cohort: that's a genuine property of latency, not a coverage bug).
+
+graph:
+  name: synth-cov-clean
+  description: 4-node linear chain with latency edges, clean snapshot data (no fetch failures, full coverage from day 1) for cohort-maturity coverage invariant tests
+
+simulation:
+  mean_daily_traffic: 2000
+  n_days: 150
+  kappa_sim_default: 50.0
+  failure_rate: 0.0
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 42
+  snapshot_start_offset: 0
+  traffic_cv: 1.0
+  expected_sample_seconds: 900
+
+nodes:
+  a:
+    start: true
+    label: A
+  b:
+    label: B
+  c:
+    label: C
+  d:
+    absorbing: true
+    label: D
+
+edges:
+  a-to-b:
+    from: a
+    to: b
+    p: 0.60
+    onset: 2.0
+    mu: 2.0
+    sigma: 0.50
+  b-to-c:
+    from: b
+    to: c
+    p: 0.50
+    onset: 1.5
+    mu: 2.2
+    sigma: 0.45
+  c-to-d:
+    from: c
+    to: d
+    p: 0.65
+    onset: 2.5
+    mu: 1.8
+    sigma: 0.50

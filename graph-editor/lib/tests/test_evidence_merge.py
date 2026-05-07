@@ -283,21 +283,43 @@ def test_direct_cohort_role_admits_only_matching_anchor():
 # ─── Test 4: equivalent snapshot duplicates count once ─────────────────
 
 
-def test_equivalent_snapshot_duplicates_count_once():
+def test_per_retrieval_rows_survive_merge():
+    """Two retrievals of the same cohort are nested cumulative observations,
+    not duplicates. Both rows must survive merge so the downstream
+    conditioner can apply the multinomial nested-cumulative likelihood.
+    """
     scope = _window_scope()
     candidates = [
-        # Two snapshot rows for the same identity + observed date,
-        # different retrieved_at; later one wins, earlier is superseded.
         _window_snapshot("2026-01-03", n=10, k=5, retrieved_at="2026-01-10"),
-        _window_snapshot("2026-01-03", n=10, k=5, retrieved_at="2026-01-20"),
+        _window_snapshot("2026-01-03", n=10, k=8, retrieved_at="2026-01-20"),
     ]
     merged = merge_evidence_candidates(scope, candidates)
 
+    assert len(merged.points) == 2
+    retrievals = sorted(p.candidate.coordinate.retrieved_at for p in merged.points)
+    assert retrievals == ["2026-01-10", "2026-01-20"]
+    reasons = _skip_reasons(merged)
+    assert "superseded_by_later_retrieval" not in reasons
+
+
+def test_exact_duplicate_at_same_triple_collapses():
+    """Two snapshot candidates at the exact same
+    (identity, observed_date, retrieved_at, asat_materialised) must
+    collapse to one — that is the only true duplicate case after the
+    per-retrieval rekey.
+    """
+    scope = _window_scope()
+    candidates = [
+        _window_snapshot("2026-01-03", n=10, k=5, retrieved_at="2026-01-10"),
+        _window_snapshot("2026-01-03", n=10, k=5, retrieved_at="2026-01-10"),
+    ]
+    merged = merge_evidence_candidates(scope, candidates)
+
+    assert len(merged.points) == 1
     assert merged.totals.n == 10
     assert merged.totals.k == 5
-    assert len(merged.points) == 1
     reasons = _skip_reasons(merged)
-    assert reasons.get("superseded_by_later_retrieval") == 1
+    assert reasons.get("exact_duplicate") == 1
 
 
 # ─── Test 5: direct cohort rejects mismatched population_identity ──────

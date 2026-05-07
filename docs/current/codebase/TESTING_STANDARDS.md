@@ -43,6 +43,19 @@ When a new implementation replaces an existing working one (e.g. batched version
 
 The parity test is the **only** gate for switching to the new path. If it fails, the new path is not ready. If it passes with mocks, it has not been tested.
 
+## Protected oracle suites (soft norm — explicit user approval required)
+
+Some test files act as **acceptance oracles** for delicate subsystems: their assertions encode load-bearing semantic and logical invariants designed alongside the subsystem itself. These files are not protected by a hook, but cavalier edits are how invariants quietly weaken.
+
+**Soft norm**: before editing a protected oracle suite — adding, removing, or modifying a test or assertion; weakening a tolerance; marking `xfail`; or relaxing a fixture expectation — an agent MUST seek explicit user approval. The request must state (a) the proposed change, (b) the reason, and (c) which semantic or engineering invariant is involved. Mechanical refactors that preserve every assertion exactly (renames, formatting, import order, helper extraction with identical behaviour) do not require approval; anything that could plausibly change a pass/fail outcome does.
+
+**Default hypothesis when the oracle disagrees with a proposed fix**: the fix is wrong. If the oracle really is wrong, that is itself a significant finding and warrants explicit, documented sign-off before the change lands.
+
+**Current protected oracle suites**:
+- [`graph-editor/lib/tests/test_cohort_factorised_outside_in.py`](../../graph-editor/lib/tests/test_cohort_factorised_outside_in.py) — canonical acceptance oracle for the `cohort_forecast_v3` runtime. See [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) "The outside-in suite is the oracle" for the full rationale and the engineering invariants the suite enforces.
+
+When designating a new protected oracle suite, add a "Modification policy" docstring to the file (mirroring the cohort outside-in suite's pattern) and list it here.
+
 ## Test Design Gate (MANDATORY before writing test code)
 
 Before writing any `describe()` or `it()` blocks, the agent must produce a brief **prose test design** covering:

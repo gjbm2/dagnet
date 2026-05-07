@@ -214,6 +214,7 @@ class WeightedEvidenceRow:
     arrival_weight: float
     n_weighted: float
     k_weighted: float
+    root_day_shares: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

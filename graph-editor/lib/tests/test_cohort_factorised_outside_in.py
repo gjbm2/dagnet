@@ -9,6 +9,30 @@ behaviour. These tests intentionally stay at the user-visible boundary:
 - `conditioned_forecast` edge scalars only where evidence-admission provenance
   is observable through public diagnostics / `evidence_k` / `evidence_n`
 
+================================================================
+MODIFICATION POLICY (soft norm — not a hard block)
+================================================================
+This suite is the canonical acceptance oracle for the cohort-forecast
+runtime. The semantic and logical invariants encoded here are
+carefully designed and tied to the engineering invariants in
+`docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`
+("The outside-in suite is the oracle" section). Cavalier changes are
+how invariants quietly weaken; an inside test that disagrees with this
+suite is, by construction, the artefact to revisit — not this file.
+
+Before editing this file (adding, removing, or modifying a test or
+assertion, weakening a tolerance, marking xfail, or relaxing a
+fixture expectation), an agent MUST seek explicit user approval.
+State (a) the change, (b) the reason, and (c) which semantic or
+engineering invariant is involved.
+
+Mechanical refactors that preserve every assertion exactly — renames,
+formatting, import order, helper extraction with identical behaviour
+— do not require approval. Anything that could plausibly change a
+pass/fail outcome on any of the synth fixtures or pinned regimes
+does.
+================================================================
+
 Fixture/provenance spike status (26-Apr-26):
 - usable: `synth-simple-abc`, `synth-lat4`, `synth-fanout-test`,
   `cf-fix-deep-mixed`, `cf-fix-linear-no-lag`
@@ -41,7 +65,13 @@ from typing import Any, Optional
 import pytest
 import yaml
 
-from conftest import requires_data_repo, requires_db, requires_synth
+from conftest import (
+    load_candidate_regimes_by_mode,
+    load_graph_json,
+    requires_data_repo,
+    requires_db,
+    requires_synth,
+)
 from _daemon_client import DaemonError, get_default_client
 
 
@@ -415,7 +445,10 @@ def _load_truth_edge_params(
     edge_name: str,
 ) -> dict[str, float]:
     truth = _load_truth(graph_name)
-    edge = (truth.get("edges") or {}).get(edge_name)
+    edges = truth.get("edges") or {}
+    edge = edges.get(edge_name)
+    if edge is None and edge_name.startswith(f"{graph_name}-"):
+        edge = edges.get(edge_name[len(graph_name) + 1:])
     assert edge is not None, f"missing truth edge {edge_name!r} in {graph_name}"
     return {
         "p": float(edge["p"]),
@@ -423,6 +456,161 @@ def _load_truth_edge_params(
         "mu": float(edge["mu"]),
         "sigma": float(edge["sigma"]),
     }
+
+
+def _graph_edge_for_param(
+    *,
+    graph_name: str,
+    edge_name: str,
+) -> dict[str, Any]:
+    graph = load_graph_json(graph_name)
+    for edge in graph.get("edges", []):
+        if (edge.get("p") or {}).get("id") == edge_name:
+            return edge
+    raise AssertionError(f"missing edge with p.id={edge_name!r} in {graph_name}")
+
+
+def _selected_a_clock_snapshot_oracle(
+    *,
+    graph_name: str,
+    edge_name: str,
+    anchor_node_id: str,
+    anchor_from: str,
+    anchor_to: str,
+    sweep_to: str,
+    numerator_edge_name: str | None = None,
+) -> dict[int, dict[str, float]]:
+    """Independent raw-DB oracle for selected A-clock cohort evidence.
+
+    Reads cohort-family snapshot rows and aggregates by A-clock age
+    τ = retrieved_at_date - anchor_day. For multi-hop subjects,
+    `edge_name` supplies the denominator at query X (its x field) and
+    `numerator_edge_name` supplies the numerator at the subject end
+    (its y field). This deliberately bypasses cohort_maturity row
+    construction and chart normalisation.
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+    from snapshot_service import query_snapshots_for_sweep
+
+    def _cohort_rows_for(edge_name_: str) -> list[dict[str, Any]]:
+        edge = _graph_edge_for_param(graph_name=graph_name, edge_name=edge_name_)
+        edge_uuid = str(edge.get("uuid") or "")
+        assert edge_uuid, f"{graph_name}/{edge_name_}: edge has no uuid"
+        regimes = load_candidate_regimes_by_mode(graph_name).get(edge_uuid, [])
+        cohort_regime = next(
+            (
+                r for r in regimes
+                if r.get("temporal_mode") == "cohort"
+                and str(r.get("cohort_anchor") or "") == anchor_node_id
+            ),
+            None,
+        )
+        assert cohort_regime is not None, (
+            f"{graph_name}/{edge_name_}: no cohort candidate regime for "
+            f"anchor {anchor_node_id!r} in {regimes!r}"
+        )
+        return query_snapshots_for_sweep(
+            param_id=(edge.get("p") or {}).get("id") or edge_name_,
+            core_hash=str(cohort_regime["core_hash"]),
+            anchor_from=af,
+            anchor_to=at,
+            sweep_from=af,
+            sweep_to=st,
+            equivalent_hashes=[
+                {"core_hash": h}
+                for h in (cohort_regime.get("equivalent_hashes") or [])
+            ],
+        )
+
+    af = _date.fromisoformat(anchor_from)
+    at = _date.fromisoformat(anchor_to)
+    st = _date.fromisoformat(sweep_to)
+
+    def _series(rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+        by_series: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in rows:
+            slice_key = str(row.get("slice_key") or "")
+            if "cohort(" not in slice_key:
+                continue
+            anchor_day = str(row.get("anchor_day") or "")[:10]
+            retrieved_at = str(row.get("retrieved_at") or "")[:10]
+            if not anchor_day or not retrieved_at:
+                continue
+            by_series.setdefault((anchor_day, slice_key), []).append(row)
+        for series_rows in by_series.values():
+            series_rows.sort(key=lambda r: str(r.get("retrieved_at") or "")[:10])
+        return by_series
+
+    denominator_series = _series(_cohort_rows_for(edge_name))
+    numerator_series = _series(_cohort_rows_for(numerator_edge_name or edge_name))
+
+    def _latest_at(
+        series: dict[tuple[str, str], list[dict[str, Any]]],
+        *,
+        anchor_day: str,
+        ret_date_iso: str,
+        field: str,
+    ) -> float:
+        total = 0.0
+        for (ad, _slice_key), series_rows in series.items():
+            if ad != anchor_day:
+                continue
+            latest = None
+            for row in series_rows:
+                retrieved_at = str(row.get("retrieved_at") or "")[:10]
+                if retrieved_at <= ret_date_iso:
+                    latest = row
+                else:
+                    break
+            if latest is not None:
+                total += float(latest.get(field) or 0.0)
+        return total
+
+    anchor_days = sorted({
+        ad for ad, _slice_key in denominator_series
+    } | {
+        ad for ad, _slice_key in numerator_series
+    })
+
+    by_tau: dict[int, dict[str, float]] = {}
+    ret_date = af
+    while ret_date <= st:
+        ret_iso = ret_date.isoformat()
+        for anchor_day in anchor_days:
+            tau = (ret_date - _date.fromisoformat(anchor_day)).days
+            if tau < 0:
+                continue
+            x_val = _latest_at(
+                denominator_series,
+                anchor_day=anchor_day,
+                ret_date_iso=ret_iso,
+                field="x",
+            )
+            y_val = _latest_at(
+                numerator_series,
+                anchor_day=anchor_day,
+                ret_date_iso=ret_iso,
+                field="y",
+            )
+            if x_val <= 0 and y_val <= 0:
+                continue
+            bucket = by_tau.setdefault(
+                int(tau),
+                {"sum_x": 0.0, "sum_y": 0.0, "n_rows": 0.0},
+            )
+            bucket["sum_x"] += x_val
+            bucket["sum_y"] += y_val
+            bucket["n_rows"] += 1.0
+        ret_date += _timedelta(days=1)
+
+    for bucket in by_tau.values():
+        bucket["rate"] = (
+            bucket["sum_y"] / bucket["sum_x"]
+            if bucket["sum_x"] > 0
+            else math.nan
+        )
+    return by_tau
 
 
 def _shifted_lognormal_cdf(
@@ -553,6 +741,63 @@ def _single_hop_oracle_curve(
         carrier_pdf=_pdf_from_cdf(upstream_cdf),
         subject_cdf=target_cdf,
         subject_probability=target["p"],
+        tau_max=tau_max,
+        frontier_ages=frontier_ages,
+    )
+
+
+def _span_cdf_and_probability(
+    *,
+    graph_name: str,
+    edge_names: tuple[str, ...],
+    tau_max: int,
+) -> tuple[list[float], float]:
+    assert edge_names, "span oracle needs at least one edge"
+    span_pdf = [1.0] + [0.0] * tau_max
+    span_p = 1.0
+    for edge_name in edge_names:
+        params = _load_truth_edge_params(graph_name=graph_name, edge_name=edge_name)
+        edge_cdf = [
+            _shifted_lognormal_cdf(
+                tau,
+                onset=params["onset"],
+                mu=params["mu"],
+                sigma=params["sigma"],
+            )
+            for tau in range(tau_max + 1)
+        ]
+        span_pdf = _convolve_pdfs(
+            span_pdf,
+            _pdf_from_cdf(edge_cdf),
+            tau_max=tau_max,
+        )
+        span_p *= params["p"]
+    return _cdf_from_pdf(span_pdf), span_p
+
+
+def _active_cohort_span_oracle_curve(
+    *,
+    graph_name: str,
+    carrier_edge_names: tuple[str, ...],
+    subject_edge_names: tuple[str, ...],
+    tau_max: int,
+    frontier_ages: tuple[int, ...],
+) -> dict[int, float]:
+    carrier_cdf, _carrier_p = _span_cdf_and_probability(
+        graph_name=graph_name,
+        edge_names=carrier_edge_names,
+        tau_max=tau_max,
+    )
+    subject_cdf, subject_p = _span_cdf_and_probability(
+        graph_name=graph_name,
+        edge_names=subject_edge_names,
+        tau_max=tau_max,
+    )
+    return _factorised_rate_curve(
+        carrier_cdf=carrier_cdf,
+        carrier_pdf=_pdf_from_cdf(carrier_cdf),
+        subject_cdf=subject_cdf,
+        subject_probability=subject_p,
         tau_max=tau_max,
         frontier_ages=frontier_ages,
     )
@@ -717,6 +962,13 @@ _SIMPLE = "synth-simple-abc"
 _SIMPLE_AB = "from(simple-a).to(simple-b)"
 _SIMPLE_BC = "from(simple-b).to(simple-c)"
 _SIMPLE_AB_EDGE = "simple-a-to-b"
+_SIMPLE_BC_EDGE = "simple-b-to-c"
+
+_SIMPLE_FLAT = "synth-simple-flat-abc"
+_SIMPLE_FLAT_AB = f"from({_SIMPLE_FLAT}-a).to({_SIMPLE_FLAT}-b)"
+_SIMPLE_FLAT_BC = f"from({_SIMPLE_FLAT}-b).to({_SIMPLE_FLAT}-c)"
+_SIMPLE_FLAT_AB_EDGE = f"{_SIMPLE_FLAT}-a-to-b"
+_SIMPLE_FLAT_BC_EDGE = f"{_SIMPLE_FLAT}-b-to-c"
 
 _LAT4 = "synth-lat4"
 _LAT4_BC = "from(synth-lat4-b).to(synth-lat4-c)"
@@ -724,6 +976,12 @@ _LAT4_CD = "from(synth-lat4-c).to(synth-lat4-d)"
 _LAT4_BD = "from(synth-lat4-b).to(synth-lat4-d)"
 _LAT4_CD_EDGE = "synth-lat4-c-to-d"
 _LAT4_BD_VIRTUAL_EDGE = "synth-lat4-b-to-d"
+
+_LAT4_FLAT = "synth-lat4-flat"
+_LAT4_FLAT_BC = f"from({_LAT4_FLAT}-b).to({_LAT4_FLAT}-c)"
+_LAT4_FLAT_CD = f"from({_LAT4_FLAT}-c).to({_LAT4_FLAT}-d)"
+_LAT4_FLAT_BD = f"from({_LAT4_FLAT}-b).to({_LAT4_FLAT}-d)"
+_LAT4_FLAT_CD_EDGE = f"{_LAT4_FLAT}-c-to-d"
 
 _FANOUT = "synth-fanout-test"
 _FANOUT_FAST = "from(synth-fo-gate).to(synth-fo-fast)"
@@ -975,6 +1233,340 @@ def test_same_carrier_shared_across_different_subjects():
 @requires_db
 @requires_data_repo
 @requires_python_be
+@requires_synth(_SIMPLE_FLAT, enriched=True)
+def test_active_single_hop_evidence_matches_selected_a_clock_snapshot_oracle():
+    """Observed active-cohort chart rows must equal the selected A-clock rows.
+
+    This is the outside-in guard for the wrong-object evidence bug. The
+    oracle reads raw synth snapshot rows for the target edge's cohort
+    family and independently reconstructs the selected A-clock virtual
+    snapshot series. It does not call cohort_maturity row construction.
+
+    Uses the flat/dense SIMPLE fixture so raw selected-cohort counts and
+    primitive rate attribution should converge tightly. The noisy
+    `synth-simple-abc` fixture has deliberate day-level dispersion and
+    fetch failures, making it unsuitable for exact row equality.
+    """
+    anchor_from = "2026-03-01"
+    anchor_to = "2026-03-14"
+    sweep_to = "2026-04-10"
+    dsl = f"{_SIMPLE_FLAT_BC}.cohort(1-Mar-26:14-Mar-26).asat(10-Apr-26)"
+
+    payload = _run_analyse_v3(_SIMPLE_FLAT, dsl)
+    rows_by_tau = {
+        int(row["tau_days"]): row
+        for row in _rows(payload)
+        if isinstance(row.get("tau_days"), int)
+    }
+    assert rows_by_tau, f"[{_SIMPLE_FLAT_BC}] analyse returned no rows for {dsl!r}"
+
+    oracle = _selected_a_clock_snapshot_oracle(
+        graph_name=_SIMPLE_FLAT,
+        edge_name=_SIMPLE_FLAT_BC_EDGE,
+        anchor_node_id=f"{_SIMPLE_FLAT}-a",
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        sweep_to=sweep_to,
+    )
+    candidate_taus = [
+        tau for tau, bucket in sorted(oracle.items())
+        if bucket["sum_x"] > 0
+        and bucket["sum_y"] > 0
+        and tau in rows_by_tau
+    ]
+    assert len(candidate_taus) >= 5, (
+        f"[{_SIMPLE_FLAT_BC}] insufficient positive-evidence tau overlap for "
+        f"oracle comparison: {candidate_taus}"
+    )
+
+    tau_solid_max = rows_by_tau[min(rows_by_tau)].get("tau_solid_max")
+    assert isinstance(tau_solid_max, int), "tau_solid_max missing from chart rows"
+    seam_oracle = oracle.get(tau_solid_max)
+    assert seam_oracle and seam_oracle["sum_x"] > 0, (
+        f"oracle has no denominator at tau_solid_max={tau_solid_max}: "
+        f"{seam_oracle!r}"
+    )
+    seam_denominator = seam_oracle["sum_x"]
+
+    failures: list[str] = []
+    for tau in candidate_taus:
+        expected = oracle[tau]
+        actual = rows_by_tau[tau]
+        checks: list[tuple[str, float, Any]] = []
+        if tau <= tau_solid_max:
+            checks.extend((
+                ("evidence_y", expected["sum_y"], actual.get("evidence_y")),
+                ("evidence_x", expected["sum_x"], actual.get("evidence_x")),
+                ("rate", expected["rate"], actual.get("rate")),
+            ))
+        for field, exp, got in checks:
+            if not isinstance(got, (int, float)):
+                failures.append(
+                    f"tau={tau} {field}: expected {exp:.6f}, got {got!r}"
+                )
+                continue
+            if field == "rate":
+                tolerance = max(0.0025, abs(float(exp)) * 0.02)
+            elif field == "evidence_x":
+                tolerance = max(25.0, abs(float(exp)) * 0.075)
+            else:
+                tolerance = max(50.0, abs(float(exp)) * 0.0075)
+            if abs(float(got) - float(exp)) > tolerance:
+                failures.append(
+                    f"tau={tau} {field}: expected {exp:.6f}, "
+                    f"got {float(got):.6f}, Δ={abs(float(got) - float(exp)):.6f} "
+                    f"(tol={tolerance:.6f})"
+                )
+        if tau > tau_solid_max:
+            actual_x = actual.get("evidence_x")
+            actual_y = actual.get("evidence_y")
+            actual_rate = actual.get("rate")
+            actual_pure = actual.get("rate_pure")
+            if isinstance(actual_x, (int, float)) and float(actual_x) + 1e-9 < expected["sum_x"]:
+                failures.append(
+                    f"tau={tau} evidence_x: expected at least mature denominator "
+                    f"{expected['sum_x']:.6f}, got {float(actual_x):.6f}"
+                )
+            # Epoch-B branch for evidence_y mirrors the evidence_x branch:
+            # past `tau_solid_max` some anchors fall out of the sweep window
+            # so the oracle's `sum_y` strictly drops, but the chart's
+            # cumulative evidence_y is correctly frozen at the seam value
+            # for the cohorts that left the visible window. Chart >= oracle
+            # is the right contract here, not strict equality.
+            if isinstance(actual_y, (int, float)) and float(actual_y) + 1e-9 < expected["sum_y"]:
+                failures.append(
+                    f"tau={tau} evidence_y: expected at least mature numerator "
+                    f"{expected['sum_y']:.6f}, got {float(actual_y):.6f}"
+                )
+            rate_tolerance = max(0.0025, abs(float(expected["rate"])) * 0.02)
+            if isinstance(actual_rate, (int, float)) and float(actual_rate) > expected["rate"] + rate_tolerance:
+                failures.append(
+                    f"tau={tau} rate: epoch-B display should be reduced by "
+                    f"the full selected denominator; raw mature-subset "
+                    f"rate={expected['rate']:.6f}, got {float(actual_rate):.6f} "
+                    f"(tol={rate_tolerance:.6f})"
+                )
+            expected_pure = expected["sum_y"] / seam_denominator
+            if not isinstance(actual_pure, (int, float)):
+                failures.append(
+                    f"tau={tau} rate_pure: expected {expected_pure:.6f}, "
+                    f"got {actual_pure!r}"
+                )
+            else:
+                # Same epoch-B semantic as evidence_y: past `tau_solid_max`
+                # the oracle's `sum_y` strictly drops as anchors fall out of
+                # sweep, but the chart's frozen-boundary numerator is held at
+                # its seam value, so the frozen-boundary `rate_pure` stays at
+                # (or above) `expected_pure`. Enforce `actual_pure >=
+                # expected_pure` rather than strict equality.
+                pure_tolerance = max(0.0025, abs(expected_pure) * 0.02)
+                if float(actual_pure) + 1e-9 < expected_pure - pure_tolerance:
+                    failures.append(
+                        f"tau={tau} rate_pure: expected at least frozen-boundary "
+                        f"denominator rate {expected_pure:.6f}, "
+                        f"got {float(actual_pure):.6f} "
+                        f"(tol={pure_tolerance:.6f})"
+                    )
+
+    assert not failures, (
+        f"[{_SIMPLE_FLAT_BC}] active evidence rows do not match the raw "
+        f"selected A-clock snapshot oracle:\n" + "\n".join(failures[:12])
+    )
+
+    invariant_failures: list[str] = []
+    for tau in candidate_taus:
+        row = rows_by_tau[tau]
+        rate = row.get("rate")
+        midpoint = row.get("midpoint")
+        if isinstance(rate, (int, float)) and isinstance(midpoint, (int, float)):
+            if tau_solid_max < tau <= row.get("tau_future_max", -1):
+                if float(midpoint) <= float(rate) + 1e-9:
+                    invariant_failures.append(
+                        f"tau={tau}: E+F midpoint {float(midpoint):.6f} "
+                        f"must be above E+F evidence {float(rate):.6f}"
+                    )
+            elif float(rate) > float(midpoint) + 1e-9:
+                invariant_failures.append(
+                    f"tau={tau}: evidence rate {float(rate):.6f} "
+                    f"> midpoint {float(midpoint):.6f}"
+                )
+    assert not invariant_failures, (
+        f"[{_SIMPLE_FLAT_BC}] E+F/evidence relationship violated:\n"
+        + "\n".join(invariant_failures[:8])
+    )
+
+    seam = rows_by_tau.get(tau_solid_max)
+    assert seam is not None, f"missing row at tau_solid_max={tau_solid_max}"
+    seam_rate = seam.get("rate")
+    seam_midpoint = seam.get("midpoint")
+    assert isinstance(seam_rate, (int, float)), (
+        f"seam row has no evidence rate: {seam!r}"
+    )
+    assert isinstance(seam_midpoint, (int, float)), (
+        f"seam row has no midpoint: {seam!r}"
+    )
+    assert abs(float(seam_rate) - float(seam_midpoint)) <= 1e-9, (
+        f"[{_SIMPLE_FLAT_BC}] evidence/midpoint seam mismatch at "
+        f"tau_solid_max={tau_solid_max}: "
+        f"rate={float(seam_rate):.6f} midpoint={float(seam_midpoint):.6f}"
+    )
+
+    midpoint = _numeric_curve(payload, field="midpoint")
+    expected = _single_hop_oracle_curve(
+        graph_name=_SIMPLE_FLAT,
+        upstream_edge_name=_SIMPLE_FLAT_AB_EDGE,
+        target_edge_name=_SIMPLE_FLAT_BC_EDGE,
+        tau_max=max(midpoint),
+        frontier_ages=(0, 1, 2),
+    )
+    taus = [tau for tau in range(15, 21) if tau in midpoint and tau in expected]
+    assert len(taus) >= 5, f"[{_SIMPLE_FLAT_BC}] insufficient oracle overlap"
+    for tau in taus:
+        assert abs(midpoint[tau] - expected[tau]) <= 0.04, (
+            f"[{_SIMPLE_FLAT_BC}] active projection is not A-clock at tau={tau}: "
+            f"midpoint={midpoint[tau]:.6f} expected={expected[tau]:.6f}"
+        )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_LAT4_FLAT, enriched=True)
+def test_active_multihop_evidence_uses_query_x_denominator_not_terminal_edge_x():
+    """Multi-hop active evidence must be denominated at query X.
+
+    For `cohort(A, B -> D)`, the numerator comes from the last edge
+    `C -> D` (`Y_A^D`) but the denominator is arrivals at `B`, not
+    arrivals at `C`. This catches the failure mode where the terminal
+    edge's cohort row is treated as the whole selected evidence object.
+    """
+    anchor_from = "2026-03-12"
+    anchor_to = "2026-03-14"
+    sweep_to = "2026-05-10"
+    dsl = f"{_LAT4_FLAT_BD}.cohort(12-Mar-26:14-Mar-26).asat(10-May-26)"
+
+    payload = _run_analyse_v3(_LAT4_FLAT, dsl)
+    rows_by_tau = {
+        int(row["tau_days"]): row
+        for row in _rows(payload)
+        if isinstance(row.get("tau_days"), int)
+    }
+    assert rows_by_tau, f"[{_LAT4_FLAT_BD}] analyse returned no rows for {dsl!r}"
+
+    oracle = _selected_a_clock_snapshot_oracle(
+        graph_name=_LAT4_FLAT,
+        edge_name=f"{_LAT4_FLAT}-b-to-c",
+        numerator_edge_name=_LAT4_FLAT_CD_EDGE,
+        anchor_node_id=f"{_LAT4_FLAT}-a",
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        sweep_to=sweep_to,
+    )
+    candidate_taus = [
+        tau for tau, bucket in sorted(oracle.items())
+        if bucket["sum_x"] > 0
+        and bucket["sum_y"] > 0
+        and tau in rows_by_tau
+    ]
+    assert len(candidate_taus) >= 5, (
+        f"[{_LAT4_FLAT_BD}] insufficient positive-evidence tau overlap for "
+        f"oracle comparison: {candidate_taus}"
+    )
+    selected_cohort_count = max(
+        float(oracle[tau].get("n_rows", 0.0) or 0.0)
+        for tau in candidate_taus
+    )
+    assert selected_cohort_count > 0, (
+        f"[{_LAT4_FLAT_BD}] oracle has no contributing selected cohorts"
+    )
+
+    failures: list[str] = []
+    for tau in candidate_taus:
+        expected = oracle[tau]
+        actual = rows_by_tau[tau]
+        expected_y_coverage = (
+            float(expected.get("n_rows", 0.0) or 0.0) / selected_cohort_count
+        )
+        actual_y_coverage = actual.get("evidence_y_coverage")
+        if not isinstance(actual_y_coverage, (int, float)):
+            failures.append(
+                f"tau={tau} evidence_y_coverage: expected "
+                f"{expected_y_coverage:.6f}, got {actual_y_coverage!r}"
+            )
+        elif abs(float(actual_y_coverage) - expected_y_coverage) > 1e-9:
+            failures.append(
+                f"tau={tau} evidence_y_coverage: expected "
+                f"{expected_y_coverage:.6f}, got "
+                f"{float(actual_y_coverage):.6f}"
+            )
+        evidence_y = actual.get("evidence_y")
+        if not isinstance(evidence_y, (int, float)):
+            failures.append(
+                f"tau={tau} evidence_y: expected {expected['sum_y']:.6f}, "
+                f"got {evidence_y!r}"
+            )
+        elif expected_y_coverage >= 1.0 - 1e-9:
+            y_tolerance = max(25.0, abs(float(expected["sum_y"])) * 0.01)
+            if abs(float(evidence_y) - expected["sum_y"]) > y_tolerance:
+                failures.append(
+                    f"tau={tau} evidence_y: expected {expected['sum_y']:.6f}, "
+                    f"got {float(evidence_y):.6f} "
+                    f"(tol={y_tolerance:.6f})"
+                )
+
+        rate_tolerance = max(0.0025, abs(float(expected["rate"])) * 0.02)
+        rate = actual.get("rate")
+        if isinstance(rate, (int, float)) and float(rate) > expected["rate"] + rate_tolerance:
+            failures.append(
+                f"tau={tau} rate: expected no faster than query-X "
+                f"denominator oracle {expected['rate']:.6f}, "
+                f"got {float(rate):.6f} (tol={rate_tolerance:.6f})"
+            )
+        midpoint = actual.get("midpoint")
+        if (
+            isinstance(rate, (int, float))
+            and isinstance(midpoint, (int, float))
+        ):
+            if rows_by_tau[tau].get("tau_solid_max", -1) < tau <= rows_by_tau[tau].get("tau_future_max", -1):
+                if float(midpoint) <= float(rate) + 1e-9:
+                    failures.append(
+                        f"tau={tau} E+F midpoint {float(midpoint):.6f} "
+                        f"must be above E+F evidence {float(rate):.6f}"
+                    )
+            elif float(rate) > float(midpoint) + 1e-9:
+                failures.append(
+                    f"tau={tau} evidence rate {float(rate):.6f} "
+                    f"> midpoint {float(midpoint):.6f}"
+                )
+
+    assert not failures, (
+        f"[{_LAT4_FLAT_BD}] multi-hop active evidence is not using the "
+        f"query-X selected denominator:\n" + "\n".join(failures[:12])
+    )
+
+    midpoint = _numeric_curve(payload, field="midpoint")
+    expected = _active_cohort_span_oracle_curve(
+        graph_name=_LAT4_FLAT,
+        carrier_edge_names=(f"{_LAT4_FLAT}-a-to-b",),
+        subject_edge_names=(f"{_LAT4_FLAT}-b-to-c", f"{_LAT4_FLAT}-c-to-d"),
+        tau_max=max(midpoint),
+        frontier_ages=(0, 1, 2),
+    )
+    taus = [
+        tau for tau in range(18, 46)
+        if tau in midpoint and tau in expected and expected[tau] > 0.005
+    ]
+    assert len(taus) >= 10, f"[{_LAT4_FLAT_BD}] insufficient oracle overlap"
+    for tau in taus:
+        assert abs(midpoint[tau] - expected[tau]) <= 0.06, (
+            f"[{_LAT4_FLAT_BD}] active multi-hop projection is not A-clock at tau={tau}: "
+            f"midpoint={midpoint[tau]:.6f} expected={expected[tau]:.6f}"
+        )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
 @requires_synth(_SIMPLE, enriched=True)
 def test_low_evidence_cohort_matches_factorised_convolution_oracle():
     payload = _run_analyse_v3(
@@ -1202,6 +1794,68 @@ def test_multihop_subject_span_is_not_last_edge_or_param_pack_scalar():
     )
 
 
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_LAT4, enriched=True)
+def test_active_multihop_cohort_midpoint_matches_a_clock_convolution_oracle():
+    """Active cohort E+F rows must project the X-clock subject onto A-clock.
+
+    `synth-lat4` is A -> B -> C -> D with all three edges latent. For
+    `cohort(A, B -> D)`, the chart's selected row clock is A-clock:
+
+      denominator = A -> B carrier arrivals
+      numerator   = A -> B carrier arrivals convolved with B -> C -> D subject span
+
+    This test intentionally asserts the public `midpoint` E+F curve
+    against an independent truth-file oracle. It should fail while the
+    row builder seeds selected Cohort prefixes from window/local frame
+    artefacts instead of doing the full A-clock selected projection.
+    """
+    payload = _run_analyse_v3(
+        _LAT4,
+        f"{_LAT4_BD}.cohort(29-Jan-26:29-Apr-26)",
+    )
+    midpoint = _numeric_curve(payload, field="midpoint")
+    assert midpoint, f"[{_LAT4_BD}] no E+F midpoint rows returned"
+
+    expected = _active_cohort_span_oracle_curve(
+        graph_name=_LAT4,
+        carrier_edge_names=("a-to-b",),
+        subject_edge_names=("b-to-c", "c-to-d"),
+        tau_max=max(midpoint),
+        frontier_ages=(0,),
+    )
+    taus = [
+        tau
+        for tau in range(18, 46)
+        if tau in midpoint
+        and tau in expected
+        and expected[tau] > 0.005
+    ]
+    assert len(taus) >= 10, (
+        f"[{_LAT4_BD}] insufficient stable-band overlap for A-clock oracle "
+        f"(taus={taus})"
+    )
+
+    failures: list[str] = []
+    for tau in taus:
+        actual = midpoint[tau]
+        exp = expected[tau]
+        abs_err = abs(actual - exp)
+        rel_err = abs_err / max(abs(exp), 1e-9)
+        if abs_err > 0.04 and rel_err > 0.45:
+            failures.append(
+                f"tau={tau}: actual={actual:.6f} expected={exp:.6f} "
+                f"|Δ|={abs_err:.6f} rel={rel_err:.1%}"
+            )
+
+    assert not failures, (
+        f"[{_LAT4_BD}] active-cohort E+F midpoint is not the A-clock "
+        f"carrier⊗subject projection:\n" + "\n".join(failures[:8])
+    )
+
+
 # ── 73h canary: v3 router fork on terminal latency_parameter ────────────────
 #
 # These tests exercise the architectural concern named in
@@ -1209,14 +1863,11 @@ def test_multihop_subject_span_is_not_last_edge_or_param_pack_scalar():
 # §"Issue 1 — Top-level latency / non-latency router in v3" and §"Multi-hop
 # boundary".
 #
-# The v3 router at `cohort_forecast_v3.py:1071-1110` checks the TERMINAL edge's
-# `latency_parameter` flag. When the terminal edge is non-latent, the router
-# dispatches to `_non_latency_rows` — a closed-form Beta-Binomial path that
-# returns τ-flat rows (`rate: p_mean` constant across τ; see the row-builder
-# loop at `cohort_forecast_v3.py:273` onwards). For a multi-hop subject whose
-# upstream subject-span edges DO have real latency, the upstream span kernel
-# composition runs in `prepare_forecast_runtime_inputs` but is never consumed
-# by the row builder on the non-latent terminal branch.
+# Historically, the v3 router checked the TERMINAL edge's
+# `latency_parameter` flag and dispatched terminal non-latency subjects to a
+# closed-form Beta-Binomial path that returned τ-flat rows. For a multi-hop
+# subject whose upstream subject-span edges DO have real latency, the upstream
+# span kernel composition was built but never consumed by that legacy branch.
 #
 # `cf-fix-deep-mixed` provides the canonical alternating-latency fixture
 # (T7 in doc 50 §5.1): 6-hop chain alternating non-latent / latent. The
@@ -1243,8 +1894,7 @@ def test_multihop_with_terminal_non_latency_window_must_honour_upstream_subject_
     at `span_kernel.py:108-113`). The window-mode τ-axis must therefore be
     dominated by the D→E lognormal CDF.
 
-    Symptom of the v3 router fork: `model_midpoint` is τ-flat
-    (`_non_latency_rows` writes `rate: p_mean` at every τ).
+    Symptom of the retired v3 router fork: `model_midpoint` is τ-flat.
 
     73h §"Issue 1": canary for the terminal-edge fork. RED while the router
     keys on `target_edge.p.latency.latency_parameter`; should turn green
@@ -1274,11 +1924,11 @@ def test_multihop_with_terminal_non_latency_cohort_must_honour_upstream_subject_
     """v3 router invariant — same as the window-mode counterpart, in cohort
     mode where the carrier composition is also active.
 
-    The router fork is mode-agnostic: both window and cohort dispatches at
-    `cohort_forecast_v3.py:1073` go to `_non_latency_rows` when the terminal
-    edge is non-latent. In cohort mode the upstream carrier (composed from
-    A→B→C→D, alternating non-latent / latent in `cf-fix-deep-mixed`) has
-    been built but the row builder ignores it on the non-latent branch.
+    The retired router fork was mode-agnostic: both window and cohort
+    dispatches ignored composed upstream latency when the terminal edge was
+    non-latent. In cohort mode the upstream carrier (composed from A→B→C→D,
+    alternating non-latent / latent in `cf-fix-deep-mixed`) had been built
+    but was ignored by the non-latent branch.
 
     73h §"Issue 1" + §"Multi-hop boundary". RED while the router forks on
     terminal `latency_parameter`.
@@ -2554,4 +3204,199 @@ def test_f_mode_diverges_from_ef_off_frontier_under_drift():
         f"|Δ|={diff:.4f} < {_FMODE_FRONTIER_DIVERGE_FLOOR}. F is tracking "
         f"the cohort-loop output instead of projecting the aggregate model — "
         f"the regression class addressed by the F-mode pure-projection fix."
+    )
+
+
+# ─── Coverage transparency invariant (cohort-maturity-evidence-coverage-design.md §2.4)
+#
+# Run against `synth-cov-clean` — a purpose-built clean synth fixture for
+# this invariant. Truth file at `bayes/truth/synth-cov-clean.truth.yaml`
+# sets `failure_rate: 0` (no simulated fetch drops) and
+# `snapshot_start_offset: 0` (snapshots from day 1 of observable window),
+# so the only structural source of "non-coverage" inside epoch A is the
+# carrier latency at τ=0 (g_carrier[0] = 0 with positive `onset`).
+#
+# The cohort-maturity `coverage` field must follow:
+#
+#   1. coverage = 1 across epoch A for τ ≥ 1 (skip τ=0; structural Absent
+#      due to carrier onset). Every admissible cohort fresh at every τ.
+#   2. coverage decays linearly across epoch B as cohorts age past their
+#      last snapshot one-by-one (each retiring cohort drops the per-τ
+#      average by 1/n_cohorts_in_scope).
+#   3. coverage = 0 at start of epoch C (= tau_future_max; all cohorts
+#      past their last fresh snapshot).
+#
+# **History**: this test was originally written against `synth-lat4`,
+# which has `failure_rate: 0.05` and `snapshot_start_offset: 60` —
+# realistic production-like noise that violates the strict invariants
+# above (5% random fetch drops cause sustained coverage dips; the offset
+# silently drops anchors before day 90 of the observable window). The
+# blind test failure on synth-lat4 was the test mis-construction, not
+# a runtime defect. `synth-cov-clean` is the right fixture for this
+# specific invariant. The test against synth-lat4 with realistic noise
+# would need a different (relaxed) form and is not implemented here.
+_COV_CLEAN = "synth-cov-clean"
+_COV_CLEAN_BC = f"from({_COV_CLEAN}-b).to({_COV_CLEAN}-c)"
+
+
+@requires_db
+@requires_data_repo
+@requires_synth(_COV_CLEAN, enriched=True)
+def test_coverage_one_in_epoch_a_linear_decay_in_epoch_b_zero_at_epoch_c():
+    """Cohort-maturity coverage invariant per design §2.4 — clean fixture.
+
+    Uses `synth-cov-clean` (failure_rate=0, snapshot_start_offset=0) so
+    the strict idealised invariants hold.  The coverage trajectory must
+    be:
+
+      epoch A (1 ≤ τ ≤ tau_solid_max):     coverage == 1.0
+      epoch B (tau_solid_max < τ ≤ tau_future_max):
+                                            monotone linear decay,
+                                            step ≈ 1/n_cohorts_in_scope.
+                                            At τ = tau_future_max the
+                                            earliest cohort's last fresh
+                                            snapshot still lands exactly,
+                                            so coverage = 1/n (not 0).
+      epoch C (τ > tau_future_max):        coverage == 0.0
+
+    τ=0 is skipped — structurally Absent because all latency edges have
+    positive `onset` (g_carrier[0] = 0 → cohort hasn't reached X on its
+    anchor day; no observation possible).
+
+    Failure of these properties pinpoints:
+      - evidence-superset construction missing valid placements;
+      - denominator / normalisation bug;
+      - exact-τ semantics replaced with forward-fill.
+    """
+    payload = _run_analyse_v3(
+        _COV_CLEAN,
+        f"{_COV_CLEAN_BC}.cohort(15-Mar-26:28-Mar-26)",
+    )
+    rows = _rows(payload)
+    assert rows, "synth-lat4 cohort returned no rows"
+
+    # Pull tau_solid_max / tau_future_max from any row that carries them
+    # (they're constants per chart). Skip rows with missing coverage so
+    # we don't conflate "row absent" with "coverage = 0".
+    tau_solid_max: Optional[int] = None
+    tau_future_max: Optional[int] = None
+    by_tau: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        tau = row.get("tau_days")
+        if not isinstance(tau, int):
+            continue
+        if tau_solid_max is None and isinstance(row.get("tau_solid_max"), int):
+            tau_solid_max = int(row["tau_solid_max"])
+        if tau_future_max is None and isinstance(row.get("tau_future_max"), int):
+            tau_future_max = int(row["tau_future_max"])
+        if "coverage" in row:
+            by_tau[tau] = row
+
+    assert tau_solid_max is not None, "no tau_solid_max in any row"
+    assert tau_future_max is not None, "no tau_future_max in any row"
+    assert by_tau, (
+        "no rows carry a `coverage` field — chart cannot exercise the "
+        "coverage transparency contract; check the data layer surfaces it"
+    )
+
+    # ── Property 1: coverage == 1.0 across epoch A (clean fixture) ──────
+    # τ=0 is structurally Absent for any graph with non-zero carrier onset
+    # (g_carrier[0] = 0 → no row at exact τ=0). Skip it.
+    epoch_a_taus = sorted(t for t in by_tau if 1 <= t <= tau_solid_max)
+    assert epoch_a_taus, (
+        f"no covered rows in epoch A (1 ≤ τ ≤ {tau_solid_max}); cannot "
+        f"test property 1"
+    )
+    epoch_a_coverages = {
+        t: by_tau[t].get("coverage") for t in epoch_a_taus
+    }
+    failures_a = [
+        (t, c) for t, c in epoch_a_coverages.items()
+        if c is None or abs(float(c) - 1.0) > 1e-6
+    ]
+    assert not failures_a, (
+        f"design §2.4 property 1 — coverage must equal 1.0 across "
+        f"epoch A (1 ≤ τ ≤ {tau_solid_max}) on the clean fixture. "
+        f"Got non-unity coverage at: "
+        f"{[(t, None if c is None else round(float(c), 4)) for t, c in failures_a[:10]]} "
+        f"(showing up to first 10). Either (a) the evidence superset "
+        f"is missing valid placements, or (b) the denominator counts "
+        f"cohorts that cannot structurally contribute at this τ."
+    )
+
+    # ── Property 3: coverage == 0.0 at start of epoch C ─────────────────
+    # Epoch C starts at τ = tau_future_max + 1, where every cohort has
+    # aged strictly past its last fresh snapshot. At τ = tau_future_max
+    # itself the earliest cohort's last fresh snapshot lands exactly, so
+    # coverage = 1/n_cohorts_in_scope there (checked by property 2).
+    # Asserted before property 2 because property 2's linearity check
+    # depends on having a finite end-of-decay point.
+    tau_epoch_c = tau_future_max + 1
+    if tau_epoch_c in by_tau:
+        cov_c = by_tau[tau_epoch_c].get("coverage")
+        assert cov_c is not None and abs(float(cov_c) - 0.0) <= 1e-6, (
+            f"design §2.4 property 3 — coverage at start of epoch C "
+            f"(τ = tau_future_max + 1 = {tau_epoch_c}) must be 0.0; "
+            f"got {cov_c!r}. All cohorts have aged strictly past their "
+            f"last fresh snapshot, so the freshness signal must be 0."
+        )
+
+    # ── Property 2: monotone linear decay through epoch B ───────────────
+    epoch_b_taus = sorted(
+        t for t in by_tau
+        if tau_solid_max < t <= tau_future_max
+    )
+    if len(epoch_b_taus) < 2:
+        # Insufficient epoch-B span to test linearity; the seam-and-end
+        # checks above are still meaningful in isolation.
+        return
+
+    coverages_b = [float(by_tau[t]["coverage"]) for t in epoch_b_taus]
+    # Monotone non-increasing.
+    for i in range(1, len(coverages_b)):
+        assert coverages_b[i] <= coverages_b[i - 1] + 1e-6, (
+            f"design §2.4 property 3 — epoch B coverage must be monotone "
+            f"non-increasing as cohorts age past their last snapshots. "
+            f"Got jump up at τ={epoch_b_taus[i]}: "
+            f"{coverages_b[i - 1]:.4f} → {coverages_b[i]:.4f}."
+        )
+
+    # Linearity. Coverage should drop by ≈1/N per τ where N is the
+    # number of admissible cohorts in scope. With evenly-spaced daily
+    # anchors, each consecutive τ in epoch B retires one cohort, and
+    # the relationship N = (tau_future_max − tau_solid_max) + 1 holds:
+    # tau_solid_max retires the latest cohort (last fresh day −
+    # latest_anchor) and tau_future_max retires the earliest cohort
+    # (last fresh day − earliest_anchor); the span is the inter-anchor
+    # distance = N − 1 days.
+    n_cohorts_in_scope = (tau_future_max - tau_solid_max) + 1
+    assert n_cohorts_in_scope > 1, "degenerate epoch B span"
+    expected_step = 1.0 / n_cohorts_in_scope
+    cov_b_start = 1.0  # boundary value (last τ of epoch A); per property 1
+    cov_b_end = expected_step  # 1/n at τ = tau_future_max (earliest cohort)
+    span_steps = tau_future_max - tau_solid_max
+
+    # Compare each consecutive delta to the expected step. The first
+    # delta is from τ=tau_solid_max (cov=1) to the first epoch-B τ.
+    actual_deltas: list[float] = []
+    prev_cov = cov_b_start
+    prev_tau = tau_solid_max
+    for tau, cov in zip(epoch_b_taus, coverages_b):
+        per_step = (prev_cov - cov) / max(1, tau - prev_tau)
+        actual_deltas.append(per_step)
+        prev_cov = cov
+        prev_tau = tau
+
+    tol = max(0.05, 0.5 * expected_step)
+    nonlinear = [
+        (epoch_b_taus[i], round(d, 4))
+        for i, d in enumerate(actual_deltas)
+        if abs(d - expected_step) > tol
+    ]
+    assert not nonlinear, (
+        f"design §2.4 property 3 — epoch B coverage must decay linearly "
+        f"as cohorts age out evenly. Expected per-τ step ≈ "
+        f"{expected_step:.4f} (= ({cov_b_start} − {cov_b_end}) / "
+        f"{span_steps}); got nonlinear drops at "
+        f"{nonlinear[:10]} (showing up to first 10). Tolerance = {tol:.4f}."
     )

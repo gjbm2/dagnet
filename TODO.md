@@ -5,22 +5,38 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
 ## GA blockers — outstanding serious defects (30-Apr-26)
 
 **Forecasting machinery**
-- **B.** Compliance test tracker — [73f](docs/current/project-bayes/73f-outside-in-cohort-engine-investigation.md)
-  - **Bi.** Problems with non-latency edges — Phase 1 closed by [73m](docs/current/project-bayes/73m-carrier-composition-and-router-unification-implementation-plan.md) (router unification + carrier composition, all 9 stages complete 1-May-26). Phase 2 (carrier evidence-conditioning, 73h Issue 2 surface 2) **open and owned by [73n](docs/current/project-bayes/73n-carrier-evidence-conditioning-implementation-plan.md)**. Stage record + AP58 finding + held-over tests: [73m-stage-0-baseline.md §§9-12](docs/current/project-bayes/  73m-stage-0-baseline.md). 73n acceptance criteria below.
-    - **73n flip-to-green strict-xfails** (in `graph-editor/lib/tests/test_cohort_factorised_outside_in.py`, all carry precise `reason=` naming the AP58 fork in `build_cohort_evidence_from_frames` and 73n's primitive registry as the fix path; `strict=True` so XPASS surfaces as suite failure prompting marker removal):
-      1. `test_degenerate_identity_and_instant_carrier_oracles_reduce_to_subject_kernel` — instant-carrier τ=0 zero
-      2. `test_multihop_non_latent_upstream_collapse` — window vs cohort rate divergence at small τ
-      3. `test_single_hop_non_latent_upstream_collapses_to_window[from(synth-fo-gate).to(synth-fo-fast)]`
-      4. `test_single_hop_non_latent_upstream_collapses_to_window[from(synth-fo-gate).to(synth-fo-slow)]`
-    - **`_non_latency_rows` deletion** tagged for 73n's primitive-registry stage. Currently survives as the dev-only oracle for `test_subject_span_cdf_ownership.py::TestNonLatencyClosedFormEquivalence`. When 73n removes the AP58 fork, the four xfails flip green and `_non_latency_rows` + `test_non_latency_rows.py` should be deleted alongside.
-    - **Held-over Phase 1 observations** (NOT 73n acceptance criteria, separate workstreams):
-      - `test_v3_midline_at_saturation_converges_to_p` — Stage 1B observed side effect, not committed to closing in 73m. Investigation lives in [`cohort-maturity-v3-midline-collapse-investigation.md`](docs/current/project-bayes/cohort-maturity-v3-midline-collapse-investigation.md). Numerics: midpoint=0.5766, p_infinity_mean=0.6788, Δ=0.1022, tol=0.05.
-      - Two outside-in flakes pass in isolation but exhibit serial-state effects when run after other tests in the same pytest session: `test_cli_identity_collapse...`, `test_cli_projection_parity...`. Partly addressable by 73n's request-scoped primitive registry; full diagnosis is its own ticket.
+
+- **Atom 2 — de-branch window/active cohort display** — [cohort-maturity-evidence-coverage-design.md §5.2](docs/current/cohort-maturity-evidence-coverage-design.md). Unify window-mode evidence display onto the same `SelectedAClockEvidence` substrate atom 1 introduced; eliminate the `is_active_carrier` branch in the row builder and retire the parallel frame-derived forward-fill (`build_cohort_evidence_from_frames`-based `engine_cohorts.obs_x/obs_y`). Single-hop window numerical content should be identical; multi-hop window drift is investigated case-by-case before landing (the legacy path's window-mode composition was never formally pinned).
+- **Atom 3 — retire legacy reducer-side prefix** — [cohort-maturity-evidence-coverage-design.md §5.3](docs/current/cohort-maturity-evidence-coverage-design.md). Remove the residual `engine_cohorts.obs_x/obs_y` consumption inside the reducer's identity-carrier prefix once atom 2 has unified the display surface. Deferable housekeeping; chart works correctly without it but it prevents the legacy path from re-emerging in future refactors.
+
+- **improve mass calc** 
+  Work To Improve The Mass Calculation
+  The mass calculation should stop treating a mixed observed row as raw people to split across visible cohorts.
+
+  Instead, preserve the source-day axis and calculate selected-cohort mass before summing:
+
+  for each selected cohort C
+    for each source day u
+      selected_mass_at_u = cohort_C mass that reached source day u
+      local_rate_at_u = observed k(u) / n(u)
+      selected_contribution = selected_mass_at_u × local_rate_at_u
+  sum selected_contribution across source days
+  Work required:
+
+  Preserve source_day through placement and evidence-surface building.
+  Store intermediate evidence as cohort -> source_day -> tau, not only cohort -> tau.
+  Forward-fill each source day independently.
+  Compute k/n per source day before summing.
+  Multiply that per-source-day rate by selected-cohort source-day mass.
+  Sum only after those per-source-day contributions are computed.
+  Feed this corrected prefix into both the evidence line and the E+F boundary state.
+  This fixes the core problem: source days no longer disappear before the selected cohort’s mass is applied.
+
 - **C.** Refresh may not trigger CF pass for all scenarios — no doc yet — **investigate**
 - **D.** Once FE vars flows tested, test Bayes vars flows properly — [modelvars audit 30-Apr-26](docs/current/modelvars-flow-forensic-audit-30-Apr-26.md) — **pending FE flow validation**
-- **73n follow-up — migrate `daily_conversions` and `surprise_gauge` onto `ResolvedCFRuntime`.** The v3 CF row/scalar path is now fully runtime-driven (`compute_cohort_maturity_rows_v3` reads composed primitive draws). `compute_forecast_trajectory` and its `XProvider` / `from_node_arrival` / `compose_timing_span_from_graph` plumbing only survive because two non-CF analyses still use them: `daily_conversions` row annotation + latency bands ([api_handlers.py:3735](graph-editor/lib/api_handlers.py#L3735), [:3826](graph-editor/lib/api_handlers.py#L3826)), and `surprise_gauge` ([api_handlers.py:414](graph-editor/lib/api_handlers.py#L414)). Once both are migrated, the trajectory engine and its legacy timing helpers can be deleted. (v1/v2 retirement is the separate item below.)
-- RETIRE v1, v2 cohortmaturity ++ all associated files: docs/current/cohort-maturity-v1-v2-retirement-plan.md 
-- "Spike B3" work to use cohort() data properly
+- **73n follow-up — migrate `daily_conversions` (73q) and `surprise_gauge` onto `ResolvedCFRuntime`.** The v3 CF row/scalar path is now fully runtime-driven (`compute_cohort_maturity_rows_v3` reads composed primitive draws). `compute_forecast_trajectory` and its `XProvider` / `from_node_arrival` / `compose_timing_span_from_graph` plumbing only survive because two non-CF analyses still use them: `daily_conversions` row annotation + latency bands ([api_handlers.py:3735](graph-editor/lib/api_handlers.py#L3735), [:3826](graph-editor/lib/api_handlers.py#L3826)), and `surprise_gauge` ([api_handlers.py:414](graph-editor/lib/api_handlers.py#L414)). Once both are migrated, the trajectory engine and its legacy timing helpers can be deleted. (v1/v2 retirement is the separate item below.)
+**RETIRE v1, v2 cohortmaturity** ++ all associated files: docs/current/cohort-maturity-v1-v2-retirement-plan.md 
+**Spike B3** work to use cohort() data properly
 - is epist. or predict. banding right on cohortmaturity curve? ...in f mode? in e+f mode?? under degernerate subset -> global case???
 - poss. issue with t95 roundtrip bloating.../ horizon llogic
 
@@ -47,6 +63,12 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
   - `edge.p.evidence.window_from / window_to / scope_from / scope_to` — not written by FE topo Step 2 (`EdgeLAGValues.evidence` carries only `{mean, n, k}`); the surface comes from parameter-file slice metadata via `updateManager/mappingConfigurations.ts`. They're display-provenance only — not query-DSL. Risk is that a future consumer mistakes them for "the active query window". Decide whether to drop them from the graph projection entirely (keep them on the parameter-file value entries only) or rename to e.g. `*_provenance_*` so the role is unambiguous.
   - This is cleanup, not the priority defect — the priority is fixing the Current-scenario Stage-2 trigger so live values are refreshed at all.
 
+- **Vectorise active-carrier Pop D inner loop** (6-May-26)
+  - `cohort_forecast_v3.py:2281–2301`: `for s in range(S)` Python loop over particles in `_selected_cohort_group_rate_draws`, active-carrier branch only. Mixes subject-CDF residual over pre-frontier carrier arrival distribution per particle. Identity-carrier branch and Pop C convolution are already vectorised.
+  - Straightforward: index arrays (`anchor_ages`, `future_ages`) are particle-independent; the per-particle early-exit (`survivor_total <= 1e-12`) becomes a mask. Replace with batch gather → `einsum` → masked assignment.
+  - Trade-off: memory goes from O(future_len × f_idx) per iteration to O(S × future_len × f_idx) all at once. For S=500, f_idx=200, future_len=200 that's ~150 MB — fine for typical workloads, but add a fallback threshold if S × f_idx × future_len exceeds a bound.
+  - Expected speedup: 10–50× for S ≥ 200. ~1 hour effort including numerical equivalence test.
+
 - **Performance-optimise pytest suite** (29-Apr-26)
   - Outside-in module currently runs in ~244s (`test_cohort_factorised_outside_in.py` alone), full forecast / runtime python suite cluster takes minutes. Running specific tests during iterative development is painful and disincentivises running the relevant suite.
   - Likely surfaces: daemon round-trip cost per `analyse` / `param-pack` invocation (each test does several), graph-load cost on every daemon call, fixture re-derivation across tests that could share a session-scoped frame, and pytest's own collection overhead on the larger files.
@@ -60,11 +82,6 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
   - Delete every test whose subject is v1 or v2 (parity tests against v3, version-pinning tests, v1- or v2-specific contract tests). Tests whose subject is the public surface and which happen to use v3 today stay.
   - Update any docs that still describe v1/v2 as live (mostly inside `docs/current/project-bayes/`).
   - Sequencing: this is the natural next step before the WP8 work and the de-branching pass below — fewer paths to inspect once v1/v2 are gone. Tracked in [`docs/current/project-bayes/60-forecast-adaptation-programme.md`](docs/current/project-bayes/60-forecast-adaptation-programme.md) §13.1.
-
-- **Refactor out mode-specific branches in the forecasting machinery** (29-Apr-26)
-  - Resume the work paused after the failed F14 attempt. The BE conditioned forecast path still has parallel logic for `window()` vs `cohort()`, single-hop vs multi-hop, scalar projection, chart rows, and graph enrichment. Per the invariants, there must be **one general forecast machinery path** with cases differing only by natural degeneration of the same objects (`population_root`, `carrier_to_x`, `subject_span`, `numerator_representation`, `p_conditioning_evidence`, `projection`).
-  - Required reading before any further code changes: [`docs/current/project-bayes/73g-general-purpose-f14-problem-and-invariants.md`](docs/current/project-bayes/73g-general-purpose-f14-problem-and-invariants.md) and [`docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`](docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md).
-  - Pre-implementation gate: forensic trace of the two failing public queries named in 73g (`from(simple-a).to(simple-b).window(-90d:)` and `from(simple-b).to(simple-c).cohort(1-Mar-26:3-Mar-26).asat(3-Mar-26)`) recording the actual runtime state of each object. The first implementation step must be at the first object whose actual state contradicts the invariants. No downstream projection patch is acceptable unless the upstream object state is already proven correct.
 
 - **Port Daily Conversions analysis (among others) onto the general forecasting machinery** (29-Apr-26)
   - Daily Conversions currently has its own derivation path (`graph-editor/lib/runner/daily_conversions_derivation.py`) rather than projecting from the same resolved runtime object as `cohort_maturity` rows, CF scalars, and graph `p.mean`. Same applies to other analysis types still routed around the general machinery.

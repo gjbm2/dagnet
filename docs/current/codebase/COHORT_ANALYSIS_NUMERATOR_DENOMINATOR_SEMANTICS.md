@@ -46,6 +46,15 @@ representation.
 
 ## See also
 
+- [`docs/current/codebase/FORECAST_RUNTIME_ARCHITECTURE.md`](FORECAST_RUNTIME_ARCHITECTURE.md)
+  — companion doc describing the `cohort_forecast_v3` runtime that
+  enforces the contract in this note. The "Implementation invariants"
+  section below is the canonical engineering reference for that
+  runtime; read this note first, that doc second.
+- [`docs/current/codebase/FORECAST_STACK_DATA_FLOW.md`](FORECAST_STACK_DATA_FLOW.md)
+  — the labelled-interface (I1–I17) data-flow contract for the layers
+  that consume the runtime. Read this note first, runtime second, data
+  flow third.
 - `docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md` — canonical
   definitions of `cohort()`, anchor day, `a`, `x`, `y`, and the `A -> X`
   meaning of `anchor_median_lag_days`
@@ -566,27 +575,41 @@ degenerate naturally across:
 
 ### Mapping to the current Python surfaces
 
-- in `window()` mode, `x_provider` should collapse to the fixed `X`
+- in `window()` mode, the carrier should collapse to the fixed `X`
   cohort and Pop C should vanish
-- `x_provider` and `from_node_arrival` are denominator-side objects
-- `span_kernel` is the subject-side progression object
-- `PreparedForecastRuntimeBundle.p_conditioning_evidence` is the explicit
-  internal name for the rate-conditioning seam; it should describe which
-  evidence family is allowed to move `p`, not silently retarget the carrier
-  or the subject span
-- the current live WP8 landing marks that seam with
-  `direct_cohort_enabled` only for exact single-hop `cohort(A, X-Y)`
-  subjects; `window()` and multi-hop `cohort(A, X-Z)` leave the flag off
+- the carrier surface (historically `x_provider` / `from_node_arrival`,
+  now `composed_carrier` post-73n) is the denominator-side object
+- the subject surface (historically `span_kernel`, now
+  `composed_subject` via `subject_span_composer`) is the numerator-side
+  progression object
+- `PreparedForecastRuntimeBundle.p_conditioning_evidence` is the
+  explicit internal name for the rate-conditioning seam; it should
+  describe which evidence family is allowed to move `p`, not silently
+  retarget the carrier or the subject span. Post-73n Stage 8 it is
+  **compatibility metadata only** — consumers must read per-primitive
+  provenance to determine which evidence family conditioned a given
+  primitive
+- WP8 (direct-`cohort()`-for-`p` rate conditioning, doc 60) is **planned,
+  not yet landed**. In the current live BE no production request builder
+  sets `direct_cohort_enabled` (or any WP8-adjacent dispatch flag); the
+  flag exists in WP8-only tests outside the standard acceptance gates
+  (see [`FORECAST_STACK_DATA_FLOW.md`](FORECAST_STACK_DATA_FLOW.md)
+  §B.3 [I10] "WP8 discipline"). Until WP8 lands, every cohort and window
+  request goes through the pre-WP8 conditioning seam
 - the `Pop C / Pop D` split in `forecast_state.py` only makes semantic
   sense if the future numerator is still factorised
 - if a future implementation promotes a gross fitted subject numerator,
   that implementation must stop adding separate Pop C and Pop D
   numerator terms
 
-That current flagging rule is intentionally narrow. It names the direct
-single-hop `cohort()` rate-conditioning seam, but it does **not** by itself
-authorise a gross fitted numerator, rewrite `carrier_to_x`, or replace the
-full `X -> end` subject-span semantics for multi-hop queries.
+When WP8 does land, the design intent (per doc 60) is that the seam is
+intentionally narrow: it would name the direct single-hop `cohort()`
+rate-conditioning path, but would **not** by itself authorise a gross
+fitted numerator, rewrite `carrier_to_x`, or replace the full
+`X -> end` subject-span semantics for multi-hop queries. Anyone
+implementing or reviewing WP8 should preserve that narrowness; the
+broader shifts (gross-fitted numerator, multi-hop subject substitution)
+remain separate decisions outside WP8's scope.
 
 ### What this means for multi-hop correctness
 
@@ -599,6 +622,235 @@ For multi-hop `cohort(A, X-Z)`:
 
 Any implementation that treats multi-hop Pop D or Pop C as a pure
 last-edge timing problem is changing the meaning of the subject.
+
+## Implementation invariants
+
+This section pins the engineering invariants that the
+`cohort_forecast_v3` runtime (see
+[`FORECAST_RUNTIME_ARCHITECTURE.md`](FORECAST_RUNTIME_ARCHITECTURE.md))
+must preserve. Violating any one of them is an architectural defect,
+even if a focused test passes. They are the canonical reference for any
+agent or maintainer working on this delicate component, and they sit
+alongside the problem-statement invariants in
+[`../project-bayes/73g-general-purpose-f14-problem-and-invariants.md`](../project-bayes/73g-general-purpose-f14-problem-and-invariants.md).
+
+The body above defines what the runtime must *mean*. This section
+defines what its implementation must *look like* in order to keep that
+meaning honest.
+
+### 1. One general forecast machinery path
+
+There is exactly one runtime template:
+
+`population_root → carrier_to_x → subject_span → numerator_representation → p_conditioning_evidence → projection`
+
+`window()`, `cohort()`, single-hop, multi-hop, and `A = X` are not
+separate implementations; they are degeneracies of the same objects.
+There is no parallel pipeline for chart rows, scalar responses,
+fixtures, graph fields, or overlays. Both the cohort maturity analysis
+endpoint and the conditioned forecast endpoint route through the same
+v3 machinery, and there is no separate row engine for CF scalars.
+Cross-surface parity must be structural, not duplicative.
+
+### 2. One entry point for evidence into the machinery
+
+All evidence enters through superset-derived candidates translated by
+`build_superset_candidates_by_edge` and
+`build_carrier_superset_candidates_by_edge`. Runtime code must not read
+graph-side evidence fields, source-family stores, `_bayes_evidence`,
+DB rows, or parameter files directly. It must not branch on whether
+evidence originated from snapshot storage, fitted vars, frame bundles,
+or any other family. Primitive-local binding then filters the single
+candidate pool by primitive identity, role, and clock support.
+
+The preparation layer owns the fetch envelope and exposes its output
+as `evidence_superset_rows`; the runtime translates and binds. There
+is no in-runtime widening, no in-runtime dedupe, and no in-runtime
+source selection.
+
+### 3. One conditioning locus
+
+Every primitive is prepared once by `primitive_readout._prepare_one`
+and conditioned by `primitive_conditioning.condition_primitive`.
+Posterior conditioning lives nowhere else. No projection-time
+conditioning. No row-time conditioning. No scalar-time conditioning.
+
+### 4. The displayed rate is always `Y / X`, never `Y / A`
+
+`cohort()` changes the selected population and time origin. It does
+not change the meaning of the displayed rate. Any code path that
+quietly re-targets the displayed rate to `y/a` is wrong.
+
+### 5. Roles are load-bearing; clocks are not interchangeable
+
+`carrier_to_x` owns denominator arrival on the `A` clock.
+`subject_span` owns numerator progression on the `X` clock.
+`ComposedPrimitiveSpan` is deliberately role-neutral; meaning lives
+in `ResolvedCFRuntime`'s `composed_carrier` / `composed_subject` slots
+and in the role-labelled provenance fields. Span reach
+(`span_p_mean` / `span_p_draws`) must remain separate from timing
+(`cdf_mean` / `cdf_draws`) until the consumer has decided which
+public object it is emitting. The two-clock split is the abstraction
+boundary that makes the rest of the machinery degenerate cleanly; do
+not collapse it.
+
+### 6. Identity carrier is data, not a route
+
+`window()` and `cohort(A = X)` collapse `composed_carrier` to `None`
+and `carrier_to_x` to identity. They are not separate code paths.
+The selected-Cohort reducer treats `population_root == denominator_node`
+as the authoritative identity check, even if a stray carrier object
+exists. New "modes" must enter the runtime as new degeneracies of
+existing objects, not as new branches.
+
+### 7. Factorised and gross-fitted numerator representations are mutually exclusive
+
+If the numerator is factorised, Pop C and Pop D may be additive
+future numerator terms. If the numerator is gross-fitted, Pop C and
+Pop D are explanatory only and must not be re-added. The
+`admission_policy` decides which representation applies for a given
+request; downstream code obeys that decision rather than re-deriving
+it.
+
+### 8. Evidence binding must match the object it conditions
+
+Raw under-matured `y_frozen / x_frozen` is not mature evidence for
+`p∞`. Window-evidence is not a substitute for cohort-evidence on a
+different clock. Subject-side selected-row A-clock placement uses the
+join-conditioned carrier timing surface, never an upstream model-vars
+latency map and never a calendar shortcut. Completeness belongs
+inside likelihood/evidence semantics, not as a post-hoc display
+patch. The eight-form taxonomy in Appendix A is binding; same
+physical edge under different bindings or anchors yields distinct
+vars / evidence / primitive objects and must not share cache entries.
+
+### 9. Projection must not re-decide semantics
+
+Chart rows, CF scalar responses, graph-enrichment fields, and
+overlays are projections of the already-resolved runtime object.
+They must not contain their own carrier, subject-span, `p∞`,
+completeness, or admission logic. `_project_runtime_rows` reads from
+runtime surfaces; it does not rebuild them. `_attach_cf_row_metadata`
+attaches provenance; it does not synthesise it. Active-row evidence
+fields read only from `SelectedAClockEvidence`; they are not patched
+from local subject rows when selected A-clock observations are
+absent — the field is absent rather than wrong.
+
+### 10. Public surfaces come from the runtime, not from callers
+
+`ResolvedCFRuntime.public_moments` is the source of `p_infinity_mean`,
+`p_infinity_sd`, and `p_infinity_sd_epistemic`. Caller-supplied
+legacy moments fall back only when a primitive moment is genuinely
+absent. `ResolvedCFRuntime.project_runtime_provenance` is the source
+of carrier-span, subject-span, numerator-representation, and
+admission-policy labels. Consumers must read role-labelled runtime
+fields, not scrape lower-level diagnostic strings.
+
+### 11. Cache identity is mathematical, not contextual
+
+Caller-context labels such as `scenario_id` and `scenario_seed` are
+not identity unless they actually slice priors or evidence — and if
+they do, they must enter through the priors or evidence themselves,
+not as separate cache-key fields. Identity is keyed by binding,
+clock anchor, source, target, role, arrival-map identity, prior
+identity, evidence identity, and algorithm parameters. Side-channel
+leakage through fields forwarded into canonical strings (e.g.
+`edge_id`) still changes identity and must be audited when reuse is
+expected.
+
+### 12. Failures degrade visibly; they do not silently fall back
+
+If carrier composition is unavailable for an active `cohort(A != X)`
+request, the runtime must degrade with `eligible = False` and a
+specific `skip_reason` rather than silently fall back to window
+semantics. If selected A-clock evidence is absent, evidence-named
+row fields are absent rather than reconstructed from a different
+clock. Silent fallback between modes is the most damaging failure
+class for this runtime because it preserves the appearance of
+correctness while violating the body of this note.
+
+### 13. Tests must prove semantic contracts, not implementation quirks
+
+A passing test is meaningful only if it exercises the public path and
+asserts one of these engineering invariants or a semantic contract
+from the body above. Tests pinned to internal data shapes, internal
+field names, or implementation accidents are negative-value: they
+preserve current behaviour against the contract rather than the
+other way around.
+
+### Engineering practices that follow from the invariants
+
+- Add new query shapes by introducing degeneracies of the existing
+  objects, never by introducing a new pipeline alongside them.
+- Resist mode-specific branches at the row, scalar, and evidence
+  layers. If you find yourself writing `if window(): ... else: ...`
+  in projection or evidence code, the abstraction is leaking and
+  the right fix is upstream.
+- Resist callsite-local evidence reads. If a consumer needs evidence
+  the runtime does not expose, expose it on the runtime; do not
+  fetch it again at the consumer.
+- Resist projection-time semantics. If a consumer needs a
+  `p∞`-shaped scalar that the runtime does not produce, fix the
+  runtime; do not synthesise it from rows.
+- Resist scope-bearing fields in cache keys. If a label is genuinely
+  identity-affecting, route it through priors or evidence; if it is
+  not, keep it out of the key.
+- Treat the abstraction boundary between `carrier_to_x` and
+  `subject_span` as inviolable. Any fix that bridges them at row
+  time is a smell.
+
+## The outside-in suite is the oracle
+
+[`graph-editor/lib/tests/test_cohort_factorised_outside_in.py`](../../graph-editor/lib/tests/test_cohort_factorised_outside_in.py)
+is the canonical acceptance oracle for this runtime. It exercises the
+public CLI surfaces (`graph-ops/scripts/analyse.sh`,
+`graph-ops/scripts/param-pack.sh`) and asserts trajectory shape,
+scalar parity, and provenance against truth fixtures. It is
+deliberately framed at the user-visible boundary so that any internal
+refactor — including all of the invariants above — must keep it
+green.
+
+A change that turns an inside test green while breaking an
+outside-in case is, by construction, wrong: it has either violated a
+semantic contract from this note's body or one of the engineering
+invariants above. The outside-in suite, paired with the F9 / F13 /
+F14 forensic record in
+[`../project-bayes/73f-outside-in-cohort-engine-investigation.md`](../project-bayes/73f-outside-in-cohort-engine-investigation.md)
+and the problem statement in
+[`../project-bayes/73g-general-purpose-f14-problem-and-invariants.md`](../project-bayes/73g-general-purpose-f14-problem-and-invariants.md),
+is the load-bearing canary that closes the loop between semantics
+and runtime behaviour.
+
+When in doubt, run it before claiming a fix. When it disagrees with
+an inside test, the outside-in suite is right and the inside test
+is the artefact to revisit.
+
+### Modification policy
+
+The outside-in suite is not protected by a hook, but its semantic
+and logical invariants are carefully designed and are the load-bearing
+expression of the engineering invariants above. Cavalier edits are
+how invariants quietly weaken.
+
+**Soft norm**: before editing
+[`test_cohort_factorised_outside_in.py`](../../graph-editor/lib/tests/test_cohort_factorised_outside_in.py)
+— adding, removing, or modifying a test or assertion; weakening a
+tolerance; marking `xfail`; or relaxing a fixture expectation — an
+agent must seek explicit user approval. The request must state (a)
+the proposed change, (b) the reason, and (c) which semantic or
+engineering invariant is involved.
+
+Mechanical refactors that preserve every assertion exactly — renames,
+formatting, import order, helper extraction with identical behaviour
+— do not require approval. Anything that could plausibly change a
+pass/fail outcome on any of the synth fixtures or pinned regimes
+does.
+
+When a fix appears to require an oracle change, the default
+hypothesis should be that the proposed fix is wrong, not that the
+oracle is. If the oracle really is wrong, that is itself a
+significant finding and warrants explicit, documented sign-off
+before the change lands.
 
 ## What this note does not decide
 

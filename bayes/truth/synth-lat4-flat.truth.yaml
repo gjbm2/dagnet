@@ -1,0 +1,62 @@
+# Ground truth for synth-lat4-flat
+#
+# Flat/dense equivalent of synth-lat4 for exact outside-in oracle tests:
+# same A -> B -> C -> D truth, but no snapshot sparsity, no drift, no
+# growth, no traffic overdispersion, and no day-level probability
+# overdispersion.
+
+graph:
+  name: synth-lat4-flat
+  description: Flat dense 4-node linear chain matching synth-lat4 truth with all noise and sparsity disabled
+
+simulation:
+  mean_daily_traffic: 20000
+  n_days: 150
+  kappa_sim_default: 1000000000.0
+  kappa_step_default: 0.0
+  failure_rate: 0.0
+  frame_drop_rate: 0.0
+  toggle_rate: 0.0
+  initial_absent_pct: 0.0
+  drift_sigma: 0.0
+  drift_rate: 0.0
+  growth_rate_mom: 0.0
+  snapshot_start_offset: 0
+  traffic_cv: 0.0
+  seed: 4242
+  expected_sample_seconds: 900
+
+nodes:
+  a:
+    start: true
+    label: A
+  b:
+    label: B
+  c:
+    label: C
+  d:
+    absorbing: true
+    label: D
+
+edges:
+  a-to-b:
+    from: a
+    to: b
+    p: 0.60
+    onset: 2.0
+    mu: 2.0
+    sigma: 0.50
+  b-to-c:
+    from: b
+    to: c
+    p: 0.50
+    onset: 1.5
+    mu: 2.2
+    sigma: 0.45
+  c-to-d:
+    from: c
+    to: d
+    p: 0.65
+    onset: 2.5
+    mu: 1.8
+    sigma: 0.50

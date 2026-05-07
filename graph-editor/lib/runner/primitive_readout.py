@@ -358,6 +358,11 @@ def _window_identity_arrival_weights(
             transition_source='window_local_clock',
             horizon_ratio=1.0,
         ),
+        root_day_contributions={
+            day: {day: float(weight)}
+            for day, weight in weights.items()
+            if weight > 0.0
+        },
     )
 
 
@@ -369,6 +374,7 @@ def _build_request_arrival_map(
     edge_resolutions: Sequence[Tuple[TransitionIdentity, ResolvedModelParams]],
     identity: PrefixArrivalIdentity,
     max_tau: int,
+    override_root_day_weights: Optional[Mapping[str, float]] = None,
 ) -> PrefixArrivalMap:
     """Build the real request-scoped ``PrefixArrivalMap`` once per request.
 
@@ -380,6 +386,15 @@ def _build_request_arrival_map(
     at the root keep their full evidence pressure; downstream nodes
     get composed normalised arrival distributions via shared timing
     composition.
+
+    ``override_root_day_weights`` lets the caller supply explicit root
+    weights instead of the identity mask. Used in active cohort mode
+    (A != X) where the subject map's X-day root support must cover the
+    calendar days the carrier latency actually reaches X on, not the
+    A-anchor cohort range. Without this override, subject rows are bound
+    against arrival weights that have no support outside the cohort
+    range, every row is rejected, and selected-A-clock evidence
+    collapses to empty.
 
     Consumers index ``arrival_map.nodes[transition.source_node]`` per
     edge. The map is constructed over every primitive source node, so a
@@ -401,19 +416,26 @@ def _build_request_arrival_map(
                 target_node_ids.append(node)
 
     root_day_weights: Dict[str, float] = {}
-    df = primitive_scope_for_window.date_from
-    dt = primitive_scope_for_window.date_to
-    if df and dt:
-        try:
-            start = _date.fromisoformat(df)
-            end = _date.fromisoformat(dt)
-        except ValueError:
-            start = end = None  # type: ignore[assignment]
-        if start is not None and end is not None and start <= end:
-            cur = start
-            while cur <= end:
-                root_day_weights[cur.isoformat()] = 1.0
-                cur = cur + _timedelta(days=1)
+    if override_root_day_weights is not None:
+        root_day_weights = {
+            str(d): float(w)
+            for d, w in override_root_day_weights.items()
+            if float(w) > 0.0
+        }
+    else:
+        df = primitive_scope_for_window.date_from
+        dt = primitive_scope_for_window.date_to
+        if df and dt:
+            try:
+                start = _date.fromisoformat(df)
+                end = _date.fromisoformat(dt)
+            except ValueError:
+                start = end = None  # type: ignore[assignment]
+            if start is not None and end is not None and start <= end:
+                cur = start
+                while cur <= end:
+                    root_day_weights[cur.isoformat()] = 1.0
+                    cur = cur + _timedelta(days=1)
 
     return build_prefix_arrival_map(
         graph=dict(graph),
@@ -822,48 +844,30 @@ def compute_resolved_runtime_readout(
     subject_summaries: List[Mapping[str, Any]] = []
     subject_primitives: List[ConditionedTransitionPrimitive] = []
     for subj_res in subject_resolutions:
+        # 73r: every subject primitive (target and non-target) flows
+        # through `_prepare_one` so it consumes the request-wide
+        # candidate pool through the same primitive-local merge as
+        # target and carrier primitives. Pre-73r the non-target branch
+        # bypassed this and bound from the pre-wrapped `evidence_set`,
+        # leaving file evidence on intermediate edges admissible only
+        # via the per-edge container — a parallel path the plan
+        # explicitly rejects (Required Design § One Request Candidate
+        # Pool).
         guard_kind = "subject_target" if subj_res.is_target else "subject"
-        if not subj_res.is_target:
-            # Non-target subject edges are ordinary parameterised siblings.
-            arrival_weights = (
-                _window_identity_arrival_weights(subj_res.primitive_scope)
-                if is_window
-                else subject_arrival_map.get(subj_res.transition.source_node)
+        prepared = _prepare_one(
+            transition=subj_res.transition,
+            primitive_scope=subj_res.primitive_scope,
+            resolved_model=subj_res.resolved_model,
+            evidence_set=subj_res.evidence_set,
+            guard_kind=guard_kind,
+            arrival_map=subject_arrival_map,
+            window_identity=is_window,
+        )
+        if prepared is None:
+            return _early_skip(
+                "subject_primitive_unavailable",
+                "subject primitive preparation failed; see diagnostics",
             )
-            if arrival_weights is None:
-                diag["subject_arrival_map_miss"] = {
-                    "source_node": subj_res.transition.source_node,
-                    "edge_id": subj_res.transition.edge_id,
-                }
-                return _early_skip(
-                    "subject_primitive_unavailable",
-                    "subject primitive preparation failed; see diagnostics",
-                )
-            prepared = _prepare_conditioned_primitive(
-                transition=subj_res.transition,
-                primitive_scope=subj_res.primitive_scope,
-                resolved_model=subj_res.resolved_model,
-                evidence_set=subj_res.evidence_set,
-                arrival_weights=arrival_weights,
-                scenario_seed=scenario_seed,
-                options=options,
-                prior_source=prior_source,
-            )
-        else:
-            prepared = _prepare_one(
-                transition=subj_res.transition,
-                primitive_scope=subj_res.primitive_scope,
-                resolved_model=subj_res.resolved_model,
-                evidence_set=subj_res.evidence_set,
-                guard_kind=guard_kind,
-                arrival_map=subject_arrival_map,
-                window_identity=is_window,
-            )
-            if prepared is None:
-                return _early_skip(
-                    "subject_primitive_unavailable",
-                    "subject primitive preparation failed; see diagnostics",
-                )
         registry_key = registry.register(prepared.resolution)
         primitive = prepared.primitive
         conditioned_primitive_map[registry_key] = primitive

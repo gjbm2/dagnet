@@ -103,7 +103,7 @@ Docs: [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) §3.2, [LAG_ANALYSIS_SUBSYSTEM.
 ### 9. Conditioned forecast (BE CF pass)
 
 The Python topologically-sequenced MC pass that races FE topo. Per-edge IS conditioning on query-DSL-scoped snapshot evidence. Whole-graph mode propagates upstream carriers via topological caching. CF supersedes FE blended `p.mean` and completeness when it lands. The cohort-mode rate-conditioning seam is `PreparedForecastRuntimeBundle.p_conditioning_evidence`.
-Docs: [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) §3.3, [BE_RUNNER_CLUSTER.md](BE_RUNNER_CLUSTER.md), [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md), [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md).
+Docs: [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) (semantics), [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) (runtime), [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) (I/O and persistence), [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) §3.3, [BE_RUNNER_CLUSTER.md](BE_RUNNER_CLUSTER.md), [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md).
 
 ### 10. Bayes compiler (offline)
 

@@ -48,6 +48,7 @@ def apply_temporal_regime_selection(
     rows: List[Dict[str, Any]],
     subj: Dict[str, Any],
     is_window: bool,
+    requested_cohort_anchor: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Select one temporal evidence family per retrieval date.
 
@@ -77,6 +78,8 @@ def apply_temporal_regime_selection(
                 e.get("core_hash", "") if isinstance(e, dict) else str(e)
                 for e in (r.get("equivalent_hashes") or [])
             ],
+            temporal_mode=r.get("temporal_mode", ""),
+            cohort_anchor=str(r.get("cohort_anchor") or ""),
         )
         for r in cr_raw
         if isinstance(r, dict) and r.get("core_hash")
@@ -90,7 +93,18 @@ def apply_temporal_regime_selection(
         for i, regime in enumerate(regimes)
         if i < len(cr_raw)
     ]
-    preferred_regimes = [regime for regime, mode in tagged if mode == preferred]
+    preferred_regimes = []
+    for regime, mode in tagged:
+        if mode != preferred:
+            continue
+        if preferred == "cohort" and requested_cohort_anchor:
+            # Explicit-anchor candidates must match the resolved semantic
+            # anchor. Unanchored cohort candidates represent the app's
+            # convention-derived anchor and remain admissible.
+            anchor = str(getattr(regime, "cohort_anchor", "") or "")
+            if anchor and anchor != str(requested_cohort_anchor):
+                continue
+        preferred_regimes.append(regime)
     other_regimes = [regime for regime, mode in tagged if mode != preferred]
     ordered = preferred_regimes + other_regimes
 
@@ -416,7 +430,12 @@ def prepare_forecast_subject_entry(
         if isinstance(candidate, dict)
     ]
 
-    rows = apply_temporal_regime_selection(rows, prepared_subject, subject_is_window)
+    rows = apply_temporal_regime_selection(
+        rows,
+        prepared_subject,
+        subject_is_window,
+        requested_cohort_anchor=prepared_subject.get("anchor_node_id"),
+    )
     post_regime_count = len(rows)
 
     hash_counts: Dict[str, int] = {}
@@ -473,13 +492,10 @@ def prepare_forecast_subject_entry(
                 for row in rows
                 if row.get("anchor_day")
             },
-            # 73h #1 Stage 4+: the post-regime-selection snapshot rows so
-            # downstream callers (forecast_runtime → typed merge) can build
-            # SourceKind.SNAPSHOT candidates instead of relying on the
-            # date-set covered_observations filter. Snapshots are now
-            # first-class candidates in `EvidenceSet`; the file path stays
-            # filtered via the merge's intrinsic SNAPSHOT > FILE precedence.
-            "snapshot_rows": list(rows),
+            # Post-regime-selection evidence-superset rows. Downstream
+            # callers translate these rows into typed candidates; they do
+            # not fetch, dedupe, or read graph-side evidence sources.
+            "evidence_superset_rows": list(rows),
             "derivation_result": derivation,
         },
     }

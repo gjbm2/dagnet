@@ -79,6 +79,45 @@ entries:
       Index rebuild. Workspace-prefixed IDs and index invariants —
       warm-start sync overview is sufficient.
 
+  # NOTE: cf-runtime must precede be-runner-cluster — find_matched_entry
+  # returns the first matching entry, and cf-runtime's paths are a subset
+  # of be-runner-cluster's "graph-editor/lib/runner/**" glob.
+  - name: cf-runtime
+    owner: greg
+    paths:
+      - "graph-editor/lib/runner/cohort_forecast_v3.py"
+      - "graph-editor/lib/runner/forecast_runtime.py"
+      - "graph-editor/lib/runner/forecast_state.py"
+      - "graph-editor/lib/runner/forecast_preparation.py"
+      - "graph-editor/lib/runner/forecast_application.py"
+      - "graph-editor/lib/runner/primitive_*.py"
+      - "graph-editor/lib/runner/primitives.py"
+      - "graph-editor/lib/runner/prefix_arrival.py"
+      - "graph-editor/lib/runner/subject_span_composer.py"
+      - "graph-editor/lib/runner/span_kernel.py"
+      - "graph-editor/lib/runner/span_evidence.py"
+      - "graph-editor/lib/runner/span_upstream.py"
+      - "graph-editor/lib/runner/span_adapter.py"
+      - "graph-editor/lib/runner/edge_binding_descriptor.py"
+    required_reads:
+      - docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md
+      - docs/current/codebase/FORECAST_RUNTIME_ARCHITECTURE.md
+      - docs/current/codebase/FORECAST_STACK_DATA_FLOW.md
+      - docs/current/codebase/BE_RUNNER_CLUSTER.md
+      - docs/current/codebase/STATS_SUBSYSTEMS.md
+      - docs/current/codebase/FE_BE_STATS_PARALLELISM.md
+    description: >
+      The conditioned-forecast machinery: cohort_forecast_v3 runtime,
+      primitive substrate, span composition, selected-Cohort reduction,
+      and row projection. This subsystem is delicate and complex, with
+      subtle semantic invariants documented in the canonical trio.
+      Read order: semantics (the rules and the canonical "Implementation
+      invariants" section), runtime (what the code does and why), data
+      flow (I/O and persistence). BE_RUNNER_CLUSTER / STATS_SUBSYSTEMS /
+      FE_BE_STATS_PARALLELISM are also required for placement and
+      orchestration context. The trio exists precisely because edits
+      here without it tend to violate invariants invisibly.
+
   - name: be-runner-cluster
     owner: greg
     paths:
@@ -92,4 +131,6 @@ entries:
       Load-bearing invariants around FE/BE parallelism, regime
       selection, IS conditioning seam, span composition, MECE, and
       runner dispatch via analysis_types.yaml. Edits here without the
-      umbrella doc tend to break invisible contracts.
+      umbrella doc tend to break invisible contracts. Files inside the
+      forecast / CF runtime are scoped under cf-runtime above and
+      additionally require the semantics / runtime / data-flow trio.

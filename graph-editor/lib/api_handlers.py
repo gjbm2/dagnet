@@ -853,12 +853,10 @@ def _fetch_upstream_observations(
                 .get('derivation_result', {})
                 .get('frames', [])
             )
-            # Surface the per-edge result so the caller's per-edge
-            # evidence map can include this carrier edge for downstream
-            # primitive binding. Without this, the caller's
-            # `build_per_edge_upstream_evidence` only sees direct subject
-            # results and the carrier primitive falls through to
-            # PRIOR_ONLY.
+            # Surface the per-edge result so the caller's superset-candidate
+            # translator can include this carrier edge for downstream
+            # primitive binding. Without this, the carrier primitive falls
+            # through to PRIOR_ONLY.
             if per_edge_results_out is not None:
                 _per_edge_entry = prepared_upstream.get('per_edge_result')
                 if _per_edge_entry:
@@ -1690,6 +1688,19 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             serialise_rate_evidence_provenance,
         )
 
+        # Per-edge raw snapshot rows used by the descriptor-built
+        # primitive candidate pool. Seed with the prepared subject
+        # results, then let the shared envelope-aware upstream fetcher
+        # add active-carrier edge results. This keeps admitted evidence on
+        # the fetch-envelope route instead of a local upstream re-fetch.
+        _per_edge_results_by_uuid: Dict[str, Dict[str, Any]] = {}
+        for _entry in per_edge_results or []:
+            _tid = (
+                (_entry.get('subject') or {}).get('target', {}).get('targetId', '')
+            )
+            if _tid:
+                _per_edge_results_by_uuid[str(_tid)] = _entry
+
         _prepared_runtime_v3 = prepare_forecast_runtime_inputs(
             graph_data=graph_data,
             query_from_node=query_from_node,
@@ -1714,7 +1725,8 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             ),
             candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
             upstream_observation_fetcher=_make_envelope_aware_upstream_fetcher(
-                preparation.envelope_plan
+                preparation.envelope_plan,
+                per_edge_results_out=_per_edge_results_by_uuid,
             ),
             upstream_log_prefix='[v3] upstream:',
             p_conditioning_source='snapshot_frames',
@@ -1743,114 +1755,11 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         maturity_rows = []
         if composed_frames and last_edge_id:
             anchor_to_str = preparation.anchor_to
-            # Populate the upstream-edge evidence map for the active-
-            # cohort carrier role. Build `_per_edge_results_by_uuid`
-            # from the target preparation plus an explicit upstream
-            # fetch so every edge in the carrier topology has frames
-            # available to the builder.
-            _per_edge_results_by_uuid: Dict[str, Dict[str, Any]] = {}
-            for _entry in per_edge_results or []:
-                _tid = (
-                    (_entry.get('subject') or {}).get('target', {}).get('targetId', '')
-                )
-                if _tid:
-                    _per_edge_results_by_uuid[str(_tid)] = _entry
-            # Drive an upstream fetch for the carrier closure so frames
-            # are available even on the single-subject path. The legacy
-            # `_fetch_upstream_observations` populates `up_edge_frames`
-            # internally and returns observations; we re-walk the topo
-            # here to surface the frames into our map.
-            try:
-                from runner.span_kernel import _build_span_topology as _Topo
-                from runner.forecast_preparation import (
-                    flatten_candidate_regime_hashes as _flatten_regime,
-                    prepare_forecast_subject_entry as _prep_subj,
-                )
-                from datetime import date as _vdate, timedelta as _vtd
-                _candidate_regimes_by_edge = scenario.get('candidate_regimes_by_edge', {})
-                _carrier_topo = _Topo(
-                    graph_data,
-                    x_node_id=str(anchor_node) if anchor_node else '',
-                    y_node_id=str(query_from_node) if query_from_node else '',
-                ) if anchor_node and query_from_node and anchor_node != query_from_node else None
-                if _carrier_topo and _carrier_topo.edge_list:
-                    _af = subjects[0].get('anchor_from', anchor_from_str)
-                    _at = subjects[0].get('anchor_to', preparation.anchor_to)
-                    _sf = subjects[0].get('sweep_from', _af)
-                    _st = subjects[0].get('sweep_to', _at)
-                    _envelope_plan = preparation.envelope_plan
-                    _by_edge = (
-                        _envelope_plan.by_edge_uuid
-                        if _envelope_plan is not None else {}
-                    )
-                    for _f, _t, _ed in _carrier_topo.edge_list:
-                        _eid = str(_ed.get('uuid') or _ed.get('edge_id') or _ed.get('id') or f'{_f}->{_t}')
-                        if _eid in _per_edge_results_by_uuid:
-                            continue
-                        _regs = _candidate_regimes_by_edge.get(_eid, [])
-                        if not _regs:
-                            continue
-                        _ch, _eh = _flatten_regime(_regs)
-                        if not _ch:
-                            continue
-                        # Per-edge fetch envelope: prefer the principled
-                        # envelope from the request's envelope_plan
-                        # (carrier-rooted arrival map with backward donor
-                        # extension by max(t95+onset) over the carrier
-                        # sub-tree). Fall back to the legacy
-                        # `axis_tau_max * 2 floor 60` heuristic only when
-                        # the envelope_plan has no entry for this edge.
-                        _env = _by_edge.get(_eid)
-                        if _env is not None:
-                            _env_af = _env.anchor_from.isoformat()
-                            _env_at = _env.anchor_to.isoformat()
-                        else:
-                            _lookback = max((axis_tau_max or 0) * 2, 60)
-                            try:
-                                _env_af = (
-                                    _vdate.fromisoformat(_af) - _vtd(days=_lookback)
-                                ).isoformat()
-                            except (ValueError, TypeError):
-                                _env_af = _af
-                            _env_at = _at
-                        _donor = {
-                            'subject_id': f'upstream::{_eid}',
-                            'path_role': 'only',
-                            'param_id': _ed.get('p', {}).get('id', '') or _eid,
-                            'core_hash': _ch,
-                            'equivalent_hashes': _eh,
-                            'slice_keys': [''],
-                            'anchor_from': _af,
-                            'anchor_to': _at,
-                            'sweep_from': _sf,
-                            'sweep_to': _st,
-                            'candidate_regimes': _regs,
-                            'target': {'targetId': _eid},
-                            'from_node': str(_f),
-                            'to_node': str(_t),
-                        }
-                        _prepared = _prep_subj(
-                            subj=_donor,
-                            subject_is_window=True,
-                            log_prefix='[v3 stage6 upstream]',
-                            anchor_from_override=_env_af,
-                            sweep_from_override=_env_af,
-                            envelope_anchor_from=_env_af,
-                            envelope_anchor_to=_env_at,
-                        )
-                        _entry = _prepared.get('per_edge_result')
-                        if _entry:
-                            _per_edge_results_by_uuid[_eid] = _entry
-            except Exception as _carrier_fetch_err:  # pragma: no cover
-                # Upstream fetch is best-effort; on any failure the
-                # carrier role falls back to PRIOR_ONLY for the missing
-                # edges. Log for forensics.
-                print(f"[v3] carrier upstream fetch warn: {_carrier_fetch_err}")
             from runner.cohort_forecast_v3 import (
-                build_per_edge_evidence,
-                build_per_edge_upstream_evidence,
+                build_carrier_superset_candidates_by_edge,
+                build_superset_candidates_by_edge,
             )
-            _stage6_per_edge_evidence = build_per_edge_upstream_evidence(
+            _stage6_per_edge_candidates = build_carrier_superset_candidates_by_edge(
                 graph=graph_data,
                 anchor_node_id=anchor_node,
                 query_from_node=query_from_node,
@@ -1861,7 +1770,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 scenario_id=scenario_id,
             )
             # Non-target subject edges (X → end).
-            _stage_subject_per_edge_evidence = build_per_edge_evidence(
+            _stage_subject_per_edge_candidates = build_superset_candidates_by_edge(
                 graph=graph_data,
                 from_node=query_from_node,
                 to_node=query_to_node,
@@ -1886,14 +1795,14 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 anchor_node_id=anchor_node,
                 is_multi_hop=_is_multi_hop,
                 resolved_override=_v3_resolved_override,
-                evidence_set=_prepared_runtime_v3.evidence_set,
-                evidence_candidates=_prepared_runtime_v3.evidence_candidates,
                 scenario_id=scenario_id,
                 as_at=parse_asat_from_dsl(temporal_dsl),
-                per_edge_upstream_evidence=_stage6_per_edge_evidence,
-                per_edge_subject_evidence=_stage_subject_per_edge_evidence,
-                extra_conditioning_evidence=_prepared_runtime_v3.extra_conditioning_evidence,
+                per_edge_upstream_candidates=_stage6_per_edge_candidates,
+                per_edge_subject_candidates=_stage_subject_per_edge_candidates,
+                per_edge_results_by_uuid=_per_edge_results_by_uuid,
                 show_model_curve=bool(display_settings.get('show_model_curve')),
+                emit_diagnostics=_emit_diagnostics,
+                envelope_plan=preparation.envelope_plan,
             )
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
@@ -1923,6 +1832,11 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                     }
             except Exception as _diag_err:
                 print(f"[v3] WARNING: failed to attach cohort_forensic to _diag: {_diag_err}", flush=True)
+
+        if _emit_diagnostics and maturity_rows:
+            _sel_proj = maturity_rows[0].pop('_selected_cohort_projection', None)
+            if _sel_proj is not None:
+                _diag['selected_cohort_projection'] = _sel_proj
 
         # ── Model curve generation (FE overlay contract) ─────────────
         # The FE chart builder reads model_curve, model_curve_params,
@@ -1964,20 +1878,6 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 subject_result['runtime_provenance'] = _row_runtime_provenance
                 if _emit_diagnostics:
                     _diag['primitive_runtime_provenance'] = _row_runtime_provenance
-
-        # 73h Stage 4 — same prepared E surfaces on both endpoints. The
-        # cohort_maturity_v3 response carries the same `evidence_provenance`
-        # block as `handle_conditioned_forecast` so consumers can audit
-        # parity directly. `maturity_rows` themselves are CHART display
-        # evidence (cohort-row trajectories), distinct from the L4 raw E
-        # reported under `evidence_provenance.totals` — never copy chart
-        # rows into L4 `p.evidence`.
-        _v3_evidence_set = getattr(_prepared_runtime_v3, 'evidence_set', None)
-        if _v3_evidence_set is not None:
-            from evidence_merge import evidence_set_to_response_provenance
-            subject_result['evidence_provenance'] = (
-                evidence_set_to_response_provenance(_v3_evidence_set)
-            )
 
         # Model-curve fields live on every row (model_curve_midpoint /
         # model_curve_fan_* / model_curve_bands). The FE chart builder
@@ -2187,13 +2087,12 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 if target_id:
                     all_per_edge_results[target_id] = entry
 
-            # No early-exit on total_rows == 0. Let the row builder
-            # handle the natural degeneration: zero evidence → prior.
-            # The row builder falls back to _non_latency_rows(fe=None, ...)
-            # which produces a prior-only row set when cohort evidence
-            # cannot be built. Class D (no α/β either) is then a genuine
-            # empty return, caught by the `if maturity_rows:` check
-            # below and routed to skipped_edges there.
+            # No early-exit on total_rows == 0. Let the unified runtime
+            # path handle the natural degeneration: zero evidence →
+            # prior where a usable prior exists. Class D (no α/β either)
+            # is then a genuine empty return, caught by the
+            # `if maturity_rows:` check below and routed to
+            # skipped_edges there.
 
             composed_frames = preparation.composed_frames
             last_edge_id = preparation.last_edge_id
@@ -2281,28 +2180,22 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 })
 
             # ── Call v3 row builder and read scalars ────────────────
-            # Call unconditionally when we have an edge id — the row
-            # builder handles empty frames via the _non_latency_rows
-            # fallback (prior-only rows). Class D (no α/β) produces
-            # an empty maturity_rows and routes to skipped_edges
-            # below. See doc 50 §§2-3.
+            # Call unconditionally when we have an edge id — the unified
+            # runtime path handles empty frames as the prior-only
+            # degeneration when possible. Class D (no α/β) produces an
+            # empty maturity_rows and routes to skipped_edges below.
             if last_edge_id:
                 anchor_to_str = preparation.anchor_to
-                # Build the per-upstream-edge evidence map for the
-                # active-cohort carrier role. ``all_per_edge_results``
-                # is the topological cache populated above (whole-graph
-                # mode iterates in topological order, so upstream
-                # entries are present by the time downstream is
-                # processed). The builder walks the carrier topology
-                # and synthesises an ``EvidenceSet`` per upstream edge
-                # from the cached derivation frames. Edges with no
-                # frames fall back to PRIOR_ONLY at the readout call
-                # site.
+                # Translate already-fetched evidence-superset rows for
+                # carrier and subject primitives into request-pool
+                # candidates. No evidence is read from graph-side source
+                # fields here; the superset interface owns evidence
+                # fetching and deduping.
                 from runner.cohort_forecast_v3 import (
-                    build_per_edge_evidence,
-                    build_per_edge_upstream_evidence,
+                    build_carrier_superset_candidates_by_edge,
+                    build_superset_candidates_by_edge,
                 )
-                _stage6_per_edge_evidence = build_per_edge_upstream_evidence(
+                _stage6_per_edge_candidates = build_carrier_superset_candidates_by_edge(
                     graph=graph_data,
                     anchor_node_id=anchor_node,
                     query_from_node=query_from_node,
@@ -2314,7 +2207,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 # Non-target subject edges (X→end). Walk X→end and
                 # populate evidence per edge from the topo cache.
-                _stage_subject_per_edge_evidence = build_per_edge_evidence(
+                _stage_subject_per_edge_candidates = build_superset_candidates_by_edge(
                     graph=graph_data,
                     from_node=query_from_node,
                     to_node=query_to_node,
@@ -2337,13 +2230,13 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     axis_tau_max=axis_tau_max,
                     anchor_node_id=anchor_node,
                     is_multi_hop=_is_multi_hop,
-                    evidence_set=_prepared_runtime.evidence_set,
-                    evidence_candidates=_prepared_runtime.evidence_candidates,
                     scenario_id=scenario_id,
                     as_at=parse_asat_from_dsl(temporal_dsl),
-                    per_edge_upstream_evidence=_stage6_per_edge_evidence,
-                    per_edge_subject_evidence=_stage_subject_per_edge_evidence,
-                    extra_conditioning_evidence=_prepared_runtime.extra_conditioning_evidence,
+                    per_edge_upstream_candidates=_stage6_per_edge_candidates,
+                    per_edge_subject_candidates=_stage_subject_per_edge_candidates,
+                    per_edge_results_by_uuid=all_per_edge_results,
+                    emit_diagnostics=_emit_diagnostics,
+                    envelope_plan=preparation.envelope_plan,
                 )
 
                 if maturity_rows:
@@ -2385,40 +2278,12 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     completeness = last_row.get('completeness')
                     completeness_sd = last_row.get('completeness_sd')
 
-                    # L4 evidence: report the typed EvidenceSet that was
-                    # prepared for the runtime. Projection must not
-                    # manufacture primitive evidence from compatibility
-                    # metadata (`p_conditioning_evidence`) or raw frame
-                    # totals; those are provenance/display surfaces only.
-                    _evidence_set_for_resp = getattr(
-                        _prepared_runtime, 'evidence_set', None
-                    )
-                    _totals_for_resp = (
-                        getattr(_evidence_set_for_resp, 'totals', None)
-                        if _evidence_set_for_resp is not None
-                        else None
-                    )
-                    evidence_k = (
-                        getattr(_totals_for_resp, 'k', None)
-                        if _totals_for_resp is not None
-                        else None
-                    )
-                    evidence_n = (
-                        getattr(_totals_for_resp, 'n', None)
-                        if _totals_for_resp is not None
-                        else None
-                    )
-
-                    if evidence_k is not None:
-                        try:
-                            evidence_k = int(round(float(evidence_k)))
-                        except (TypeError, ValueError):
-                            evidence_k = None
-                    if evidence_n is not None:
-                        try:
-                            evidence_n = int(round(float(evidence_n)))
-                        except (TypeError, ValueError):
-                            evidence_n = None
+                    # Raw evidence totals are no longer manufactured at
+                    # preparation time. The runtime provenance below reports
+                    # primitive-bound evidence; chart-display evidence stays
+                    # on selected A-clock rows.
+                    evidence_k = None
+                    evidence_n = None
 
                     from runner.forecast_state import _last_forensic
                     # Doc 52 §14.6: subset-conditioning provenance,
@@ -2445,17 +2310,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     _conditioned = first_row.pop('_conditioned', False) if isinstance(first_row, dict) else False
                     _forensic = _last_forensic
 
-                    # 73h §CF Response Provenance Contract: dedicated
-                    # `evidence_provenance` block sourced from the typed
-                    # canonical E. Stays separate from `conditioning`
-                    # (effective-evidence) and from `evidence_k`/`evidence_n`
-                    # (the runtime conditioning seam) on purpose.
                     _evidence_provenance = None
-                    if _evidence_set_for_resp is not None:
-                        from evidence_merge import evidence_set_to_response_provenance
-                        _evidence_provenance = evidence_set_to_response_provenance(
-                            _evidence_set_for_resp
-                        )
 
                     _runtime_provenance = first_row.pop(
                         '_runtime_provenance', None

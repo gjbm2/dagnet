@@ -23,7 +23,7 @@ import { sessionLogService } from '../sessionLogService';
 import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs } from '../meceSliceService';
 import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../../constants/latency';
 import type { ForecastingModelSettings } from '../forecastingSettingsService';
-import { rateOverdispersionPredictiveBeta } from '../lagDistributionUtils';
+import { rateRecentBlockPredictiveBeta, type RecentRateBlockRow } from '../lagDistributionUtils';
 
 export function addEvidenceAndForecastScalars(
   aggregatedData: any,
@@ -266,16 +266,30 @@ export function addEvidenceAndForecastScalars(
     t95Days?: number;
     /** As-of date for maturity + recency weighting. Must be max(window date) when available. */
     asOfDate: Date;
-  }): { mean?: number; weightedN: number; weightedK: number; rawN: number; maturityDays: number; usedAllDaysFallback: boolean } => {
+  }): {
+    mean?: number;
+    weightedN: number;
+    weightedK: number;
+    rawN: number;
+    maturityDays: number;
+    usedAllDaysFallback: boolean;
+    /**
+     * Raw per-day counts plus the same maturity/recency metadata that produced
+     * `weightedN`/`weightedK`. The predictive estimator aggregates these into
+     * recent mature blocks and removes a simple local trend before estimating
+     * residual overdispersion.
+     */
+    matureRateRows: RecentRateBlockRow[];
+  } => {
     const { bestWindow, t95Days: innerT95Days, asOfDate } = args;
     const dates: string[] | undefined = bestWindow?.dates;
     const nDaily: number[] | undefined = bestWindow?.n_daily;
     const kDaily: number[] | undefined = bestWindow?.k_daily;
     if (!Array.isArray(dates) || !Array.isArray(nDaily) || !Array.isArray(kDaily)) {
-      return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays: 0, usedAllDaysFallback: false };
+      return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays: 0, usedAllDaysFallback: false, matureRateRows: [] };
     }
     if (dates.length === 0 || nDaily.length !== dates.length || kDaily.length !== dates.length) {
-      return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays: 0, usedAllDaysFallback: false };
+      return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays: 0, usedAllDaysFallback: false, matureRateRows: [] };
     }
 
     // Mature cutoff: exclude the most recent (ceil(t95)+1) days, which are systematically under-counted for lagged conversions.
@@ -307,6 +321,8 @@ export function addEvidenceAndForecastScalars(
     let weightedK = 0;
     let totalNAll = 0;
     let totalKAll = 0;
+    const matureRateRows: RecentRateBlockRow[] = [];
+    const allRateRowsFallback: RecentRateBlockRow[] = [];
 
     for (let i = 0; i < dates.length; i++) {
       const d = parseDate(dates[i]);
@@ -317,30 +333,48 @@ export function addEvidenceAndForecastScalars(
 
       totalNAll += n;
       totalKAll += k;
+      const ageDays = Math.max(0, (asOfDate.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+      // Track raw rows for the fallback path (no maturity exclusion, weight=1).
+      allRateRowsFallback.push({
+        n,
+        k,
+        weight: 1,
+        blockKey: Math.floor(ageDays / 7),
+        x: ageDays,
+      });
 
       if (d.getTime() > cutoffMs) {
         // Immature day → exclude from baseline forecast
         continue;
       }
 
-      const ageDays = Math.max(0, (asOfDate.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
       // Mirror statisticalEnhancementService: true half-life semantics.
       const w = Math.exp(-Math.LN2 * ageDays / halfLife);
 
       weightedN += w * n;
       weightedK += w * k;
+      matureRateRows.push({
+        n,
+        k,
+        weight: w,
+        blockKey: Math.floor(ageDays / 7),
+        x: ageDays,
+      });
     }
 
     if (weightedN > 0) {
-      return { mean: weightedK / weightedN, weightedN, weightedK, rawN: totalNAll, maturityDays, usedAllDaysFallback: false };
+      return { mean: weightedK / weightedN, weightedN, weightedK, rawN: totalNAll, maturityDays, usedAllDaysFallback: false, matureRateRows };
     }
 
     // Fallback: censoring left no mature days; use full-window mean if available.
+    // Same fallback rows for the dispersion estimator as for the mean — the
+    // mean and dispersion are kept on the same evidence regime under both
+    // the primary and fallback branches.
     if (totalNAll > 0) {
-      return { mean: totalKAll / totalNAll, weightedN: totalNAll, weightedK: totalKAll, rawN: totalNAll, maturityDays, usedAllDaysFallback: true };
+      return { mean: totalKAll / totalNAll, weightedN: totalNAll, weightedK: totalKAll, rawN: totalNAll, maturityDays, usedAllDaysFallback: true, matureRateRows: allRateRowsFallback };
     }
 
-    return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays, usedAllDaysFallback: false };
+    return { mean: undefined, weightedN: 0, weightedK: 0, rawN: 0, maturityDays, usedAllDaysFallback: false, matureRateRows: [] };
   };
 
   // === 2) Forecast scalars (query-time recompute from matching window() slice daily arrays) ===
@@ -710,15 +744,18 @@ export function addEvidenceAndForecastScalars(
         forecastMeanComputed !== undefined && weightedNTotal > 0
           ? Math.sqrt(Math.max(0, forecastMeanComputed * (1 - forecastMeanComputed)) / weightedNTotal)
           : undefined;
-      // Predictive (overdispersion-aware) Beta concentration for the rate, via the
-      // Pearson chi-squared / quasi-likelihood overdispersion estimator on per-day
-      // (n_i, k_i). This is the load-bearing predictive width that the back-end IS
-      // proposal needs in order to discriminate per-particle p draws against cohort
-      // evidence. Without it, IS conditioning on the analytic rate silently becomes
-      // a no-op. Design: docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
+      // Predictive (overdispersion-aware) Beta concentration for the rate.
+      // The FE-topo estimate is intentionally current-regime: same mature rows
+      // and recency weights as the forecast mean, aggregated into weekly blocks
+      // with a simple logit trend removed before residual block variance is
+      // converted to kappa. This keeps smooth historical drift from becoming a
+      // near-uniform predictive Beta.
       const overdispersion =
         forecastMeanComputed !== undefined && weightedNTotal > 0
-          ? rateOverdispersionPredictiveBeta(nMeta as number[], kMeta as number[])
+          ? rateRecentBlockPredictiveBeta(dailyResult.matureRateRows, {
+              mean: forecastMeanComputed,
+              minKappa: 20,
+            })
           : undefined;
       const forecastStdevPredComputed: number | undefined =
         overdispersion !== undefined
@@ -796,6 +833,11 @@ export function addEvidenceAndForecastScalars(
           if (options.t95Source) summaryLines.push(`t95_source: ${options.t95Source}`);
           summaryLines.push(`recency_weight: w=exp(-ln2*age/${effectiveHalfLifeForLog}d)`);
           summaryLines.push(`weighted: N=${Math.round(weightedNTotal)}, K=${Math.round(weightedKTotal)} → forecast=${(forecastMeanComputed * 100).toFixed(2)}%`);
+          if (overdispersion !== undefined && forecastStdevPredComputed !== undefined) {
+            summaryLines.push(
+              `predictive: kappa=${overdispersion.kappa_pred.toFixed(2)}, blocks=${overdispersion.block_count}, stdev_pred=${forecastStdevPredComputed.toFixed(4)}`
+            );
+          }
           if (usedAllDaysFallback) summaryLines.push(`fallback: censoring left no mature days; used full-window mean`);
           if (Array.isArray(meceWarnings) && meceWarnings.length > 0) summaryLines.push(`mece_warnings: ${meceWarnings.join(' | ')}`);
 
@@ -829,6 +871,11 @@ export function addEvidenceAndForecastScalars(
               t95Days: effectiveT95ForLog,
               t95Source: options.t95Source,
               metaDays: datesMeta.length,
+              predictiveKappa: overdispersion?.kappa_pred,
+              predictivePhi: overdispersion?.phi,
+              predictiveBlockCount: overdispersion?.block_count,
+              predictiveExcessVariance: overdispersion?.v_excess,
+              forecastStdevPred: forecastStdevPredComputed,
               switchpoints: winnerRuns.length,
               diagnosticsOn,
             }

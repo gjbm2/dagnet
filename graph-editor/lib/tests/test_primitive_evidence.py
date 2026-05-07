@@ -937,3 +937,197 @@ def test_raw_and_weighted_evidence_are_explicitly_separate_even_when_equal():
     assert isinstance(row.k_weighted, float)
     assert isinstance(row.n, int)
     assert isinstance(row.k, int)
+
+
+# ─── Selected A-clock superset evidence boundary ──────────────────────
+#
+# Regression guards for the strict evidence-superset boundary in
+# docs/current/cohort-maturity-selected-a-clock-evidence-clock-adapter-plan.md.
+# Downstream code must translate already-fetched superset rows into
+# candidates; it must not read `_bayes_evidence` or wrap candidates in
+# per-edge EvidenceSets before building the request pool.
+
+
+def _superset_rows(*, date: str, n: int, k: int) -> list[dict]:
+    return [{
+        "anchor_day": date,
+        "slice_key": f"window({date}:{date})",
+        "core_hash": "superset-core",
+        "retrieved_at": "2026-04-01",
+        "a": n,
+        "x": n,
+        "y": k,
+    }]
+
+
+def test_superset_candidates_admitted_for_non_target_subject_edge():
+    """Multi-hop subject X -> U -> V with fetched superset rows on U -> V.
+    The downstream translator must emit raw candidates, not an EvidenceSet,
+    and must not require graph-side `_bayes_evidence`."""
+    from runner.cohort_forecast_v3 import build_superset_candidates_by_edge
+
+    graph = _make_graph([
+        ('e-x-u', 'u-X', 'u-U', 'X', 'U'),
+        ('e-u-v', 'u-U', 'u-V', 'U', 'V'),
+    ])
+
+    candidates_by_edge = build_superset_candidates_by_edge(
+        graph=graph,
+        from_node='X',
+        to_node='V',
+        per_edge_results_by_uuid={
+            'e-u-v': {
+                'evidence_superset_rows': _superset_rows(date='2026-03-15', n=20, k=8),
+            },
+        },
+        anchor_from='2026-03-01',
+        sweep_to='2026-03-31',
+        as_at=None,
+        scenario_id='scn-1',
+    )
+
+    candidates = candidates_by_edge.get('e-u-v') or candidates_by_edge.get('U->V')
+    assert candidates is not None, (
+        f"Expected candidates for the U->V non-target edge; "
+        f"got keys {list(candidates_by_edge.keys())}"
+    )
+    assert [c.n for c in candidates] == [20]
+    assert [c.k for c in candidates] == [8]
+
+
+def test_descriptor_does_not_read_graph_side_evidence_sources():
+    """The selected A-clock candidate translator must stay behind the
+    evidence-superset interface."""
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "runner"
+        / "edge_binding_descriptor.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_bayes_evidence" not in src
+    assert "bayes_file_evidence_to_candidates" not in src
+
+
+def test_runtime_preparation_does_not_construct_target_evidence():
+    """Target evidence is supplied by the shared superset-candidate path,
+    not by `prepare_forecast_runtime_inputs`."""
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "runner"
+        / "forecast_runtime.py"
+    ).read_text(encoding="utf-8")
+
+    body = src[src.index("def prepare_forecast_runtime_inputs("):]
+    assert "build_candidates_for_descriptor" not in body
+    assert "merge_evidence_candidates" not in body
+    assert "_bayes_evidence" not in body
+
+
+def test_superset_candidates_admitted_by_primitive_local_merge():
+    """End-to-end: superset evidence on a non-target subject edge of a
+    multi-hop subject flows from the descriptor translator through the
+    primitive-local merge with the correct primitive-source-clock
+    arrival weights.
+
+    Multi-hop subject X -> U -> V, fetched superset rows on U -> V (the
+    non-target intermediate edge). The U-rooted arrival weights model
+    the U-arrival distribution induced by the X-rooted prefix in the
+    request; this primitive's binder must admit the supplied candidate on
+    the day it carries.
+    """
+    from runner.cohort_forecast_v3 import build_superset_candidates_by_edge
+
+    graph = _make_graph([
+        ('e-x-u', 'u-X', 'u-U', 'X', 'U'),
+        ('e-u-v', 'u-U', 'u-V', 'U', 'V'),
+    ])
+
+    per_edge = build_superset_candidates_by_edge(
+        graph=graph,
+        from_node='X',
+        to_node='V',
+        per_edge_results_by_uuid={
+            'e-u-v': {
+                'evidence_superset_rows': _superset_rows(date='2026-03-15', n=20, k=8),
+            },
+        },
+        anchor_from='2026-03-01',
+        sweep_to='2026-03-31',
+        as_at=None,
+        scenario_id='scn-1',
+    )
+    candidates = list(per_edge['e-u-v'])
+    assert candidates, "superset translator must emit a candidate for U->V"
+
+    # Build a U-rooted arrival map (window-mode multi-hop with primitive
+    # source U; in window mode the primitive-local clock has identity
+    # weights at the days the primitive's source node carries mass).
+    transitions = {
+        ('X', 'U'): _prim(p=0.5),
+        ('U', 'V'): _prim(p=0.7),
+    }
+    arrival_map = _build_arrival_map(
+        graph, 'U', {'2026-03-15': 1.0}, transitions,
+    )
+
+    transition = TransitionIdentity('U', 'V', 'e-u-v')
+    ev_scope = _evidence_scope()
+    primitive_scope = make_primitive_scope_from_evidence_scope(
+        evidence_scope=ev_scope,
+        model_source_preference='best_available',
+        resolved_source_identity='bayesian',
+    )
+    res = bind_primitive_evidence(
+        transition=transition,
+        primitive_scope=primitive_scope,
+        evidence_scope=ev_scope,
+        candidates=candidates,
+        arrival_weights=arrival_map.get('U'),
+    )
+
+    # Superset evidence is admitted into the weighted view, not silently
+    # dropped to prior-only.
+    assert res.weighted_view is not None
+    assert res.weighted_view.n_weighted_total == pytest.approx(20.0)
+    assert res.weighted_view.k_weighted_total == pytest.approx(8.0)
+    assert res.raw_evidence_set.totals.n == 20
+    assert res.raw_evidence_set.totals.k == 8
+
+
+def test_superset_candidates_admitted_for_active_carrier_edge():
+    """Active cohort A -> X -> end where the carrier A -> X carries
+    fetched superset rows. The carrier translator must emit raw candidates
+    for the A -> X edge without reading graph-side evidence fields."""
+    from runner.cohort_forecast_v3 import build_carrier_superset_candidates_by_edge
+
+    graph = _make_graph([
+        ('e-a-x', 'u-A', 'u-X', 'A', 'X'),
+        ('e-x-v', 'u-X', 'u-V', 'X', 'V'),
+    ])
+
+    candidates_by_edge = build_carrier_superset_candidates_by_edge(
+        graph=graph,
+        anchor_node_id='A',
+        query_from_node='X',
+        per_edge_results_by_uuid={
+            'e-a-x': {
+                'evidence_superset_rows': _superset_rows(date='2026-03-15', n=22, k=14),
+            },
+        },
+        anchor_from='2026-03-01',
+        sweep_to='2026-03-31',
+        as_at=None,
+        scenario_id='scn-1',
+    )
+
+    candidates = candidates_by_edge.get('e-a-x') or candidates_by_edge.get('A->X')
+    assert candidates is not None, (
+        f"Expected candidates for the A->X carrier edge; "
+        f"got keys {list(candidates_by_edge.keys())}"
+    )
+    assert [c.n for c in candidates] == [22]
+    assert [c.k for c in candidates] == [14]

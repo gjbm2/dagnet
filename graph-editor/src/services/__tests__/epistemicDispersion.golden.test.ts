@@ -16,6 +16,8 @@ import {
   chiSquaredCDF,
   epistemicMuSd,
   epistemicSigmaSd,
+  rateOverdispersionPredictiveBeta,
+  rateRecentBlockPredictiveBeta,
 } from '../lagDistributionUtils';
 
 describe('Student-t quantile / CDF', () => {
@@ -168,5 +170,132 @@ describe('downstream contract — values in plausible Bayes posterior range', ()
     const sigmaSd = epistemicSigmaSd(0.6, 20000);
     expect(muSd).toBeLessThan(0.01);
     expect(sigmaSd).toBeLessThan(0.01);
+  });
+});
+
+describe('rateRecentBlockPredictiveBeta — FE-topo predictive-rate estimator', () => {
+  const buildDriftSeries = (days: number, rateStart: number, rateEnd: number, nPerDay: number) => {
+    const nDaily: number[] = [];
+    const kDaily: number[] = [];
+    for (let i = 0; i < days; i++) {
+      const localRate = rateStart + (rateEnd - rateStart) * (i / (days - 1));
+      const k = Math.round(nPerDay * localRate);
+      nDaily.push(nPerDay);
+      kDaily.push(k);
+    }
+    return { nDaily, kDaily };
+  };
+
+  const buildMatureRows = (
+    nDaily: number[],
+    kDaily: number[],
+    immatureTail: number,
+    halfLife: number,
+  ) => {
+    const cutoff = nDaily.length - immatureTail;
+    const rows: Array<{ n: number; k: number; weight: number; blockKey: number; x: number }> = [];
+    const asOfIndex = nDaily.length - 1;
+    for (let i = 0; i < cutoff; i++) {
+      const age = asOfIndex - i;
+      const w = Math.exp(-Math.LN2 * age / halfLife);
+      rows.push({
+        n: nDaily[i],
+        k: kDaily[i],
+        weight: w,
+        blockKey: Math.floor(age / 7),
+        x: age,
+      });
+    }
+    return rows;
+  };
+
+  const betaSd = (alpha: number, beta: number) => {
+    const s = alpha + beta;
+    return Math.sqrt((alpha * beta) / (s * s * (s + 1)));
+  };
+
+  it('keeps smooth production-shaped drift from collapsing analytic predictive kappa near the floor', () => {
+    const { nDaily, kDaily } = buildDriftSeries(190, 0.85, 0.35, 100);
+    const raw = rateOverdispersionPredictiveBeta(nDaily, kDaily);
+    const matureRows = buildMatureRows(nDaily, kDaily, 18, 30);
+    const weightedMean =
+      matureRows.reduce((sum, row) => sum + row.weight * row.k, 0) /
+      matureRows.reduce((sum, row) => sum + row.weight * row.n, 0);
+    const block = rateRecentBlockPredictiveBeta(matureRows, {
+      mean: weightedMean,
+      minKappa: 20,
+    });
+
+    expect(raw).toBeDefined();
+    expect(block).toBeDefined();
+    expect(raw!.kappa_pred).toBeLessThan(20);
+    expect(block!.kappa_pred).toBeGreaterThanOrEqual(20);
+    expect(betaSd(block!.alpha_pred, block!.beta_pred)).toBeLessThan(0.11);
+  });
+
+  it('still widens when recent mature weekly blocks have genuine residual volatility', () => {
+    const days = 140;
+    const nDaily: number[] = [];
+    const kDaily: number[] = [];
+    for (let i = 0; i < days; i++) {
+      const n = 100;
+      const trend = 0.72 - 0.18 * (i / (days - 1));
+      const blockOffset = Math.floor(i / 7) % 2 === 0 ? 0.10 : -0.10;
+      const rate = Math.max(0.05, Math.min(0.95, trend + blockOffset));
+      const k = Math.round(n * rate);
+      nDaily.push(n);
+      kDaily.push(k);
+    }
+    const volatileRows = buildMatureRows(nDaily, kDaily, 18, 30);
+    const smoothSeries = buildDriftSeries(days, 0.72, 0.54, 100);
+    const smooth = buildMatureRows(
+      smoothSeries.nDaily,
+      smoothSeries.kDaily,
+      18,
+      30,
+    );
+    const volatileMean =
+      volatileRows.reduce((sum, row) => sum + row.weight * row.k, 0) /
+      volatileRows.reduce((sum, row) => sum + row.weight * row.n, 0);
+    const smoothMean =
+      smooth.reduce((sum, row) => sum + row.weight * row.k, 0) /
+      smooth.reduce((sum, row) => sum + row.weight * row.n, 0);
+
+    const volatile = rateRecentBlockPredictiveBeta(volatileRows, {
+      mean: volatileMean,
+      minKappa: 1,
+    });
+    const smoothResult = rateRecentBlockPredictiveBeta(smooth, {
+      mean: smoothMean,
+      minKappa: 1,
+    });
+
+    expect(volatile).toBeDefined();
+    expect(smoothResult).toBeDefined();
+    expect(volatile!.kappa_pred).toBeLessThan(smoothResult!.kappa_pred);
+    expect(betaSd(volatile!.alpha_pred, volatile!.beta_pred)).toBeGreaterThan(
+      betaSd(smoothResult!.alpha_pred, smoothResult!.beta_pred),
+    );
+  });
+
+  it('does not emit near-uniform predictive Betas for stationary mature data', () => {
+    const days = 150;
+    const nDaily: number[] = [];
+    const kDaily: number[] = [];
+    for (let i = 0; i < days; i++) {
+      const n = 80;
+      const rate = 0.61 + 0.03 * Math.sin(i * 0.7) + 0.02 * Math.cos(i * 1.1);
+      nDaily.push(n);
+      kDaily.push(Math.round(n * rate));
+    }
+    const rows = buildMatureRows(nDaily, kDaily, 18, 30);
+    const mean =
+      rows.reduce((sum, row) => sum + row.weight * row.k, 0) /
+      rows.reduce((sum, row) => sum + row.weight * row.n, 0);
+    const result = rateRecentBlockPredictiveBeta(rows, { mean, minKappa: 20 });
+
+    expect(result).toBeDefined();
+    expect(result!.kappa_pred).toBeGreaterThanOrEqual(20);
+    expect(betaSd(result!.alpha_pred, result!.beta_pred)).toBeLessThan(0.11);
   });
 });

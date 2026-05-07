@@ -130,6 +130,7 @@ class NodeArrivalWeights:
     weights: Mapping[str, float]
     reach_from_root: float
     provenance: NodeArrivalProvenance
+    root_day_contributions: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
 
     @property
     def is_degraded(self) -> bool:
@@ -137,6 +138,19 @@ class NodeArrivalWeights:
 
     def weight_on(self, calendar_day: str) -> float:
         return float(self.weights.get(calendar_day, 0.0))
+
+    def root_day_shares_on(self, calendar_day: str) -> Mapping[str, float]:
+        total = self.weight_on(calendar_day)
+        if total <= 0.0:
+            return {}
+        contributions = self.root_day_contributions.get(calendar_day, {})
+        if not contributions:
+            return {}
+        return {
+            str(root_day): float(weight) / total
+            for root_day, weight in contributions.items()
+            if float(weight) > 0.0
+        }
 
 
 # ─── The map ───────────────────────────────────────────────────────────
@@ -190,7 +204,7 @@ def _shift_pmf_to_calendar(
     *,
     root_day_weights: Mapping[str, float],
     pmf: np.ndarray,
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]]]:
     """Convolve a normalised root day distribution with a delay PMF.
 
     For each root day ``d_root`` with weight ``w`` and each tau ``t``
@@ -198,6 +212,7 @@ def _shift_pmf_to_calendar(
     calendar day ``d_root + t`` (integer days).
     """
     result: Dict[str, float] = {}
+    contributions: Dict[str, Dict[str, float]] = {}
     for d_root, w_root in root_day_weights.items():
         if w_root <= 0:
             continue
@@ -212,8 +227,11 @@ def _shift_pmf_to_calendar(
             if mass <= 0:
                 continue
             day = (base + timedelta(days=int(t))).isoformat()
-            result[day] = result.get(day, 0.0) + float(w_root) * float(mass)
-    return result
+            contribution = float(w_root) * float(mass)
+            result[day] = result.get(day, 0.0) + contribution
+            by_root = contributions.setdefault(day, {})
+            by_root[d_root] = by_root.get(d_root, 0.0) + contribution
+    return result, contributions
 
 
 def build_prefix_arrival_map(
@@ -284,6 +302,11 @@ def build_prefix_arrival_map(
                 horizon_ratio=1.0,
                 note='root node (raw root_day_weights)',
             ),
+            root_day_contributions={
+                k: {k: float(v)}
+                for k, v in root_day_weights.items()
+                if v > 0
+            },
         ),
     }
 
@@ -340,10 +363,11 @@ def build_prefix_arrival_map(
                 )
                 diagnostics['degraded_count'] += 1
                 continue
-            calendar = _shift_pmf_to_calendar(
+            calendar, calendar_contributions = _shift_pmf_to_calendar(
                 root_day_weights=normalised_root,
                 pmf=pmf,
             )
+            calendar_total = float(sum(calendar.values()))
             calendar_norm = _normalise(calendar)
             if not calendar_norm:
                 nodes[canonical] = _degraded(
@@ -364,6 +388,18 @@ def build_prefix_arrival_map(
                     horizon_ratio=timing.horizon_ratio,
                     note='',
                 ),
+                root_day_contributions={
+                    day: {
+                        root_day: (
+                            float(weight) / calendar_total
+                            if calendar_total > 0.0 else 0.0
+                        )
+                        for root_day, weight in by_root.items()
+                        if weight > 0.0
+                    }
+                    for day, by_root in calendar_contributions.items()
+                    if day in calendar_norm and calendar_total > 0.0
+                },
             )
             diagnostics['composed_count'] += 1
             continue

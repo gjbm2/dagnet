@@ -472,6 +472,157 @@ export function rateOverdispersionPredictiveBeta(
   };
 }
 
+export type RecentRateBlockRow = {
+  n: number;
+  k: number;
+  weight?: number;
+  blockKey?: string | number;
+  x?: number;
+};
+
+export function rateRecentBlockPredictiveBeta(
+  rows: ReadonlyArray<RecentRateBlockRow>,
+  opts?: { mean?: number; minKappa?: number },
+): {
+  alpha_pred: number;
+  beta_pred: number;
+  kappa_pred: number;
+  phi: number;
+  block_count: number;
+  v_excess: number;
+} | undefined {
+  if (!Array.isArray(rows) || rows.length === 0) return undefined;
+
+  const blocks = new Map<string, {
+    n: number;
+    k: number;
+    xWeighted: number;
+    order: number;
+  }>();
+  let totalN = 0;
+  let totalK = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const n = row?.n;
+    const k = row?.k;
+    const w = row?.weight ?? 1;
+    if (
+      !Number.isFinite(n) || !Number.isFinite(k) || !Number.isFinite(w)
+      || n <= 0 || k < 0 || k > n || w <= 0
+    ) {
+      continue;
+    }
+
+    const weightedN = w * n;
+    const weightedK = w * k;
+    if (weightedN <= 0) continue;
+
+    const key = String(row.blockKey ?? i);
+    const x = Number.isFinite(row.x) ? (row.x as number) : i;
+    let block = blocks.get(key);
+    if (!block) {
+      block = { n: 0, k: 0, xWeighted: 0, order: i };
+      blocks.set(key, block);
+    }
+    block.n += weightedN;
+    block.k += weightedK;
+    block.xWeighted += weightedN * x;
+    totalN += weightedN;
+    totalK += weightedK;
+  }
+
+  if (totalN <= 0) return undefined;
+  const mean =
+    opts?.mean !== undefined && Number.isFinite(opts.mean) && opts.mean > 0 && opts.mean < 1
+      ? opts.mean
+      : totalK / totalN;
+  if (!(mean > 0 && mean < 1)) return undefined;
+
+  const blockRows = Array.from(blocks.values())
+    .filter((b) => b.n > 0 && b.k >= 0 && b.k <= b.n)
+    .sort((a, b) => a.order - b.order)
+    .map((b) => ({
+      n: b.n,
+      k: b.k,
+      rate: b.k / b.n,
+      x: b.xWeighted / b.n,
+    }));
+  if (blockRows.length === 0) return undefined;
+
+  const maxKappa = Math.max(1, totalN - 1);
+  const requestedMinKappa =
+    opts?.minKappa !== undefined && Number.isFinite(opts.minKappa) && opts.minKappa > 0
+      ? opts.minKappa
+      : 20;
+  const minKappa = Math.min(requestedMinKappa, maxKappa);
+
+  const clamp01 = (value: number): number => Math.min(Math.max(value, 1e-6), 1 - 1e-6);
+  const logit = (value: number): number => Math.log(value / (1 - value));
+  const logistic = (value: number): number => 1 / (1 + Math.exp(-value));
+
+  let intercept = logit(mean);
+  let slope = 0;
+  if (blockRows.length >= 3) {
+    let sw = 0;
+    let sx = 0;
+    let sy = 0;
+    let sxx = 0;
+    let sxy = 0;
+    for (const block of blockRows) {
+      const weight = block.n;
+      const x = block.x;
+      const y = logit(clamp01((block.k + 0.5) / (block.n + 1)));
+      sw += weight;
+      sx += weight * x;
+      sy += weight * y;
+      sxx += weight * x * x;
+      sxy += weight * x * y;
+    }
+    const denom = sw * sxx - sx * sx;
+    if (Math.abs(denom) > 1e-12) {
+      slope = (sw * sxy - sx * sy) / denom;
+      intercept = (sy - slope * sx) / sw;
+    }
+  }
+
+  let weightSum = 0;
+  let observedVarianceNumerator = 0;
+  let binomialVarianceNumerator = 0;
+  for (const block of blockRows) {
+    const fitted = clamp01(logistic(intercept + slope * block.x));
+    const residual = block.rate - fitted;
+    const weight = block.n;
+    weightSum += weight;
+    observedVarianceNumerator += weight * residual * residual;
+    binomialVarianceNumerator += weight * fitted * (1 - fitted) / block.n;
+  }
+  if (weightSum <= 0) return undefined;
+
+  const observedVariance = observedVarianceNumerator / weightSum;
+  const binomialVariance = binomialVarianceNumerator / weightSum;
+  const vExcess = Math.max(0, observedVariance - binomialVariance);
+  const phi = binomialVariance > 0
+    ? Math.max(1, observedVariance / binomialVariance)
+    : 1;
+
+  const rawKappa =
+    vExcess > 1e-12
+      ? (mean * (1 - mean)) / vExcess - 1
+      : maxKappa;
+  if (!Number.isFinite(rawKappa) || rawKappa <= 0) return undefined;
+
+  const kappaPred = Math.min(maxKappa, Math.max(minKappa, rawKappa));
+  return {
+    alpha_pred: kappaPred * mean,
+    beta_pred: kappaPred * (1 - mean),
+    kappa_pred: kappaPred,
+    phi,
+    block_count: blockRows.length,
+    v_excess: vExcess,
+  };
+}
+
 /**
  * Log-normal CDF.
  * F(t) = Φ((ln(t) - μ) / σ)

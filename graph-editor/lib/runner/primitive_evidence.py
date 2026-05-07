@@ -266,6 +266,7 @@ def bind_primitive_evidence(
             arrival_weight=float(weight),
             n_weighted=float(point.n) * float(weight),
             k_weighted=float(point.k) * float(weight),
+            root_day_shares=dict(arrival_weights.root_day_shares_on(observed)),
         ))
 
     n_total = float(sum(r.n_weighted for r in rows))

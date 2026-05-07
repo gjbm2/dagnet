@@ -15,6 +15,18 @@ below with the materialisation, transport, and CLI changes shipped by
 28-Apr-26). The original project-bayes path now redirects here.
 
 **Cross-references**:
+- [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) —
+  semantic source of truth for the carrier / subject / numerator
+  representation contract this doc serialises. The "Implementation
+  invariants" section there is the canonical engineering reference for
+  the runtime that produces the [I12] response.
+- [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) —
+  what the runtime *inside* the [I10] / [I12] boundary actually does.
+  Where this doc owns I/O contracts and persistence, that doc owns the
+  per-edge `cohort_forecast_v3` runtime: `ResolvedCFRuntime`, primitive
+  conditioning and composition, selected-Cohort reduction, selected
+  A-clock evidence, and row projection. Reading order for a new
+  contributor: semantics → runtime → data flow.
 - [stats-pipeline-schematic.md](stats-pipeline-schematic.md) —
   the single-canvas field-flow schematic for writers, layer bands,
   persistence, and reader dispatch.

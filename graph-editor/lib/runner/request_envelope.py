@@ -411,12 +411,93 @@ def build_request_envelope_plan(
         graph_preference=graph_preference,
     )
 
-    # Subject arrival map rooted at X.
-    subject_arrival_map: Optional[PrefixArrivalMap] = None
-    if subject_resolutions:
-        subject_root_weights = _identity_root_weights(
+    # Carrier arrival map rooted at A on the SELECTED anchor range only.
+    # Built BEFORE the subject map because in active mode (A != X) the
+    # subject's X-day root weights are derived from the carrier's reach
+    # to X — see correction (4) of the 6-May-26 latency-binding discussion.
+    # Donor lookback is computed for diagnostic visibility (it characterises
+    # the carrier chain's slowest tail) but does not extend the attribution
+    # roots: a donor-widened root set diluted single-anchor cohort shares
+    # across phantom roots that the placement filter then discarded, leaving
+    # the carrier surface near-empty for cohort() queries.
+    carrier_arrival_map: Optional[PrefixArrivalMap] = None
+    donor_lookback_days = 0
+    if has_carrier and carrier_resolutions:
+        donor_lookback_days = _resolved_path_tail_days(carrier_resolutions)
+        diagnostics["donor_lookback_days"] = donor_lookback_days
+        carrier_root_weights = _identity_root_weights(
             anchor_from=anchor_from, anchor_to=anchor_to,
         )
+        carrier_identity = PrefixArrivalIdentity(
+            scenario_id=str(scenario_id or ""),
+            request_root=str(anchor_node_id),
+            context_key=None,
+            regime_key=None,
+            as_at=as_at,
+            model_source_preference=str(graph_preference or "best_available"),
+            parameter_fingerprint=fingerprint + "|carrier",
+        )
+        carrier_transitions: Dict[Tuple[str, str], TimingTransitionPrimitive] = {}
+        for transition, resolved in carrier_resolutions:
+            carrier_transitions[
+                (transition.source_node, transition.destination_node)
+            ] = _resolved_to_timing_transition(
+                transition=transition, resolved=resolved
+            )
+        carrier_target_nodes: List[str] = []
+        seen_carrier_nodes: set[str] = set()
+        for transition, _ in carrier_resolutions:
+            for n in (transition.source_node, transition.destination_node):
+                if n not in seen_carrier_nodes:
+                    seen_carrier_nodes.add(n)
+                    carrier_target_nodes.append(n)
+        carrier_arrival_map = build_prefix_arrival_map(
+            graph=dict(graph),
+            root_node_id=str(anchor_node_id),
+            root_day_weights=carrier_root_weights,
+            transitions=carrier_transitions,
+            identity=carrier_identity,
+            max_tau=max_tau,
+            target_node_ids=tuple(carrier_target_nodes) if carrier_target_nodes else None,
+        )
+
+    # Subject arrival map rooted at X.
+    # In active mode (A != X), the subject's X-day root weights must cover
+    # the calendar days where carrier mass is plausibly arriving at X — not
+    # the A-anchor days. _identity_root_weights(anchor_from, anchor_to) was
+    # using the A-day range, which left the subject map's roots orphaned of
+    # any X-days the carrier latency actually populates; the carrier backmap
+    # then had no roots to redistribute through, every subject row landed
+    # off-clock, and subject_coverage collapsed to 0 — invisible dots even
+    # when carrier evidence existed. In window mode (no carrier) and in
+    # cohort(A=X), the cohort range IS the X-day range; identity weights
+    # remain correct.
+    subject_arrival_map: Optional[PrefixArrivalMap] = None
+    if subject_resolutions:
+        if (
+            has_carrier
+            and carrier_arrival_map is not None
+            and str(anchor_node_id) != str(query_from_node)
+        ):
+            x_arrivals = carrier_arrival_map.get(str(query_from_node))
+            if x_arrivals is not None and not x_arrivals.is_degraded and x_arrivals.weights:
+                # Support mask, not distribution. See cohort_forecast_v3.py
+                # rationale: root weights pass through un-normalised and
+                # multiply row n/k at the binder; fractional weights would
+                # deflate CDF observations by 1/N.
+                subject_root_weights = {
+                    str(d): 1.0
+                    for d, w in x_arrivals.weights.items()
+                    if float(w) > 0.0
+                }
+            else:
+                subject_root_weights = _identity_root_weights(
+                    anchor_from=anchor_from, anchor_to=anchor_to,
+                )
+        else:
+            subject_root_weights = _identity_root_weights(
+                anchor_from=anchor_from, anchor_to=anchor_to,
+            )
         subject_identity = PrefixArrivalIdentity(
             scenario_id=str(scenario_id or ""),
             request_root=str(query_from_node),
@@ -440,6 +521,16 @@ def build_request_envelope_plan(
                 if n not in seen:
                     seen.add(n)
                     subject_target_nodes.append(n)
+        _srw_keys = sorted(subject_root_weights.keys()) if subject_root_weights else []
+        print(
+            f"[evi_diag] subject_root_weights: "
+            f"n_days={len(_srw_keys)} "
+            f"first={_srw_keys[0] if _srw_keys else None} "
+            f"last={_srw_keys[-1] if _srw_keys else None} "
+            f"sum={sum(subject_root_weights.values()) if subject_root_weights else 0.0:.4f} "
+            f"source={'carrier_X_arrivals' if has_carrier and carrier_arrival_map is not None and str(anchor_node_id) != str(query_from_node) and (carrier_arrival_map.get(str(query_from_node)) is not None and not carrier_arrival_map.get(str(query_from_node)).is_degraded and carrier_arrival_map.get(str(query_from_node)).weights) else 'identity'}",
+            flush=True,
+        )
         subject_arrival_map = build_prefix_arrival_map(
             graph=dict(graph),
             root_node_id=str(query_from_node),
@@ -450,69 +541,53 @@ def build_request_envelope_plan(
             target_node_ids=tuple(subject_target_nodes) if subject_target_nodes else None,
         )
 
-    # Carrier arrival map rooted at A with backward donor extension.
-    carrier_arrival_map: Optional[PrefixArrivalMap] = None
-    donor_lookback_days = 0
-    if has_carrier and carrier_resolutions:
-        donor_lookback_days = _resolved_path_tail_days(carrier_resolutions)
-        diagnostics["donor_lookback_days"] = donor_lookback_days
-        donor_anchor_from = anchor_from - _timedelta(days=donor_lookback_days)
-        carrier_root_weights = _identity_root_weights(
-            anchor_from=donor_anchor_from, anchor_to=anchor_to,
-        )
-        carrier_identity = PrefixArrivalIdentity(
-            scenario_id=str(scenario_id or ""),
-            request_root=str(anchor_node_id),
-            context_key=None,
-            regime_key=None,
-            as_at=as_at,
-            model_source_preference=str(graph_preference or "best_available"),
-            parameter_fingerprint=fingerprint + f"|carrier|donor={donor_lookback_days}",
-        )
-        carrier_transitions: Dict[Tuple[str, str], TimingTransitionPrimitive] = {}
-        for transition, resolved in carrier_resolutions:
-            carrier_transitions[
-                (transition.source_node, transition.destination_node)
-            ] = _resolved_to_timing_transition(
-                transition=transition, resolved=resolved
-            )
-        carrier_target_nodes: List[str] = []
-        seen = set()
-        for transition, _ in carrier_resolutions:
-            for n in (transition.source_node, transition.destination_node):
-                if n not in seen:
-                    seen.add(n)
-                    carrier_target_nodes.append(n)
-        carrier_arrival_map = build_prefix_arrival_map(
-            graph=dict(graph),
-            root_node_id=str(anchor_node_id),
-            root_day_weights=carrier_root_weights,
-            transitions=carrier_transitions,
-            identity=carrier_identity,
-            max_tau=max_tau,
-            target_node_ids=tuple(carrier_target_nodes) if carrier_target_nodes else None,
-        )
-
-    # Per-edge envelopes.
+    # Per-edge envelopes — superset contract.
+    #
+    # The fetch's `anchor_from..anchor_to` is the snapshot-DB filter on
+    # `anchor_day`. Two slice families share the column with different
+    # semantics: cohort-family rows are keyed by A-day (the cohort
+    # anchor); window-family rows are keyed by X-day (per
+    # `RESERVED_QUERY_TERMS_GLOSSARY` — `anchor_day` is the date users
+    # reached `from_node` in `window()`). The fetch must therefore be a
+    # superset of every clock its consumers read:
+    #
+    #   - `cohort_list` derivation needs A-day rows in the public cohort
+    #     range so all selected anchors are visible.
+    #   - The primitive subject binder admits `WINDOW_SUBJECT_HELPER`
+    #     rows only (`_role_family` → `SliceFamily.WINDOW`); window-
+    #     family rows arrive with `anchor_day = X-day`. In active mode
+    #     (A != X) the X-day support extends past `anchor_to` by the
+    #     carrier's latency and onset, so an A-day-only filter strips
+    #     those rows at the SQL gate and the rate-attributed Y_prefix
+    #     collapses to the single overlap-day's contribution.
+    #
+    # We therefore take the union of the public A-day window and the
+    # per-edge X-day support from the subject arrival map. Downstream
+    # regime-selection and the merge library's role/family gates then
+    # admit each consumer's rows out of the unified row stream.
+    #
+    # In window mode and `cohort(A=X)` the two ranges coincide and the
+    # union is a no-op — matching the legacy degeneracies.
     subject_envs: List[EdgeFetchEnvelope] = []
     for from_id, to_id, edge_dict in subject_edges:
         edge_uuid, edge_id = _edge_uuid_id(edge_dict, from_id, to_id)
-        if subject_arrival_map is None:
-            af, at = anchor_from, anchor_to
-        else:
-            af, at = _envelope_from_arrival_map(
+        env_from, env_to = anchor_from, anchor_to
+        if subject_arrival_map is not None:
+            x_from, x_to = _envelope_from_arrival_map(
                 arrival_map=subject_arrival_map,
                 source_node=str(from_id),
                 fallback_anchor_from=anchor_from,
                 fallback_anchor_to=anchor_to,
             )
+            env_from = min(env_from, x_from)
+            env_to = max(env_to, x_to)
         subject_envs.append(
             EdgeFetchEnvelope(
                 edge_uuid=edge_uuid,
                 edge_id=edge_id,
                 role="subject",
-                anchor_from=af,
-                anchor_to=at,
+                anchor_from=env_from,
+                anchor_to=env_to,
             )
         )
 

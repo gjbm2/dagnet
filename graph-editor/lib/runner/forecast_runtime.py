@@ -107,25 +107,16 @@ class PreparedConditioningEvidence:
 
     Plan §762 — this object is **compatibility metadata**, not a live
     evidence-ownership decider. Evidence ownership for the public
-    response sits on ``ConditionedTransitionPrimitive`` (whose typed
-    ``evidence_merge.EvidenceSet`` is the canonical raw E and whose
-    weighted view is the canonical primitive-local clock-bound evidence).
-    The primitive readout substitution at the row-builder seam consumes
-    a typed ``EvidenceSet`` directly; it does **not** read these totals
-    to decide ownership.
+    response sits on ``ConditionedTransitionPrimitive``. The primitive
+    readout consumes the request's superset-derived candidate pool and
+    binds it against primitive-local runtime clocks; it does **not** read
+    these totals to decide ownership.
 
     Why the field still exists:
       - The legacy fallback path (un-substituted CF requests) reports
         evidence_points / total_x / total_y on the response so callers
         without typed evidence dicts on the graph still see a numeric
         evidence pair.
-      - The synthetic identity-clock resolution can build a minimal
-        ``EvidenceSet`` from these totals when no typed object was
-        threaded through (e.g. in-process tests). The synthesised
-        evidence is then handed to the primitive layer; ownership at
-        that point sits on the primitive, not on this compatibility
-        block.
-
     Retirement is tracked as a follow-up; consumers must read primitive
     provenance for ownership, not these totals."""
     temporal_family: str = 'window'
@@ -1307,18 +1298,6 @@ class PreparedForecastSolveInputs:
     x_provider_overlay: Optional[XProvider] = None
     resolved_override: Optional[Any] = None
     runtime_bundle: Optional[PreparedForecastRuntimeBundle] = None
-    extra_conditioning_evidence: List[tuple] = field(default_factory=list)
-    # Typed canonical E built once per scope (73h Stage 3). Downstream
-    # consumers extract `(age_days, n, k)` tuples into `extra_conditioning_evidence`
-    # for the existing seam; the response surfaces compact provenance.
-    evidence_set: Optional[Any] = None
-    # Raw candidate material before any request-level merge (73n
-    # evidence-clock alignment). The downstream primitive readout owns
-    # per-primitive merge with each primitive's local arrival-weight
-    # date bounds, so the request-level merge in this module must not
-    # be the authoritative gate. `evidence_set` is kept as compatibility
-    # provenance only.
-    evidence_candidates: Optional[List[Any]] = None
 
 
 def _resolve_subject_temporal_mode(
@@ -1443,22 +1422,8 @@ def prepare_forecast_runtime_inputs(
     flag — when False (current default), the typed-merge role is forced
     to `WINDOW_SUBJECT_HELPER` regardless of the resolved temporal mode.
     """
-    from datetime import date as _date
-
     from runner.model_resolver import resolve_model_params
     from runner.span_kernel import compose_span_kernel, mc_span_cdfs
-    from evidence_merge import (
-        EvidenceCandidate,
-        EvidenceRole,
-        EvidenceScope,
-        evidence_dedupe_key,
-        merge_evidence_candidates,
-    )
-    from runner.evidence_adapters import (
-        bayes_file_evidence_to_candidates,
-        reconstructed_asat_to_candidates,
-    )
-
     result = PreparedForecastSolveInputs(
         is_multi_hop=is_multi_hop,
     )
@@ -1785,134 +1750,11 @@ def prepare_forecast_runtime_inputs(
             graph_preference=graph_preference,
         )
 
-        # 73h Stage 3: build canonical scoped E once via the typed merge
-        # library, then derive the legacy `(age_days, n, k)` tuple list
-        # downstream consumers still take. The typed `EvidenceSet` is
-        # stashed on the prepared runtime for response provenance.
-        last_entry = next(
-            (
-                entry for entry in (path_per_edge_results or [])
-                if entry.get('path_role') in ('last', 'only')
-            ),
-            None,
-        )
-        if last_entry is not None:
-            subject = last_entry.get('subject') or {}
-            bayes_evidence = (
-                target_edge.get('_bayes_evidence')
-                if isinstance(target_edge, dict)
-                else None
-            )
-            if isinstance(bayes_evidence, dict):
-                anchor_from_iso = str(subject.get('anchor_from') or '')
-                anchor_to_iso = str(subject.get('anchor_to') or '')
-                if anchor_from_iso and anchor_to_iso:
-                    evidence_scope = EvidenceScope(
-                        role=evidence_role,
-                        subject_from=str(query_from_node or ''),
-                        subject_to=str(query_to_node or ''),
-                        date_from=anchor_from_iso,
-                        date_to=anchor_to_iso,
-                        as_at=as_at,
-                        scenario_id=scenario_id,
-                        anchor=anchor_node_id,
-                    )
-                    file_candidates = bayes_file_evidence_to_candidates(
-                        bayes_evidence,
-                        scope=evidence_scope,
-                    )
-                    # 73h #1 Stage 4+: build first-class snapshot candidates
-                    # from the post-regime-selection `snapshot_rows` plumbed
-                    # by `forecast_preparation.prepare_subject_artifacts`.
-                    # Pre-#1 the runtime carried only file candidates and used
-                    # `snapshot_covered_observations` (a flat (key, day) set)
-                    # to filter file rows on snapshot-covered days. With real
-                    # SourceKind.SNAPSHOT candidates in the merge, the
-                    # library's intrinsic SNAPSHOT > FILE precedence
-                    # handles dedupe automatically — see
-                    # evidence_merge.merge_evidence_candidates Step 5. The
-                    # `snapshot_covered_observations` parameter remains
-                    # available for callers without real snapshot rows
-                    # (Bayes Phase 2 still uses it pending #9).
-                    snapshot_rows = last_entry.get('snapshot_rows') or []
-                    # Adapter args:
-                    #  - `is_window=None` (default) → n=x, k=y (edge rate).
-                    #    Passing `is_window=False` would force n=a (WP8
-                    #    first-edge identity), wrong for generic cohort
-                    #    queries until WP8 admission flips.
-                    #  - `asat_materialised=False` is critical: these are
-                    #    plain BE-direct snapshot reads, NOT FE-asat
-                    #    reconstructions. They must remain subject to
-                    #    normal `retrieved_at` / `as_at` admission, and
-                    #    `EvidenceSet.evidence_provenance.asat_materialised_present`
-                    #    must not be falsely inflated.
-                    snapshot_candidates = reconstructed_asat_to_candidates(
-                        snapshot_rows,
-                        scope=evidence_scope,
-                        asat_materialised=False,
-                    ) if snapshot_rows else []
-                    # Repoint snapshot-source candidates onto the SNAPSHOT
-                    # source kind so the merge's SNAPSHOT > FILE precedence
-                    # applies. The adapter defaults to SourceKind.RECONSTRUCTED
-                    # for the FE-marker asat tier-1 path; on the BE-direct
-                    # path the rows are plain snapshots and dedupe under
-                    # SourceKind.SNAPSHOT alongside file candidates.
-                    from evidence_merge import SourceKind
-                    snapshot_candidates = [
-                        EvidenceCandidate(
-                            source=SourceKind.SNAPSHOT,
-                            identity=c.identity,
-                            coordinate=c.coordinate,
-                            n=c.n,
-                            k=c.k,
-                            provenance=c.provenance,
-                        )
-                        for c in snapshot_candidates
-                    ]
-                    candidates = list(file_candidates) + snapshot_candidates
-                    # 73n evidence-clock alignment: the per-primitive
-                    # merge with arrival-weight-derived date bounds
-                    # happens downstream in `primitive_readout`. The
-                    # request-level merge here is retained as
-                    # compatibility provenance only — `evidence_set` is
-                    # no longer the authoritative input to primitive
-                    # conditioning. Raw candidates flow through as
-                    # `evidence_candidates`.
-                    evidence_set = merge_evidence_candidates(
-                        evidence_scope,
-                        candidates,
-                    )
-                    result.evidence_set = evidence_set
-                    result.evidence_candidates = candidates
-                    extras: list[tuple] = []
-                    for point in evidence_set.points:
-                        # Snapshot-source points already flow into the engine
-                        # via `fe.cohort_list` (built from snapshot frames in
-                        # `build_cohort_evidence_from_frames`). Including them
-                        # here would double-count once `_non_latency_rows`
-                        # pools extras into Σk/Σn (#4) and once
-                        # `compute_forecast_trajectory` consumes them. Extras
-                        # carry only the FILE/RECONSTRUCTED-source residual —
-                        # i.e. the typed-merge points NOT already represented
-                        # in fe.
-                        if point.source == SourceKind.SNAPSHOT:
-                            continue
-                        observed = point.candidate.coordinate.observed_date
-                        retrieved = point.candidate.coordinate.retrieved_at
-                        try:
-                            if retrieved:
-                                age_days = float(
-                                    (
-                                        _date.fromisoformat(retrieved)
-                                        - _date.fromisoformat(observed)
-                                    ).days
-                                )
-                            else:
-                                age_days = 0.0
-                        except ValueError:
-                            age_days = 0.0
-                        extras.append((age_days, point.n, point.k))
-                    result.extra_conditioning_evidence = extras
+        # Evidence is supplied downstream exclusively through the
+        # evidence-superset interface and translated into request-pool
+        # candidates by the row/runtime caller. This preparation layer
+        # resolves model/span metadata only; it does not build target-edge
+        # candidates, merge an EvidenceSet, or read graph-side evidence.
 
     result.runtime_bundle = build_prepared_runtime_bundle(
         mode='window' if is_window else 'cohort',

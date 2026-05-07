@@ -94,13 +94,11 @@ def _edge_sub_probability_density(
     sigma >= 0.1: full lognormal PDF.
     Normalises discrete PDF to sum to 1 before scaling by p.
 
-    Note on discretisation (doc 51 §3.2): this samples the continuous PDF
-    at integer grid points. cumsum(result) at integer τ approximates
-    CDF_continuous(τ + 0.5) — a constant half-bin lead regardless of
-    convolution depth, because integer rounding is unbiased. Attempts to
-    substitute a CDF-difference scheme (P0.1 spike) produced worse bias
-    at depth because ⌈X_A⌉ + ⌈X_B⌉ is on average 1 larger than X_A + X_B,
-    making the compound shift depth-linear instead of constant.
+    Note on discretisation: this returns trapezoidal per-day mass for
+    intervals (τ-1, τ]. cumsum(result) at integer τ approximates
+    CDF_continuous(τ). The returned array remains a discrete
+    sub-probability mass function, so the existing convolution path
+    handles single-hop and multi-hop spans uniformly.
     """
     if p <= 0:
         return np.zeros_like(tau_grid, dtype=float)
@@ -121,11 +119,14 @@ def _edge_sub_probability_density(
             result[idx] = p
         return result
 
-    pdf = _shifted_lognormal_pdf(tau_grid, onset, mu, sigma)
-    pdf_sum = np.sum(pdf)
-    if pdf_sum > 0:
-        pdf = pdf / pdf_sum
-    return p * pdf
+    tau = tau_grid.astype(float, copy=False)
+    pdf_left = _shifted_lognormal_pdf(tau - 1.0, onset, mu, sigma)
+    pdf_right = _shifted_lognormal_pdf(tau, onset, mu, sigma)
+    mass = 0.5 * (pdf_left + pdf_right)
+    mass_sum = np.sum(mass)
+    if mass_sum > 0:
+        mass = mass / mass_sum
+    return p * mass
 
 
 def _build_span_topology(

@@ -56,10 +56,13 @@ Read in order:
 
 ## Modifying statistical/Bayesian/forecasting logic
 - **STATS_SUBSYSTEMS.md** **(full — read FIRST)** — disambiguates the five distinct processing subsystems (Bayes compiler / FE topo pass / BE topo pass / BE CF pass / BE analysis runners); field authority; pipeline sequence; common confusions. Designs that assume any particular pass has run, or propose new "passes", MUST start here.
-- BE_RUNNER_CLUSTER.md **(full if touching `lib/runner/`)** — directory umbrella for the 18.5k LOC BE runner cluster: forecast engine sub-cluster, span kernel, derivation files, model resolver, cohort_forecast lineage
+- **CF / forecast machinery trio** **(full, in this order, if touching `cohort_forecast_v3` or any conditioned-forecast surface)** — these three together are the canonical engineering reference for the runtime; the "Implementation invariants" section in #1 is binding:
+  1. **COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md** — semantic contract: `cohort()` vs `window()`, carrier `A→X` vs subject `X→end`, factorised vs gross-fitted numerator, admissibility matrix, plus the engineering invariants the runtime must preserve
+  2. **FORECAST_RUNTIME_ARCHITECTURE.md** — what happens *inside* the CF kernel: `ResolvedCFRuntime`, primitive conditioning and composition, identity-carrier degeneracy, selected-Cohort reduction, selected A-clock evidence, row projection, public scalars and provenance
+  3. **FORECAST_STACK_DATA_FLOW.md** — labelled-interface (I1–I17) data flow and persistence boundaries around the runtime; CF response → graph apply mapping
+- BE_RUNNER_CLUSTER.md **(full if touching `lib/runner/`)** — directory umbrella for the 18.5k LOC BE runner cluster: forecast engine sub-cluster, span kernel, derivation files, model resolver, cohort_forecast lineage. §3 surfaces the trio above as the maintained engineering references.
 - FE_BE_STATS_PARALLELISM.md **(full)** — FE↔BE topo orchestration detail, CF race mechanics, parity comparison
 - STATISTICAL_DOMAIN_SUMMARY.md **(full)** — underlying statistical models (shifted lognormal, Beta/Binomial, completeness, partial pooling)
-- COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md **(full if touching `cohort()` or multi-hop `window()` analysis semantics)** — fixed-`x` versus anchor-to-`x` denominator behaviour; `x->end` subject progression; single-hop versus multi-hop meaning; gross-fitted evidence/model-var admission rules
 - PROBABILITY_BLENDING.md **(skim)** — blending cohort-mode latency edge probabilities
 - `docs/current/project-bayes/INDEX.md` **(ref)** — canonical Bayes compiler doc index
 - `docs/current/project-bayes/32-posterior-predictive-scoring-design.md` **(ref if touching LOO/ELPD)** — per-edge model adequacy scoring, analytic null comparison

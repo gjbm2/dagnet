@@ -37,6 +37,7 @@ class CandidateRegime:
     core_hash: str
     equivalent_hashes: list[str] = field(default_factory=list)
     temporal_mode: str = ''  # 'window' | 'cohort' | '' (untagged legacy)
+    cohort_anchor: str = ''
 
     def all_hashes(self) -> set[str]:
         """All hashes that belong to this regime (core + equivalents)."""
