@@ -197,6 +197,60 @@ Tests using `window(-1d:)` / `cohort(-1d:)` need a per-test design decision befo
 
 When the authoring intent is ambiguous from code alone, surface to the user — don't pick one silently.
 
+## Tolerance against fixture noise floor
+
+Tests that compare a deterministic chart computation against an MC-simulated oracle (the snapshot-DB synth fixtures are the canonical case) have an irreducible noise floor set by the fixture's effective sample size. A tolerance set tighter than that floor will be seed-flaky by construction — pass on lucky seeds, fail on unlucky ones — even when the chart is correct. Tolerance sizing is therefore an engineering decision keyed on the fixture, not an aspiration to "as tight as possible".
+
+### The arithmetic
+
+For a Bernoulli-cumulative quantity like `evidence_y` at age τ:
+
+- `expected(τ) = N · p_eff(τ)` where `p_eff(τ) = p_AB · p_BC · ... · CDF_path(τ)` (eventual conversion rate × maturity at τ)
+- `σ_oracle(τ) = √(N · p_eff(τ) · (1 − p_eff(τ)))`
+- `σ_relative(τ) = √((1 − p_eff(τ)) / (N · p_eff(τ)))`
+
+For a tolerance `max(floor_abs, rel · expected)` to give a 2σ headroom, the effective relative tolerance must satisfy `rel ≥ 2 · σ_relative + chart_structural_drift`, where `chart_structural_drift` is the deterministic chart-vs-continuous drift (typically a few tenths of a percent for the residual quadrature error in `_interpolated_rate_at`). Below the absolute floor, the floor dominates and the relative term is a no-op.
+
+### The available knobs
+
+When σ_relative exceeds the relative tolerance, three knobs change the noise floor without changing test intent:
+
+1. **Widen the cohort window** (test-side, no fixture regen). σ_relative scales as `1/√n_cohorts`. Going from 3 to 14 cohort days is a 2.1× σ reduction. This is usually the highest-leverage knob because it's a one-line test edit.
+2. **Raise the truth `p` values** (fixture regen required). Pushes `p_eff` toward 1 so `(1 − p_eff)/p_eff` shrinks. Modest 1.5-2× σ reduction at typical `p` choices (0.7→0.9). Bumps expected counts proportionally, which also helps the absolute floor.
+3. **Raise `mean_daily_traffic`** (fixture regen required). Direct `1/√N` lever on per-cell σ. Costs minutes of regen time per 4× bump on flat fixtures.
+
+**What does NOT preserve test intent**:
+
+- `p = 1.0` (eliminates eventual-conversion noise but kills the test's coverage of stochastic dropout).
+- `sigma = 0` on edge lag distributions (degenerates the temporal aggregation).
+- Compressing the truth `n_days` to shrink simulation cost (changes the available retrieval horizon and may break adjacent tests).
+
+### Tolerance sizing recipe
+
+1. **Compute σ_relative at the worst τ** in the test's evaluation band (typically the steepest part of the CDF, where `p_eff(τ)` is mid-range and the variance is largest).
+2. **Measure the chart's structural drift** vs continuous expectation across multiple seeds. Use a probe like `/tmp/probe_drift_profile.py` (preserved with the cohort outside-in tracker). The drift is whatever the deterministic computation can't reduce further.
+3. **Set tolerance** to `max(floor, rel · expected)` where `rel ≥ 2 · σ_relative + |chart_drift|`. The 2σ headroom gives ~95% pass rate per cell; with cumulative correlation the cell-level pass rate is higher than independent cells would suggest, but 2σ is a good default.
+4. **Set the absolute floor** above the cell where the relative term equals the floor — i.e. `floor ≈ rel · expected_at_floor_crossover`. The crossover should sit below the test's evaluation band so the floor doesn't dominate at typical τ.
+
+### Worked example: SIMPLE-flat single-hop
+
+The 9-May-26 close-out of `test_active_single_hop_evidence_matches_selected_a_clock_snapshot_oracle` (see `cohort-outside-in-post-73n-regression-tracker.md`) followed this recipe. At the original fixture (`mean_daily_traffic=20000`, `p_AB=0.7`, `p_BC=0.6`, 3-day cohort), σ_relative at τ=21 was ~1.2%, dwarfing the `max(25, 0.5%)` tolerance. The closure combined:
+
+- Truth-side: `p_AB=0.9`, `p_BC=0.9` (from 0.7/0.6) — a ~1.5× σ_relative reduction.
+- Test-side: cohort `1-Mar-26:14-Mar-26` (from `1-Mar-26:3-Mar-26`) — a ~2.1× reduction (4.7× more anchor days).
+- Tolerance widened from `max(25, 0.5%)` to `max(50, 0.75%)` — set to ~2σ above the post-engineering noise floor (~0.27% σ_relative + ~0.2% chart structural drift).
+
+Combined, these changes left a ~1.9σ engineering headroom under the relative tolerance and a 50-unit absolute floor that the relative term crosses around `expected ≈ 6700`, well below the test's evaluation band.
+
+### Why this matters
+
+A test that fails on some seeds and passes on others is an attractor for two failure modes:
+
+1. **The agent reads same-sign drift across consecutive cumulative cells as a structural bug** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP60), hunts a chart bug that doesn't exist, and ships a "fix" that closes it on the current seed but breaks the next.
+2. **The agent disables the test or marks `xfail`** to make CI green, losing the chart-vs-MC oracle as an acceptance gate.
+
+The right response is to size the test's tolerance against the fixture's actual noise floor, then engineer the fixture if that tolerance is unacceptably loose. Both moves preserve test intent; both leave the chart honest.
+
 ## CLI-driven Python tests run through a daemon by default
 
 Pytest tests under `graph-editor/lib/tests/` that exercise

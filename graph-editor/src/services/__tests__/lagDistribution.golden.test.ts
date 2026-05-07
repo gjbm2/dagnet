@@ -79,13 +79,16 @@ describe('lag distribution maths (golden)', () => {
     expect(fit.sigma).toBeCloseTo(Math.sqrt(2 * Math.log(2)), 12);
   });
 
-  it('fitLagDistribution uses default sigma when mean is missing (but keeps mu from median)', () => {
+  it('fitLagDistribution soft-defaults sigma when mean is missing (mu kept from median, quality flagged)', () => {
     const median = 5;
     const fit = fitLagDistribution(median, undefined, 500);
     expect(fit.mu).toBeCloseTo(Math.log(5), 12);
     // sigma must be exactly the default value from constants
     expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
-    expect(fit.empirical_quality_ok).toBe(true);
+    // Soft default — empirical_quality_ok=false signals "defaulted, not fitted"
+    // so the topo-loop FE_TOPO_FIT_DEFAULTED breadcrumb fires.
+    expect(fit.empirical_quality_ok).toBe(false);
+    expect(fit.quality_failure_reason).toMatch(/mean lag missing/i);
   });
 
   it('fitLagDistribution fails quality gate when totalK is below threshold (but remains stable)', () => {

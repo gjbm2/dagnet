@@ -501,60 +501,76 @@ describe('LAG Lag Distribution Fitting (§5.4)', () => {
       expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
     });
 
-    it('should use default sigma if mean not available', () => {
+    it('should soft-default sigma when mean is missing (quality flagged)', () => {
+      // Real prod case: parameter files / aggregators that supply only median.
+      // New contract: σ = LATENCY_DEFAULT_SIGMA, empirical_quality_ok=false,
+      // reason set so the topo loop emits FE_TOPO_FIT_DEFAULTED.
       const fit = fitLagDistribution(5, undefined, 100);
 
       expect(fit.mu).toBeCloseTo(Math.log(5), 6);
       expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
-      expect(fit.empirical_quality_ok).toBe(true);  // Allow fit with valid median
-      expect(fit.quality_failure_reason).toContain('Mean lag not available');
+      expect(fit.empirical_quality_ok).toBe(false);
+      expect(fit.quality_failure_reason).toMatch(/mean lag missing/i);
     });
 
-    it('should fall back to default sigma if mean/median ratio close to 1 but < 1 (low skew)', () => {
-      // mean slightly less than median (ratio=0.95, >= 0.9): treat as low-skew data, allow to pass
+    it('should return honest σ=0 (Dirac) when mean ≤ median (ratio < 1)', () => {
+      // mean slightly less than median (ratio=0.95): empirically Dirac.
+      // The honest fit is σ=0 — not a default, the actual best estimate.
+      // empirical_quality_ok=true because this IS the fit, not a fallback.
       const fit = fitLagDistribution(10, 9.5, 100);
 
       expect(fit.empirical_quality_ok).toBe(true);
-      expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
+      expect(fit.sigma).toBe(0);
       expect(fit.quality_failure_reason).toContain('< 1.0');
     });
 
-    it('should fail quality gate if mean/median ratio too low (< 0.9)', () => {
-      // mean much less than median (ratio=0.8, < 0.9): quality failure
+    it('should return honest σ=0 (Dirac) when ratio is much less than 1', () => {
+      // ratio=0.8: same Dirac path as ratio=0.95. Pre-rip-out this used to
+      // be a "quality failure < 0.9" rule; that rule is gone — any ratio<1
+      // is honest Dirac.
       const fit = fitLagDistribution(10, 8, 100);
 
-      expect(fit.empirical_quality_ok).toBe(false);
-      expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
-      expect(fit.quality_failure_reason).toContain('ratio too low');
+      expect(fit.empirical_quality_ok).toBe(true);
+      expect(fit.sigma).toBe(0);
+      expect(fit.quality_failure_reason).toContain('< 1.0');
     });
 
-    it('should fail quality gate if mean/median ratio > 3', () => {
-      // Extremely skewed distribution
-      // The max-ratio guardrail is OFF by default (configurable via forecasting settings),
-      // so we only expect a failure when explicitly configured to a small threshold.
+    it('should soft-default sigma when mean/median ratio > max (data outside lognormal regime)', () => {
+      // Extremely skewed distribution — bimodal, contaminated, or onset≈median
+      // (the AGG-004 / cohort-excluded case where median−onset collapses to ε
+      // and the user-space ratio explodes after model-space conversion).
+      // New contract: soft default with quality flagged, not a throw.
       const fit = fitLagDistribution(5, 20, 100, 3);
 
       expect(fit.empirical_quality_ok).toBe(false);
-      expect(fit.quality_failure_reason).toContain('ratio too high');
+      expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
+      expect(fit.quality_failure_reason).toMatch(/outside lognormal regime/i);
     });
 
-    it('should handle zero median', () => {
+    it('should soft-default when median ≤ 0', () => {
+      // Upstream-noise-or-error case: real cohort data shouldn't produce
+      // median=0 (δ(0) territory should set latency_parameter=false), but
+      // the fitter must not propagate Math.log(0) = -Infinity. Soft-default
+      // with mu=0 and sigma=DEFAULT, quality flagged.
       const fit = fitLagDistribution(0, 5, 100);
 
       expect(fit.empirical_quality_ok).toBe(false);
-      expect(fit.quality_failure_reason).toContain('Invalid median');
+      expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
+      expect(Number.isFinite(fit.mu)).toBe(true);
+      expect(fit.quality_failure_reason).toMatch(/invalid median/i);
     });
 
-    it('should handle mean = median (degenerate σ → default)', () => {
-      // When mean = median, ratio = 1, ln(1) = 0, computed σ = 0.
-      // A σ of 0 produces a point-mass (instant latency) which breaks
-      // forecasting, so the guard substitutes LATENCY_DEFAULT_SIGMA.
+    it('should return honest σ=0 (Dirac) when mean = median exactly', () => {
+      // ratio = 1, ln(1) = 0, computed σ = 0. Pre-rip-out this returned
+      // LATENCY_DEFAULT_SIGMA on the theory σ=0 broke forecasting; that
+      // theory was wrong — σ=0 is a legitimate Dirac and downstream code
+      // handles it. New contract: σ=0 with empirical_quality_ok=true.
       const fit = fitLagDistribution(5, 5, 100);
 
       expect(fit.mu).toBeCloseTo(Math.log(5), 6);
-      expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
+      expect(fit.sigma).toBe(0);
       expect(fit.empirical_quality_ok).toBe(true);
-      expect(fit.quality_failure_reason).toContain('degenerate');
+      expect(fit.quality_failure_reason).toMatch(/dirac|≈ 1\.0/i);
     });
   });
 

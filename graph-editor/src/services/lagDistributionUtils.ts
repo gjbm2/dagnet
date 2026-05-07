@@ -662,23 +662,30 @@ export function fitLagDistribution(
   totalK: number,
   maxMeanMedianRatioOverride?: number
 ): LagDistributionFit {
-  // Categories 3 + 4 (mean-missing, garbage input) used to substitute
-  // LATENCY_DEFAULT_SIGMA = 0.5. That fabricates fitted-looking output
-  // from no fit, with no audit trail; downstream consumers can't tell
-  // "fitted" from "made up". We throw instead. Category 1 (data is
-  // effectively Dirac: mean ≈ median, ratio < 1) returns σ=0 — the
-  // honest fit result. Only Category 2 (insufficient converters)
-  // retains the soft default until a separate rip-out lands.
-  if (!Number.isFinite(medianLag)) {
-    throw new Error(
-      `fitLagDistribution: invalid median lag (non-finite): ${String(medianLag)}`,
-    );
-  }
-
-  if (medianLag <= 0) {
-    throw new Error(
-      `fitLagDistribution: invalid median lag (must be > 0 for lognormal): ${medianLag}`,
-    );
+  // Degrade-gracefully contract:
+  //   - Programming errors (non-finite / non-positive median, NaN computed σ)
+  //     throw — these can only come from upstream bugs, not data noise.
+  //   - Real prod cases (mean missing, ratio outside lognormal regime,
+  //     insufficient converters) return a soft default with
+  //     empirical_quality_ok=false + quality_failure_reason. Downstream
+  //     consumers branch on the flag; the topo-loop caller emits a
+  //     session-log breadcrumb so every defaulted fit is auditable.
+  //     Honest Dirac (mean ≤ median or ratio ≈ 1) keeps σ=0 with
+  //     empirical_quality_ok=true — that IS the fit, not a default.
+  if (!Number.isFinite(medianLag) || medianLag <= 0) {
+    // medianLag ≤ 0 / non-finite is upstream-noise-or-error: real cohort data
+    // shouldn't produce it (a Cohort with median=0 is δ(0); upstream should
+    // have set latency_parameter=false), but the fitter must not return
+    // Math.log(0) = -Infinity downstream. Soft-default with mu=0 (i.e. log(1d))
+    // and sigma=DEFAULT, flagged as quality failure so the topo-loop emits
+    // FE_TOPO_FIT_DEFAULTED.
+    return {
+      mu: 0,
+      sigma: LATENCY_DEFAULT_SIGMA,
+      empirical_quality_ok: false,
+      total_k: totalK,
+      quality_failure_reason: `Invalid median lag (must be finite and > 0): ${String(medianLag)}`,
+    };
   }
 
   if (totalK < LATENCY_MIN_FIT_CONVERTERS) {
@@ -694,9 +701,14 @@ export function fitLagDistribution(
   const mu = Math.log(medianLag);
 
   if (meanLag === undefined || meanLag <= 0) {
-    throw new Error(
-      `fitLagDistribution: mean lag missing or non-positive (cannot compute σ from median alone): ${String(meanLag)}`,
-    );
+    return {
+      mu,
+      sigma: LATENCY_DEFAULT_SIGMA,
+      empirical_quality_ok: false,
+      total_k: totalK,
+      quality_failure_reason:
+        `Mean lag missing or non-positive (cannot compute σ from median alone): ${String(meanLag)}`,
+    };
   }
 
   const ratio = meanLag / medianLag;
@@ -720,9 +732,14 @@ export function fitLagDistribution(
       : LATENCY_MAX_MEAN_MEDIAN_RATIO;
 
   if (ratio > maxMeanMedianRatio) {
-    throw new Error(
-      `fitLagDistribution: mean/median ratio ${ratio.toFixed(3)} > max ${maxMeanMedianRatio} (data outside lognormal regime)`,
-    );
+    return {
+      mu,
+      sigma: LATENCY_DEFAULT_SIGMA,
+      empirical_quality_ok: false,
+      total_k: totalK,
+      quality_failure_reason:
+        `Mean/median ratio ${ratio.toFixed(3)} > max ${maxMeanMedianRatio} (data outside lognormal regime)`,
+    };
   }
 
   const sigma = Math.sqrt(2 * Math.log(ratio));

@@ -6,36 +6,15 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
 
 **Forecasting machinery**
 
+- **all py tests to pass**
 - **Atom 2 — de-branch window/active cohort display** — [cohort-maturity-evidence-coverage-design.md §5.2](docs/current/cohort-maturity-evidence-coverage-design.md). Unify window-mode evidence display onto the same `SelectedAClockEvidence` substrate atom 1 introduced; eliminate the `is_active_carrier` branch in the row builder and retire the parallel frame-derived forward-fill (`build_cohort_evidence_from_frames`-based `engine_cohorts.obs_x/obs_y`). Single-hop window numerical content should be identical; multi-hop window drift is investigated case-by-case before landing (the legacy path's window-mode composition was never formally pinned).
 - **Atom 3 — retire legacy reducer-side prefix** — [cohort-maturity-evidence-coverage-design.md §5.3](docs/current/cohort-maturity-evidence-coverage-design.md). Remove the residual `engine_cohorts.obs_x/obs_y` consumption inside the reducer's identity-carrier prefix once atom 2 has unified the display surface. Deferable housekeeping; chart works correctly without it but it prevents the legacy path from re-emerging in future refactors.
 
-- **improve mass calc** 
-  Work To Improve The Mass Calculation
-  The mass calculation should stop treating a mixed observed row as raw people to split across visible cohorts.
-
-  Instead, preserve the source-day axis and calculate selected-cohort mass before summing:
-
-  for each selected cohort C
-    for each source day u
-      selected_mass_at_u = cohort_C mass that reached source day u
-      local_rate_at_u = observed k(u) / n(u)
-      selected_contribution = selected_mass_at_u × local_rate_at_u
-  sum selected_contribution across source days
-  Work required:
-
-  Preserve source_day through placement and evidence-surface building.
-  Store intermediate evidence as cohort -> source_day -> tau, not only cohort -> tau.
-  Forward-fill each source day independently.
-  Compute k/n per source day before summing.
-  Multiply that per-source-day rate by selected-cohort source-day mass.
-  Sum only after those per-source-day contributions are computed.
-  Feed this corrected prefix into both the evidence line and the E+F boundary state.
-  This fixes the core problem: source days no longer disappear before the selected cohort’s mass is applied.
-
 - **C.** Refresh may not trigger CF pass for all scenarios — no doc yet — **investigate**
 - **D.** Once FE vars flows tested, test Bayes vars flows properly — [modelvars audit 30-Apr-26](docs/current/modelvars-flow-forensic-audit-30-Apr-26.md) — **pending FE flow validation**
-- **73n follow-up — migrate `daily_conversions` (73q) and `surprise_gauge` onto `ResolvedCFRuntime`.** The v3 CF row/scalar path is now fully runtime-driven (`compute_cohort_maturity_rows_v3` reads composed primitive draws). `compute_forecast_trajectory` and its `XProvider` / `from_node_arrival` / `compose_timing_span_from_graph` plumbing only survive because two non-CF analyses still use them: `daily_conversions` row annotation + latency bands ([api_handlers.py:3735](graph-editor/lib/api_handlers.py#L3735), [:3826](graph-editor/lib/api_handlers.py#L3826)), and `surprise_gauge` ([api_handlers.py:414](graph-editor/lib/api_handlers.py#L414)). Once both are migrated, the trajectory engine and its legacy timing helpers can be deleted. (v1/v2 retirement is the separate item below.)
+- **migrate `daily_conversions` et al per 73q**. (DOC REQUIRES REVIEW) Once both are migrated, the trajectory engine and its legacy timing helpers can be deleted. (v1/v2 retirement is the separate item below.)
 **RETIRE v1, v2 cohortmaturity** ++ all associated files: docs/current/cohort-maturity-v1-v2-retirement-plan.md 
+
 **Spike B3** work to use cohort() data properly
 - is epist. or predict. banding right on cohortmaturity curve? ...in f mode? in e+f mode?? under degernerate subset -> global case???
 - poss. issue with t95 roundtrip bloating.../ horizon llogic

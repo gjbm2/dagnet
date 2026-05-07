@@ -2614,6 +2614,35 @@ export function enhanceGraphLatencies(
         continue;
       }
 
+      // Audit-trail breadcrumb for graceful degradation. fitLagDistribution
+      // returns a soft default (sigma = LATENCY_DEFAULT_SIGMA, empirical_quality_ok
+      // = false, quality_failure_reason set) for real prod cases — mean missing,
+      // mean/median ratio outside the lognormal regime, insufficient converters.
+      // The hard-throw catch above only fires for genuine programming errors;
+      // the soft-default cases reach here. Without this warning the defaulted
+      // sigma would persist on `model_vars[analytic].latency` invisibly. The
+      // existing `edgeDiag.setLat(..., 'defaulted', reason)` below records the
+      // same fact in the per-edge debug record but is gated behind
+      // feTopoDebugEnabled — silent at info threshold, which is the audit gap.
+      if (latencyStats.fit.empirical_quality_ok === false) {
+        sessionLogService.warning(
+          'graph',
+          'FE_TOPO_FIT_DEFAULTED',
+          `Edge ${edgeId}: latency fit defaulted — ${latencyStats.fit.quality_failure_reason ?? 'unknown reason'}`,
+          undefined,
+          {
+            edgeId,
+            latencyEnabled,
+            aggregateMedianLag,
+            aggregateMeanLag,
+            totalKForFit,
+            sigmaUsed: latencyStats.fit.sigma,
+            muUsed: latencyStats.fit.mu,
+            reason: latencyStats.fit.quality_failure_reason,
+          } as any,
+        );
+      }
+
       // ---------------------------------------------------------------------
       // Compute path_t95 for this edge (Option A: anchor+edge convolution)
       //
@@ -3809,7 +3838,29 @@ export function enhanceGraphLatencies(
           );
           continue;
         }
-        
+
+        // Audit-trail breadcrumb for soft-defaulted cp fit (mirrors base-edge
+        // FE_TOPO_FIT_DEFAULTED above). Hard throws fall into the catch block
+        // and are logged as FE_TOPO_FIT_FAILED. Soft defaults reach here.
+        if (cpLatencyStats.fit.empirical_quality_ok === false) {
+          sessionLogService.warning(
+            'graph',
+            'FE_TOPO_FIT_DEFAULTED',
+            `Edge ${edgeId} cp[${cpIdx}]: conditional fit defaulted — ${cpLatencyStats.fit.quality_failure_reason ?? 'unknown reason'}`,
+            undefined,
+            {
+              edgeId,
+              cpIdx,
+              fitKind: 'conditional_probability',
+              cpMedianLag,
+              cpMeanLag,
+              sigmaUsed: cpLatencyStats.fit.sigma,
+              muUsed: cpLatencyStats.fit.mu,
+              reason: cpLatencyStats.fit.quality_failure_reason,
+            } as any,
+          );
+        }
+
         // Use the computed completeness from cpLatencyStats
         const cpCompleteness = cpLatencyStats.completeness;
         

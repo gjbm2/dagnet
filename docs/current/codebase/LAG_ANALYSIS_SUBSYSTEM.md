@@ -34,6 +34,24 @@ Aggregates lag distributions across context pools mathematically as mixture comp
 - Does **not** average medians (which is mathematically unsound)
 - Each context slice contributes its weight proportionally
 
+## Fit-quality contract: graceful + auditable, never silent
+
+`fitLagDistribution` (`lagDistributionUtils.ts`) degrades gracefully on every input it can't fit cleanly, but every degraded fit must leave a session-log breadcrumb. The function never throws on real-prod inputs.
+
+| Input condition | Return | `empirical_quality_ok` | Breadcrumb |
+|---|---|---|---|
+| Clean fit (1 ≤ ratio ≤ max, totalK ≥ min, mean and median valid) | computed `(μ, σ)` | `true` | none — this is a real fit |
+| Mean = median exactly, or 1 ≤ ratio with computed σ ≈ 0 | `σ = 0` (honest Dirac) | `true` | none — Dirac is a legitimate fit |
+| Mean ≤ median (ratio < 1) | `σ = 0` (honest Dirac at median) | `true` | none — Dirac is a legitimate fit |
+| Mean missing or non-positive | `σ = LATENCY_DEFAULT_SIGMA`, `μ = ln(median)` | `false` | yes |
+| Mean/median ratio > `LATENCY_MAX_MEAN_MEDIAN_RATIO` (data outside lognormal regime) | `σ = LATENCY_DEFAULT_SIGMA`, `μ = ln(median)` | `false` | yes |
+| `totalK < LATENCY_MIN_FIT_CONVERTERS` | `σ = LATENCY_DEFAULT_SIGMA`, `μ = ln(median)` | `false` | yes |
+| Median ≤ 0 or non-finite (upstream-noise-or-error) | `σ = LATENCY_DEFAULT_SIGMA`, `μ = 0` | `false` | yes |
+
+`empirical_quality_ok = false` always carries a `quality_failure_reason` string. The topo-loop caller (`statisticalEnhancementService.ts:enhanceGraphLatencies`) emits a `FE_TOPO_FIT_DEFAULTED` warning to the session log on every false outcome, with the edge id, the reason, and the sigma used. `FE_TOPO_FIT_FAILED` is reserved for genuine programming errors that bubble out of `computeEdgeLatencyStats`.
+
+This matters because `model_vars[analytic].latency` is durable on the source ledger (see `FE_BE_STATS_PARALLELISM.md` for layer semantics). A defaulted σ persists on the edge until re-fitted; without the breadcrumb the user has no way to tell a fitted σ from a defaulted one. Before this contract, soft defaults were silent at info threshold (recorded only via `edgeDiag.setLat(..., 'defaulted', reason)` which is gated behind `feTopoDebugEnabled`). The `FE_TOPO_FIT_DEFAULTED` emission closes that audit gap. Onset-aware fitting (where `toModelSpace` subtracts onset from median before fitting) is the most common trigger: when aggregated onset ≈ aggregated median the model-space ratio explodes past the regime guard, and the soft-default path catches it.
+
 ## Key Files
 
 | File | Role |
