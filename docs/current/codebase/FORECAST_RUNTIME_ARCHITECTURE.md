@@ -5,6 +5,18 @@
 
 This doc describes the current runtime after the primitive substrate, carrier/subject composition, selected-Cohort mass reducer, active-carrier projection, and selected A-clock evidence adapter work landed. Reading order for a new contributor: semantics doc first, this doc second, data-flow doc third.
 
+---
+
+## ⚠️ STOP — read this before editing the runtime
+
+**Defensive coding inside the engine is dangerous and must be avoided** ([INVARIANTS.md](INVARIANTS.md) I-47). No `or 0.0`, no `np.clip`, no `try/except: pass`, no `if x is None: return`, no schema case-forks, no `max(0.0, residual)` clamps.
+
+**Branching by case is the recurring failure mode** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58). Modes differ by which sub-object **degenerates** — identity carrier is data, not a route; `window()` is `cohort()` with carrier-arrival = identity; non-latency is latency with `δ(0)`. If your edit reaches for `if mode == ...` near the centre, the factoring is wrong.
+
+**This is actively policed.** The 21 findings in [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) are debt being retired — not precedent. New defensive patterns or new case-forks will be reverted. Where existing code looks like it sets a precedent for a fallback, you are looking at exactly the debt being tracked.
+
+---
+
 ## 1. The Live Shape
 
 An `[I10]` request enters either the cohort maturity analysis endpoint or the conditioned forecast endpoint. Both surfaces route through `compute_cohort_maturity_rows_v3` in `graph-editor/lib/runner/cohort_forecast_v3.py`; there is no separate row engine for CF scalars.
@@ -202,6 +214,13 @@ The stage-by-stage semantic pseudo-code for this runtime lives in [`FORECAST_RUN
 
 - [`COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) — semantic source of truth for carrier, subject, Pop C, Pop D, and identity degeneracies.
 - [`FORECAST_STACK_DATA_FLOW.md`](FORECAST_STACK_DATA_FLOW.md) — I/O contracts and persistence boundaries.
+- [`CF_PRIMITIVE_SUBSTRATE.md`](CF_PRIMITIVE_SUBSTRATE.md) — the five-layer substrate that produces `ResolvedCFRuntime`; load-bearing invariants (I-47, I-48); the right read before opening `primitives.py` / `primitive_evidence.py` / `primitive_conditioning.py` / `subject_span_composer.py` / `primitive_readout.py`.
+- [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) — the chart engine that consumes the runtime: dual-prefix objects, the seam invariant, the selected-cohort reducer, the row schema, the epoch model.
+- [`CF_DEFENSIVE_FINDINGS.md`](CF_DEFENSIVE_FINDINGS.md) — executive summary of the 21-finding defensive-code audit (`docs/current/cf-defensive-coding-audit.md`); cross-link for the engine's known unfinished work (H-1 monotone-repair clamp, H-4 forecast residual clamp, H-5 identity-carrier branching, M-1 try/except swallows in `cohort_forecast_v3.py`).
+- [`CF_HOLD_OUT_ENGINES.md`](CF_HOLD_OUT_ENGINES.md) — `funnel_engine` / `daily_conversions_derivation` / `cohort_maturity_derivation` parallel paths; legacy trajectory engine status.
+- [`CF_RESIDUAL_GUARD.md`](CF_RESIDUAL_GUARD.md) — edge requirement classification (`primitive_residual_guard.py`).
+- [`DRAW_FAMILY_KEYING.md`](DRAW_FAMILY_KEYING.md) — keyed-RNG seam (`DrawFamilyKey`, `make_rng`, the 13 derivations).
+- [`CF_REFACTOR_TRACKERS.md`](CF_REFACTOR_TRACKERS.md) — index of the in-flight design-doc trackers under `docs/current/` that CF code cites by `§A.*`-style references.
 - [`snapshot-fetch-envelope-design.md`](../snapshot-fetch-envelope-design.md) — evidence acquisition envelope.
 - [`../cohort-maturity-selected-cohort-projection-pattern.md`](../cohort-maturity-selected-cohort-projection-pattern.md) — design lineage for the mass-first selected-Cohort reducer and active-carrier projection.
 - [`../cohort-maturity-mc-wrong-object-problem-statement.md`](../cohort-maturity-mc-wrong-object-problem-statement.md) — problem statement that motivated replacing request-level rate projection for E+F rows.

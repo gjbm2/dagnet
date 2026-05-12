@@ -1105,13 +1105,6 @@ def _evaluate_likelihood_plan(
     ``_conjugate_p_only`` after this refactor (AP53: dead-caller residue
     on the latent side has been removed).
     """
-    if not plan.evaluable:
-        return _ConditioningOutcome(
-            status='prior_only',
-            reason=plan.unevaluable_reason,
-            provenance={'mode': f'prior_only_{plan.unevaluable_reason}'},
-        )
-
     p_rng = make_rng(draw_family_key, 'primitive_p_draws')
     prior_alpha_safe = max(prior_alpha, 1e-12)
     prior_beta_safe = max(prior_beta, 1e-12)
@@ -1142,15 +1135,26 @@ def _evaluate_likelihood_plan(
         cond_beta = max(prior_beta + (n_w - k_w), 1e-12)
         cond_p = p_rng.beta(cond_alpha, cond_beta, size=draw_count)
         prior_p = p_rng.beta(prior_alpha_safe, prior_beta_safe, size=draw_count)
+        # When the plan is unevaluable (empty evidence, no timing grid,
+        # no latent rows) the conjugate update is a numerical no-op and
+        # the posterior equals the prior. Label this for downstream
+        # consumers without forking the maths (I-47 / AP58).
+        degenerate = not plan.evaluable
+        status = 'prior_only' if degenerate else 'conditioned'
+        reason = plan.unevaluable_reason if degenerate else None
+        mode = (
+            f'prior_only_{reason}' if degenerate else 'conjugate_non_latent'
+        )
         return _ConditioningOutcome(
-            status='conditioned',
+            status=status,
+            reason=reason,
             cond_p_draws=cond_p,
             cond_cdf_draws=None,
             prior_p_draws=prior_p,
             prior_cdf_draws=None,
             cohort_aggregate=cohort_aggregate,
             provenance={
-                'mode': 'conjugate_non_latent',
+                'mode': mode,
                 'cohorts_used': len(plan.cohort_latest),
                 'tempering_lambda': 1.0,
                 'ess': float(draw_count),

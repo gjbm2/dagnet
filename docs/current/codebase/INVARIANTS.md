@@ -70,6 +70,16 @@ When the same logical answer is computed across multiple modes (window vs cohort
 
 Chart rows, scalar response fields (e.g. CF `p.mean`, `p_infinity_mean`), graph-enrichment writes, fixture exports, and any other downstream consumer must read the already-resolved runtime object. They must not contain their own carrier, subject-span, population, or maturity logic — that re-derives semantics in the read layer, where the upstream object's choices can be silently reversed and the two answers diverge. If a projection needs information the upstream object doesn't expose, fix the upstream object; do not synthesise the missing piece in the projection. AP 58. See [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) "Implementation invariants" §9 for the canonical statement, [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) §7 for the runtime mechanics (`_project_runtime_rows` reads from runtime surfaces; it does not rebuild them), and `73g-general-purpose-f14-problem-and-invariants.md` for the worked example: a public BE scalar projecting raw under-matured `Σy / Σx` despite the resolved object claiming to be a maturity-aware `p∞`.
 
+### I-47: Engine fallbacks are perimeter-only
+
+The CF engine core is a mathematical object that must degenerate algebraically. No `or 0.0`, `or []`, `if x is None: return`, `np.clip`, `try/except: pass`, `getattr(x, 'p', 0.0) or 0.0`, `max(0.0, residual)`, or fallback-chain inside the engine. All defence, type coercion, validation, and schema normalisation live at the perimeter: `forecast_preparation.py`, `request_envelope.py`, `evidence_adapters.py`, `forecast_runtime.py`, `api_handlers.py`. Missing values propagate as NaN; missing keys raise; out-of-shape inputs refuse at the boundary. Defensive code inside the engine masks invalid inputs without changing answers when inputs are clean, and **blocks fail-fast diagnosis when defective inputs arrive**.
+
+**This is actively policed.** Existing violations are debt to be retired gradually — they are **not precedent for new code**. New defensive patterns inside the CF engine will be reverted. See [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) for the 21 known violations (7 HIGH, 9 MEDIUM, 5 LOW) and `docs/current/cf-defensive-coding-audit.md` for the full audit. Stated principle: "no fallbacks within the engine — all defence, if any needed, should be at the perimeter."
+
+### I-48: Single conditioning locus
+
+`primitive_conditioning.condition_primitive` is the only place where evidence updates a posterior. Composition (`subject_span_composer.compose_primitive_span`), readout (`primitive_readout.compute_resolved_runtime_readout`), the selected-cohort reducer (`_selected_cohort_group_rate_draws`), the row projector (`_project_runtime_rows`), and the legacy trajectory engine (`compute_forecast_trajectory`) all consume already-conditioned primitives — none re-condition. The doc-52 mass-ratio subset policy (`r = min(m_S/m_G, 1)`) is applied **once**, at the primitive layer, never re-applied by composed consumers. The conditioned primitive object is the unit of work the result cache keys; re-conditioning downstream breaks draw-family coherence and busts the cache silently. See [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) §3.1.
+
 ---
 
 ## Hashing and signatures

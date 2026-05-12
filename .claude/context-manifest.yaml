@@ -103,6 +103,13 @@ entries:
       - docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md
       - docs/current/codebase/FORECAST_RUNTIME_ARCHITECTURE.md
       - docs/current/codebase/FORECAST_STACK_DATA_FLOW.md
+      - docs/current/codebase/CF_PRIMITIVE_SUBSTRATE.md
+      - docs/current/codebase/CF_ROW_PIPELINE.md
+      - docs/current/codebase/CF_DEFENSIVE_FINDINGS.md
+      - docs/current/codebase/CF_HOLD_OUT_ENGINES.md
+      - docs/current/codebase/CF_RESIDUAL_GUARD.md
+      - docs/current/codebase/DRAW_FAMILY_KEYING.md
+      - docs/current/codebase/CF_REFACTOR_TRACKERS.md
       - docs/current/codebase/BE_RUNNER_CLUSTER.md
       - docs/current/codebase/STATS_SUBSYSTEMS.md
       - docs/current/codebase/FE_BE_STATS_PARALLELISM.md
@@ -110,13 +117,18 @@ entries:
       The conditioned-forecast machinery: cohort_forecast_v3 runtime,
       primitive substrate, span composition, selected-Cohort reduction,
       and row projection. This subsystem is delicate and complex, with
-      subtle semantic invariants documented in the canonical trio.
+      subtle semantic invariants documented in the canonical trio plus
+      the CF substrate / row pipeline / defensive-findings / hold-out /
+      residual-guard / draw-family-keying / refactor-trackers docs.
       Read order: semantics (the rules and the canonical "Implementation
-      invariants" section), runtime (what the code does and why), data
-      flow (I/O and persistence). BE_RUNNER_CLUSTER / STATS_SUBSYSTEMS /
-      FE_BE_STATS_PARALLELISM are also required for placement and
-      orchestration context. The trio exists precisely because edits
-      here without it tend to violate invariants invisibly.
+      invariants" section), runtime (what the code does and why),
+      data flow (I/O and persistence), then the CF_* substrate detail
+      docs that resolve the §A.*-style references peppering the code.
+      BE_RUNNER_CLUSTER / STATS_SUBSYSTEMS / FE_BE_STATS_PARALLELISM are
+      also required for placement and orchestration context. The full
+      set exists precisely because edits here without it tend to violate
+      invariants invisibly. INVARIANTS I-45, I-46, I-47, I-48 are
+      load-bearing for this scope.
 
   - name: be-runner-cluster
     owner: greg

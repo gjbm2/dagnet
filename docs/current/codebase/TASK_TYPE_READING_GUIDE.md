@@ -60,6 +60,14 @@ Read in order:
   1. **COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md** — semantic contract: `cohort()` vs `window()`, carrier `A→X` vs subject `X→end`, factorised vs gross-fitted numerator, admissibility matrix, plus the engineering invariants the runtime must preserve
   2. **FORECAST_RUNTIME_ARCHITECTURE.md** — what happens *inside* the CF kernel: `ResolvedCFRuntime`, primitive conditioning and composition, identity-carrier degeneracy, selected-Cohort reduction, selected A-clock evidence, row projection, public scalars and provenance
   3. **FORECAST_STACK_DATA_FLOW.md** — labelled-interface (I1–I17) data flow and persistence boundaries around the runtime; CF response → graph apply mapping
+- **CF substrate detail docs** **(full if working inside `lib/runner/primitive_*.py`, `subject_span_composer.py`, `prefix_arrival.py`, or the row pipeline in `cohort_forecast_v3.py`)** — these resolve the `§A.*`-style references that pepper the CF code:
+  1. **CF_PRIMITIVE_SUBSTRATE.md** — the 5-layer substrate (primitives → evidence → conditioning → composition → readout); load-bearing invariants; what each module owns. Read before opening `primitives.py`, `primitive_evidence.py`, `primitive_conditioning.py`, `subject_span_composer.py`, or `primitive_readout.py`.
+  2. **CF_ROW_PIPELINE.md** — the chart engine that consumes the runtime: dual-prefix objects (`_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, `_RateAttributedSubjectPrefix`, `SelectedAClockEvidence`), the seam invariant, the selected-cohort reducer, the row schema (E / E+F / F-mode / model-curve surfaces), the epoch model, the `_root_window_carrier_n_by_anchor_day` admission rule.
+  3. **CF_DEFENSIVE_FINDINGS.md** — executive summary of the 21 audit findings (H-1 through H-7 HIGH severity). Read before adding any defensive code in the engine core; this is what the engine still gets wrong.
+  4. **CF_HOLD_OUT_ENGINES.md** — `funnel_engine`, `daily_conversions_derivation`, `cohort_maturity_derivation`, the legacy trajectory engine (`forecast_state.compute_forecast_trajectory` — DO NOT ADD NEW CALLERS), and the F-1 mass-first reducer unification target.
+  5. **CF_RESIDUAL_GUARD.md** — edge requirement taxonomy (`PARAMETERISED`, `STRUCTURALLY_DETERMINISTIC`, `UNPARAMETERISED_RESIDUAL`, `UNPARAMETERISED_COMPLEMENT`, `PREPARED_SPAN_REJECTED`); why CF refuses `1 − p` sibling derivation.
+  6. **DRAW_FAMILY_KEYING.md** — the keyed-RNG seam, `DrawFamilyKey`, the 13 named derivations, why `scenario_id` is excluded from identity. Read before adding any `np.random.*` call in CF code.
+  7. **CF_REFACTOR_TRACKERS.md** **(ref)** — index of the in-flight design-doc trackers under `docs/current/` (`cohort-1apr-falling-k-problem-statement.md`, `cohort-maturity-evidence-coverage-design.md`, `selected-a-clock-retrieval-frontier-provenance-proposal.md`, `snapshot-fetch-envelope-design.md`, `cohort-outside-in-post-73n-regression-tracker.md`, etc.). Consult when a code comment cites a `§A.4`-style reference.
 - BE_RUNNER_CLUSTER.md **(full if touching `lib/runner/`)** — directory umbrella for the 18.5k LOC BE runner cluster: forecast engine sub-cluster, span kernel, derivation files, model resolver, cohort_forecast lineage. §3 surfaces the trio above as the maintained engineering references.
 - FE_BE_STATS_PARALLELISM.md **(full)** — FE↔BE topo orchestration detail, CF race mechanics, parity comparison
 - STATISTICAL_DOMAIN_SUMMARY.md **(full)** — underlying statistical models (shifted lognormal, Beta/Binomial, completeness, partial pooling)
@@ -189,6 +197,13 @@ Read in order:
 - `TEST_COVERAGE_SURVEY.md` — test coverage analysis
 - `STATE_MANAGEMENT_REFERENCE.md` — state layers reference
 - `BE_RUNNER_CLUSTER.md` — BE runner cluster umbrella (`lib/runner/`)
+- `CF_PRIMITIVE_SUBSTRATE.md` — CF substrate entry point: primitives → evidence → conditioning → composition → readout
+- `CF_ROW_PIPELINE.md` — CF chart engine: dual-prefix objects, selected-cohort reducer, row schema
+- `CF_DEFENSIVE_FINDINGS.md` — audit summary; 21 defensive-code violations in the CF engine
+- `CF_HOLD_OUT_ENGINES.md` — funnel/daily/maturity parallel paths; legacy trajectory engine
+- `CF_RESIDUAL_GUARD.md` — edge requirement refusal taxonomy
+- `DRAW_FAMILY_KEYING.md` — keyed-RNG seam, draw-family coherence
+- `CF_REFACTOR_TRACKERS.md` — index of in-flight CF design-doc trackers under `docs/current/`
 - `HOOKS_INVENTORY.md` — categorical hook inventory
 - `GRAPH_COMPUTE_CLIENT.md` — FE↔Python boundary, normalisers, caching
 - `ANALYSIS_ECHARTS_BUILDERS.md` — chart-rendering cluster umbrella

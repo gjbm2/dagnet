@@ -10,6 +10,44 @@ This folder preserves the design intent, the implementation plan, the failed
 code, and the probe / snapshot evidence so the effort can be resumed later
 without re-discovering context.
 
+## Guiding principle
+
+The engine is a mathematical object: **no fallbacks in the engine — all
+defense, if any is needed, belongs at the perimeter**. The engine should
+degenerate algebraically (NaN propagation, identity composition, empty
+sums) rather than forking on schema, carrier kind, or missing data. The
+generalisation effort and the defensive-coding audit below are two
+expressions of the same goal: collapse parallel code paths into one
+algebra and push validation to the boundary.
+
+## Companion audit — 12-May-26
+
+[cf-defensive-coding-audit.md](cf-defensive-coding-audit.md) — thorough
+read of the CF machinery (Python runner, funnel/bridge engines,
+statistical enhancement, Bayes surface) for defensive coding, fallbacks,
+and forking/branching. 21 findings (7 HIGH / 9 MEDIUM / 5 LOW) plus 5
+separate forking/branching findings. The audit was commissioned
+independently of the generalisation rewrite but converges on the same
+hotspots:
+
+- **H-5 / F-1** — pervasive `is_identity_carrier` branching in
+  `cohort_forecast_v3.py` (20+ sites + a parallel
+  `_synthesize_identity_carrier_observed_surface` helper). This is the
+  same fork the generalisation rewrite tried (and failed) to dissolve;
+  the audit re-frames it as an algebraic degeneracy of one
+  `ComposedPrimitiveSpan` path.
+- **H-2 / F-2** — `funnel_engine.py` substitutes `0.0` for every missing
+  CF scalar before `cumprod`, silently zeroing whole chains. Funnel is
+  one of the "hold-outs" flagged in the recent CF refactor commit.
+- **H-1** — monotone-repair clamp inside engine math at
+  `cohort_forecast_v3.py:3587`, violating the semantic pseudocode's
+  explicit prohibition on upstream repair by clipping.
+
+Use the audit as the **target spec for what the next generalisation
+attempt must remove**, not just the bugs it must avoid. If a future
+rewrite reintroduces any of the 21 findings, it has regressed against
+the principle even if all fixtures pass.
+
 ## Rollback summary
 
 - **Reverted file**: [graph-editor/lib/runner/cohort_forecast_v3.py](../../../graph-editor/lib/runner/cohort_forecast_v3.py)
@@ -24,6 +62,7 @@ without re-discovering context.
 ```
 project-generalise/
 ├── README.md                                               (this file)
+├── cf-defensive-coding-audit.md                            (12-May-26 audit: 21 findings + 5 forks)
 ├── cohort_forecast_v3.generalisation-attempt.py            (the failed rewrite, 6377 lines)
 │
 ├── multi-hop-window-evidence-rate-composition-design.md    (design)
