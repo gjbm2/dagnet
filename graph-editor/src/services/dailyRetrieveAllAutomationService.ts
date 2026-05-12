@@ -128,16 +128,55 @@ class DailyRetrieveAllAutomationService {
 
       const commitMessage = `Daily data refresh (${graphName}) - ${formatDateUK(new Date())}`;
 
-      // Retry once if commit flow detects remote-ahead and requests an additional pull.
-      for (let attempt = 1; attempt <= 2; attempt++) {
+      // Commit MUST succeed at end of retrieve. Pull-then-commit pattern: every
+      // iteration starts with a fresh pull, then commits. If commit races mid-
+      // flight ("Update is not a fast forward" from updateRef step 6 in
+      // gitService.commitAndPushFiles), the next iteration pulls again — which
+      // gives commitFiles a fresh remote-head SHA to use as the new commit's
+      // parent. Without rebuilding on the new head, the commit's parent stays
+      // stale and the push fails forever.
+      const MAX_COMMIT_ATTEMPTS = 20;
+      const isRemoteAhead = (msg: string): boolean => {
+        const lower = msg.toLowerCase();
+        return lower.includes('please commit again')
+            || lower.includes('not a fast forward')
+            || lower.includes('fast-forward');
+      };
+
+      for (let attempt = 1; attempt <= MAX_COMMIT_ATTEMPTS; attempt++) {
         if (shouldAbort?.()) {
           sessionLogService.endOperation(logOpId, 'warning', 'Daily automation aborted before commit');
           return;
         }
 
+        // ── Step 1: PULL ──
+        // Always pull first. Idempotent if remote is already at our state.
+        // After this, workspace.commitSHA matches the remote head, so
+        // commitFiles' internal pre-check is a no-op and the new commit will
+        // be built with the correct parent SHA.
+        try {
+          await repositoryOperationsService.pullLatestRemoteWins(repository, branch);
+        } catch (pullErr) {
+          const pullMsg = pullErr instanceof Error ? pullErr.message : String(pullErr);
+          if (attempt === 1) {
+            // First-attempt pull failure is a real problem (auth, network, etc).
+            sessionLogService.endOperation(logOpId, 'error',
+              `Pull before commit failed: ${pullMsg}`);
+            throw pullErr;
+          }
+          // Mid-retry pull failure: tolerate and let the next commit attempt
+          // either succeed or fail again.
+          sessionLogService.addChild(logOpId, 'warning', 'COMMIT_RETRY_PULL_FAILED',
+            `Pull before retry attempt ${attempt} failed: ${pullMsg}; will try commit anyway`);
+        }
+
+        // ── Step 2: COMMIT ──
         const committable = await repositoryOperationsService.getCommittableFiles(repository, branch);
         if (committable.length === 0) {
-          sessionLogService.addChild(logOpId, 'info', 'COMMIT_SKIPPED', 'No committable files (nothing changed)');
+          sessionLogService.addChild(logOpId, 'info', 'COMMIT_SKIPPED',
+            attempt === 1
+              ? 'No committable files (nothing changed)'
+              : `No committable files after attempt ${attempt} pull (changes may have been merged remotely)`);
           break;
         }
 
@@ -153,15 +192,33 @@ class DailyRetrieveAllAutomationService {
               await repositoryOperationsService.pullLatestRemoteWins(repository, branch);
             }
           );
-          sessionLogService.addChild(logOpId, 'success', 'COMMIT_COMPLETE', `Committed ${committable.length} file(s)`);
+          sessionLogService.addChild(logOpId, 'success', 'COMMIT_COMPLETE',
+            `Committed ${committable.length} file(s)${attempt > 1 ? ` on attempt ${attempt}` : ''}`);
           break;
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          if (msg.includes('please commit again') && attempt < 2) {
-            sessionLogService.addChild(logOpId, 'warning', 'COMMIT_RETRY', 'Commit requested retry after pull; retrying');
-            continue;
+
+          if (!isRemoteAhead(msg)) {
+            // Real error: auth, permissions, validation, network. Bubble up.
+            throw e;
           }
-          throw e;
+
+          if (attempt >= MAX_COMMIT_ATTEMPTS) {
+            sessionLogService.addChild(logOpId, 'error', 'COMMIT_RETRY_EXHAUSTED',
+              `Commit blocked by ${MAX_COMMIT_ATTEMPTS} consecutive remote-ahead races; giving up.`, msg);
+            throw e;
+          }
+
+          // Race during the commit dance. The next iteration's pull will catch
+          // us up; commitFiles will then rebuild the commit with the new parent.
+          // Exponential backoff with jitter — jitter desynchronises us from any
+          // concurrent commit cycle (e.g. the 10-min log-commit loop).
+          const backoffBase = Math.min(1000 * Math.pow(2, attempt - 1), 30_000);
+          const backoffMs = backoffBase + Math.floor(Math.random() * 1000);
+          sessionLogService.addChild(logOpId, 'warning', 'COMMIT_RETRY',
+            `Commit attempt ${attempt} blocked by remote-ahead; will pull and rebuild commit in ${Math.round(backoffMs / 1000)}s`,
+            msg);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
         }
       }
 

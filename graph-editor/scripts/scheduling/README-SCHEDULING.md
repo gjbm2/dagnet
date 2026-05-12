@@ -120,6 +120,19 @@ Removal is built in: use the script menu options **Remove** (by number) or **Cle
 2. Right-click task → **Properties**
 3. Modify settings as needed
 
+## Browser launch flags for long-running automation
+
+The script generates only `--user-data-dir=...` and (optionally) `--app=URL` / `--start-minimized`. Some users have added additional flags (such as `--disable-renderer-backgrounding`, `--disable-backgrounding-occluded-windows`, `--disable-background-timer-throttling`) to defeat perceived background-throttling.
+
+**Be careful with these.** Multi-hour headed Chromium runs are unusual; many "background throttling" flags were designed for short Puppeteer-style test runs and have been observed to interact badly with long sessions on Windows 11 — including, in one investigation, contributing to host-wide unresponsiveness as Windows System Commit grows.
+
+If you add throttling flags, see [`docs/current/debug-crawl/browser-flags-analysis.md`](../../../docs/current/debug-crawl/browser-flags-analysis.md) for a source-cited reference of what each flag does and the trade-offs. Briefly:
+
+- Daily retrieve-all is HTTP-await driven (no rAF in the hot path, all cooldowns ≥15 s). The Chrome timer/visibility throttling these flags target does not affect the loop in practice.
+- The flags' costs (renderer pinned at Normal priority, compositor painting an invisible window for hours) can manifest as host slowdown when the user is at the PC, and as system Commit growth over multi-hour runs.
+
+Independent of any flag question, long-running headed Chromium automation should be considered for periodic process restart (every 60–90 minutes) as a safety net against duration-driven memory accumulation that no flag tuning fully addresses.
+
 ## Auto-Close Behaviour and Run Logs
 
 ### How auto-close works
