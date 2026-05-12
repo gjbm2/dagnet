@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.0b
+**Released:** 12-May-26
+
+Major refactor of the CF machinery. It's mostly done now, and largely generalised -- with a couple of hold outs and some graph work to complete (daily conversions, funnel, bridge). And we need some more bayes testing, for sure. But progress and a PITA of a refactor
+
+---
+
 
 ## Unreleased
 
