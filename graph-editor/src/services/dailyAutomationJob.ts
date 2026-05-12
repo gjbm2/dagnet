@@ -537,11 +537,17 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
 
     // -----------------------------------------------------------------------
     // Upfront pull (remote wins) — ALWAYS, both enumeration and explicit mode.
+    //
+    // `overwriteGraphs: true` makes the pull unconditionally take the remote
+    // version of every graph file (bypassing the 3-way merge). This is the
+    // headless guarantee `?retrieveall` requires: gating fields like
+    // `dailyFetch` and `dataInterestsDSL` must reflect remote before
+    // enumeration, regardless of any drift in local `originalData`.
     // -----------------------------------------------------------------------
     sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_PRE_PULL', 'Pulling latest from Git (remote wins)');
 
     try {
-      const prePullResult = await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal);
+      const prePullResult = await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal, { overwriteGraphs: true });
       if ((prePullResult.conflictsResolved ?? 0) > 0) {
         sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_PRE_PULL_CONFLICTS',
           `Pre-pull resolved ${prePullResult.conflictsResolved} conflict(s) by accepting remote`);

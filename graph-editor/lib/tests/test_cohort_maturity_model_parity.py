@@ -1,22 +1,33 @@
-"""cohort_maturity main-midline == promoted-overlay contract test.
+"""cohort_maturity model-curve analytic-median + band-membership canary.
 
-Invariant: in f-view the main chart's ``model_midpoint`` (unconditioned
-sweep midline, ``p × CDF_path(τ)`` with no evidence conditioning) must
-equal the promoted source's ``model_curve`` overlay at every τ. Bands
-differ legitimately (main fan = predictive via alpha_pred + latency
-dispersions; overlay bands = epistemic) but midlines must match.
+Per-family chart medians must track the closed-form analytic median of
+their own prior:
+
+    model_curve_midpoint  ≈ Beta_median(α, β)        × CDF(τ)   (epistemic)
+    model_midpoint        ≈ Beta_median(α_pred, β_pred) × CDF(τ) (predictive)
+
+Beta_median is the inverse Beta CDF at 0.5 (closed form via scipy).
+``CDF`` is the shifted lognormal at the prior's mean params. The
+oracle invokes no Monte Carlo. Each chart median is checked against
+its own family's analytic anticipation, not the other family's —
+predictive and epistemic medians legitimately differ for skewed
+priors and a cross-family parity check is structurally meaningless
+under the new median-based midline contract.
 
 Three checks per case:
 
-    1. Per-source curves' peaks must approach their own
-       ``forecast_mean`` (within 10%). If a source curve peaks below
-       10% of its forecast_mean, a p-scaling bug is silently
-       suppressing the rate.
+    1. Promoted overlay's peak must reach a meaningful fraction of
+       its ``forecast_mean`` (≥10%). Catches p-scaling bugs that
+       silently suppress the rate.
     2. Promoted overlay must stay within its own
-       ``bayesBandLower`` / ``bayesBandUpper`` envelope at every
-       sampled τ.
-    3. Sampled-τ midline must match overlay within 0.1% relative
-       (with a 1e-6 absolute floor for near-zero rates).
+       ``model_curve_fan_lower`` / ``model_curve_fan_upper`` envelope.
+    3. ``model_midpoint`` and ``model_curve_midpoint`` each track
+       their own per-family analytic-median oracle in the bulk-CDF
+       region.
+
+Multi-hop variants are intentionally out of scope — composing the
+analytic median across multiple edges is not a closed-form expression
+and warrants a separate, composition-aware oracle.
 
 Replaces ``graph-ops/scripts/cohort-maturity-model-parity-test.sh``.
 The bash file is preserved as a thin shim that delegates here.
@@ -25,6 +36,7 @@ The bash file is preserved as a thin shim that delegates here.
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 from pathlib import Path
@@ -32,7 +44,12 @@ from typing import Any, Optional
 
 import pytest
 
-from conftest import requires_data_repo, requires_db, _ensure_synth_ready
+from conftest import (
+    requires_data_repo,
+    requires_db,
+    _ensure_synth_ready,
+    _ensure_bayes_sidecar_for_asat,
+)
 from _daemon_client import DaemonError, get_default_client
 
 
@@ -42,18 +59,26 @@ _ANALYSE_SH = _REPO_ROOT / "graph-ops" / "scripts" / "analyse.sh"
 _PYTHON_BE_URL = os.environ.get("PYTHON_API_URL", "http://localhost:9000")
 
 _GRAPH = "synth-mirror-4step"
+_EDGE_NAME = "m4-delegated-to-registered"
+_WINDOW = "31-Jan-26:15-Mar-26"
+_ASAT = "1-Feb-26"
 
-# Per cohort-maturity-model-parity-test.sh lines 59-61.
-_EPS_REL = 0.001  # 0.1% relative drift acceptable
-_EPS_ABS = 1e-6   # absolute floor for near-zero rates
-_PEAK_FRACTION = 0.10  # source curve peak must reach ≥10% of its forecast_mean
+# Analytic-median oracle tolerance. Mirror of the truth-degeneracy
+# companion — sharp on the epistemic side; predictive carries a
+# bounded second-order CDF-dispersion correction (mu_sd_pred ~ 4×
+# the epistemic mu_sd in the synth fixture).
+_REL_TOL_EPI = 0.015
+_REL_TOL_PRED = 0.04
+_ABS_TOL = 5e-5
+_BULK_CDF_LO = 0.30
+_BULK_CDF_HI = 0.95
+_PEAK_FRACTION = 0.10  # overlay peak must reach ≥10% of its forecast_mean
 
-# Same case matrix as the bash original (lines 258-276).
+# Single-hop only — multi-hop median composition is not a closed-form
+# anticipation and lives in a separate test design.
 _CASES: list[tuple[str, str]] = [
-    ("window_single_hop", "from(m4-delegated).to(m4-registered).window(-90d:)"),
-    ("cohort_single_hop_widened", "from(m4-delegated).to(m4-registered).cohort(-90d:)"),
-    ("cohort_multi_hop", "from(m4-created).to(m4-success).cohort(-90d:)"),
-    ("window_multi_hop", "from(m4-created).to(m4-success).window(-90d:)"),
+    ("window_single_hop", f"from(m4-delegated).to(m4-registered).window({_WINDOW}).asat({_ASAT})"),
+    ("cohort_single_hop_widened", f"from(m4-delegated).to(m4-registered).cohort({_WINDOW}).asat({_ASAT})"),
 ]
 
 
@@ -89,7 +114,7 @@ def _resolve_data_repo_path() -> Optional[str]:
 _DATA_REPO_PATH = _resolve_data_repo_path()
 
 
-def _run_analyse(graph: str, dsl: str) -> dict[str, Any]:
+def _run_analyse_with_sidecar(graph: str, dsl: str, sidecar: Path) -> dict[str, Any]:
     client = get_default_client() if _DATA_REPO_PATH else None
     if client is not None:
         args = [
@@ -97,8 +122,10 @@ def _run_analyse(graph: str, dsl: str) -> dict[str, Any]:
             "--name", graph,
             "--query", dsl,
             "--type", "cohort_maturity",
-            "--no-snapshot-cache",
+            "--no-cache", "--no-snapshot-cache",
             "--format", "json",
+            "--bayes-vars", str(sidecar),
+            "--display", '{"show_model_curve":true}',
         ]
         try:
             return client.call_json("analyse", args)
@@ -109,7 +136,10 @@ def _run_analyse(graph: str, dsl: str) -> dict[str, Any]:
             )
     cmd = [
         "bash", str(_ANALYSE_SH), graph, dsl,
-        "--type", "cohort_maturity", "--no-snapshot-cache", "--format", "json",
+        "--type", "cohort_maturity", "--no-cache", "--no-snapshot-cache",
+        "--format", "json",
+        "--bayes-vars", str(sidecar),
+        "--display", '{"show_model_curve":true}',
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(_REPO_ROOT), timeout=300)
     if result.returncode != 0:
@@ -118,14 +148,37 @@ def _run_analyse(graph: str, dsl: str) -> dict[str, Any]:
     return json.loads(result.stdout[idx:])
 
 
-def _build_tau_map(curve: list[dict[str, Any]]) -> dict[int, float]:
-    out: dict[int, float] = {}
-    for c in curve:
-        tau = c.get("tau_days")
-        rate = c.get("model_rate")
-        if tau is not None and rate is not None:
-            out[int(tau)] = float(rate)
-    return out
+def _shifted_lognormal_cdf(tau: int, *, onset: float, mu: float, sigma: float) -> float:
+    model_age = float(tau) - onset
+    if model_age <= 0 or sigma <= 0:
+        return 0.0
+    z = (math.log(model_age) - mu) / sigma
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+
+def _beta_median(alpha: float, beta: float) -> float:
+    from scipy.stats import beta as _beta_dist
+    return float(_beta_dist.ppf(0.5, alpha, beta))
+
+
+def _read_sidecar_prior(sidecar_path: Path, edge_param_id: str) -> dict[str, float]:
+    sc = json.loads(sidecar_path.read_text())
+    edges = sc.get("webhook_payload_edges") or []
+    edge = next(
+        (e for e in edges if e.get("param_id") == edge_param_id),
+        None,
+    )
+    if edge is None:
+        pytest.fail(f"sidecar missing edge {edge_param_id!r}")
+    slc = (edge.get("slices") or {}).get("window()") or {}
+    required = (
+        "alpha", "beta", "alpha_pred", "beta_pred",
+        "mu_mean", "sigma_mean", "onset_mean",
+    )
+    missing = [k for k in required if slc.get(k) is None]
+    if missing:
+        pytest.fail(f"sidecar slice missing fields for {edge_param_id}: {missing}")
+    return {k: float(slc[k]) for k in required}
 
 
 @requires_db
@@ -137,31 +190,54 @@ def _build_tau_map(curve: list[dict[str, Any]]) -> dict[int, float]:
     ids=[c[0] for c in _CASES],
 )
 def test_main_midline_matches_promoted_overlay(case_name: str, dsl: str) -> None:
-    """main.model_midpoint[τ] == overlay.model_rate[τ] at every sampled τ."""
-    _ensure_synth_ready(_GRAPH, enriched=True, bayesian=False, check_fe_parity=False)
+    """Per-family chart medians track Beta_median × CDF analytic
+    anticipation; overlay stays within its own bands; peak reaches
+    a meaningful fraction of forecast_mean."""
+    _ensure_synth_ready(_GRAPH, enriched=True, bayesian=True, check_fe_parity=False)
 
-    payload = _run_analyse(_GRAPH, dsl)
+    sidecar_str = _ensure_bayes_sidecar_for_asat(_GRAPH, as_at=_ASAT)
+    if sidecar_str is None:
+        pytest.skip(f"[{case_name}] Bayes sidecar unavailable for {_GRAPH}")
+    sidecar_path = Path(sidecar_str)
+
+    prior = _read_sidecar_prior(sidecar_path, _EDGE_NAME)
+    alpha, beta = prior["alpha"], prior["beta"]
+    alpha_pred, beta_pred = prior["alpha_pred"], prior["beta_pred"]
+    mu, sigma, onset = prior["mu_mean"], prior["sigma_mean"], prior["onset_mean"]
+    epi_p_median = _beta_median(alpha, beta)
+    pred_p_median = _beta_median(alpha_pred, beta_pred)
+
+    payload = _run_analyse_with_sidecar(_GRAPH, dsl, sidecar_path)
     result_block = payload.get("result") or payload
 
     metadata = result_block.get("metadata") or {}
-    model_curves = metadata.get("model_curves") or {}
-    if not model_curves:
-        pytest.fail(f"[{case_name}] no model_curves in metadata")
-    entry_key = next(iter(model_curves))
-    entry = model_curves[entry_key]
-
-    overlay_by_tau = _build_tau_map(entry.get("curve") or [])
-    band_upper_by_tau = _build_tau_map(entry.get("bayesBandUpper") or [])
-    band_lower_by_tau = _build_tau_map(entry.get("bayesBandLower") or [])
-    promoted = entry.get("promotedSource") or metadata.get("promoted_source")
+    promoted = result_block.get("promoted_source") or metadata.get("promoted_source")
 
     rows = result_block.get("data") or []
+    overlay_by_tau: dict[int, float] = {}
     midline_by_tau: dict[int, Optional[float]] = {}
+    band_upper_by_tau: dict[int, float] = {}
+    band_lower_by_tau: dict[int, float] = {}
+    forecast_mean: Optional[float] = None
     for r in rows:
         tau = r.get("tau_days")
         if tau is None:
             continue
-        midline_by_tau[int(tau)] = r.get("model_midpoint")
+        tau_i = int(tau)
+        midline_by_tau[tau_i] = r.get("model_midpoint")
+        oc = r.get("model_curve_midpoint")
+        if oc is not None:
+            overlay_by_tau[tau_i] = float(oc)
+        bu = r.get("model_curve_fan_upper")
+        bl = r.get("model_curve_fan_lower")
+        if bu is not None:
+            band_upper_by_tau[tau_i] = float(bu)
+        if bl is not None:
+            band_lower_by_tau[tau_i] = float(bl)
+        if forecast_mean is None:
+            pim = r.get("p_infinity_mean")
+            if pim is not None:
+                forecast_mean = float(pim)
 
     if not overlay_by_tau:
         pytest.fail(f"[{case_name}] overlay curve empty (promoted={promoted})")
@@ -170,61 +246,62 @@ def test_main_midline_matches_promoted_overlay(case_name: str, dsl: str) -> None
     if not band_upper_by_tau or not band_lower_by_tau:
         pytest.fail(f"[{case_name}] promoted overlay band missing")
 
-    # ── Check 1: per-source curves reach a meaningful fraction of forecast_mean ──
-    source_curves = entry.get("sourceModelCurves") or {}
+    # ── Check 1: overlay peak reaches a meaningful fraction of forecast_mean ──
     source_curve_issues: list[str] = []
-    for src_name, src_entry in source_curves.items():
-        src_curve = src_entry.get("curve") or []
-        src_params = src_entry.get("params") or {}
-        src_fm = src_params.get("forecast_mean")
-        if src_fm is None or not src_curve:
-            continue
-        rates = [c["model_rate"] for c in src_curve if c.get("model_rate") is not None]
-        if not rates:
-            continue
-        peak = max(rates)
-        if src_fm > 0 and peak < _PEAK_FRACTION * src_fm:
+    if forecast_mean is not None and forecast_mean > 0:
+        peak = max(overlay_by_tau.values())
+        if peak < _PEAK_FRACTION * forecast_mean:
             source_curve_issues.append(
-                f"{src_name}: peak={peak:.6f} but forecast_mean={src_fm:.6f} "
+                f"{promoted}: peak={peak:.6f} but forecast_mean={forecast_mean:.6f} "
                 f"(<{int(_PEAK_FRACTION*100)}% of expected asymptote — likely p-scaling bug)"
             )
 
-    # ── Sample taus across the curve for the midline/overlay/band checks ──
+    # ── Sample taus in the bulk-CDF region for the analytic-oracle check ──
     common_taus = sorted(set(overlay_by_tau) & set(midline_by_tau))
-    if not common_taus:
-        pytest.fail(f"[{case_name}] no common τ between overlay and midline")
-    tau_max = max(common_taus)
-    sample_candidates = [1, 5, 10, 15, 20, 25, 30, tau_max // 2, tau_max - 1]
-    sample_taus = sorted(set(t for t in sample_candidates if t in overlay_by_tau and t in midline_by_tau))
-    if not sample_taus:
-        sample_taus = common_taus[: min(10, len(common_taus))]
+    bulk_taus: list[int] = []
+    for t in common_taus:
+        cdf_t = _shifted_lognormal_cdf(t, onset=onset, mu=mu, sigma=sigma)
+        if _BULK_CDF_LO <= cdf_t <= _BULK_CDF_HI:
+            bulk_taus.append(t)
+    if not bulk_taus:
+        pytest.fail(
+            f"[{case_name}] no τ in bulk-CDF window "
+            f"[{_BULK_CDF_LO:.2f}, {_BULK_CDF_HI:.2f}]"
+        )
 
     table_lines = [
         f"  promoted source: {promoted}",
-        f"  τ in [{min(common_taus)}, {tau_max}], sampling {len(sample_taus)} points",
-        f"  {'τ':>4}  {'overlay':>10}  {'midline':>10}  {'abs_diff':>10}  {'rel_diff':>8}",
+        f"  Beta_median(epi)  = {epi_p_median:.6f}  (α={alpha:.3f}, β={beta:.3f})",
+        f"  Beta_median(pred) = {pred_p_median:.6f}  "
+        f"(α_pred={alpha_pred:.3f}, β_pred={beta_pred:.3f})",
+        f"  CDF prior params  μ={mu:.4f}  σ={sigma:.4f}  onset={onset:.4f}",
+        f"  τ in [{min(common_taus)}, {max(common_taus)}]; "
+        f"sampling {len(bulk_taus)} bulk points",
+        f"  {'τ':>4}  {'overlay':>10}  {'oracle_e':>10}  "
+        f"{'midline':>10}  {'oracle_p':>10}",
     ]
-    midline_failures: list[tuple[int, float, float, float]] = []
+    epi_failures: list[tuple[int, float, float, float]] = []
+    pred_failures: list[tuple[int, float, float, float]] = []
     band_failures: list[tuple[int, Optional[float], float, Optional[float]]] = []
-    worst_tau: Optional[int] = None
-    worst_rel = 0.0
 
-    for t in sample_taus:
+    for t in bulk_taus:
         overlay = overlay_by_tau[t]
         midline = midline_by_tau.get(t)
-        if midline is None:
-            continue
-        midline_f = float(midline)
-        abs_diff = abs(midline_f - overlay)
-        denom = max(abs(overlay), abs(midline_f), _EPS_ABS)
-        rel_diff = abs_diff / denom
-        marker = " "
-        if abs_diff > _EPS_ABS and rel_diff > _EPS_REL:
-            marker = "!"
-            midline_failures.append((t, overlay, midline_f, rel_diff))
-        if rel_diff > worst_rel:
-            worst_rel = rel_diff
-            worst_tau = t
+        midline_f = float(midline) if midline is not None else None
+        cdf_t = _shifted_lognormal_cdf(t, onset=onset, mu=mu, sigma=sigma)
+        oracle_epi = epi_p_median * cdf_t
+        oracle_pred = pred_p_median * cdf_t
+
+        epi_abs = abs(overlay - oracle_epi)
+        epi_rel = epi_abs / max(abs(oracle_epi), _ABS_TOL)
+        if epi_abs > _ABS_TOL and epi_rel > _REL_TOL_EPI:
+            epi_failures.append((t, overlay, oracle_epi, epi_rel))
+
+        if midline_f is not None:
+            pred_abs = abs(midline_f - oracle_pred)
+            pred_rel = pred_abs / max(abs(oracle_pred), _ABS_TOL)
+            if pred_abs > _ABS_TOL and pred_rel > _REL_TOL_PRED:
+                pred_failures.append((t, midline_f, oracle_pred, pred_rel))
 
         bu = band_upper_by_tau.get(t)
         bl = band_lower_by_tau.get(t)
@@ -232,8 +309,9 @@ def test_main_midline_matches_promoted_overlay(case_name: str, dsl: str) -> None
             band_failures.append((t, bl, overlay, bu))
 
         table_lines.append(
-            f" {marker}{t:>4}  {overlay:>10.6f}  {midline_f:>10.6f}  "
-            f"{abs_diff:>10.6f}  {rel_diff*100:>7.2f}%"
+            f"  {t:>4}  {overlay:>10.6f}  {oracle_epi:>10.6f}  "
+            f"{(midline_f if midline_f is not None else 0):>10.6f}  "
+            f"{oracle_pred:>10.6f}"
         )
 
     failures: list[str] = []
@@ -244,16 +322,28 @@ def test_main_midline_matches_promoted_overlay(case_name: str, dsl: str) -> None
         failures.append("promoted overlay left its own band:")
         for t, bl, o, bu in band_failures[:5]:
             failures.append(f"  τ={t}: band=[{bl}, {bu}] overlay={o}")
-    if midline_failures:
+    if epi_failures:
         failures.append(
-            f"midline differs from overlay at {len(midline_failures)} τ "
-            f"(worst: τ={worst_tau}, rel={worst_rel*100:.2f}%) — "
-            "overlay path CDF diverges from main chart sweep."
+            f"epistemic overlay drift vs Beta_median(α, β)·CDF "
+            f"at {len(epi_failures)} τ (tol {_REL_TOL_EPI*100:.1f}% rel):"
         )
+        for t, ov, orc, rel in epi_failures[:5]:
+            failures.append(
+                f"  τ={t}: overlay={ov:.6f} oracle={orc:.6f} ({rel*100:.2f}% rel)"
+            )
+    if pred_failures:
+        failures.append(
+            f"predictive midline drift vs Beta_median(α_pred, β_pred)·CDF "
+            f"at {len(pred_failures)} τ (tol {_REL_TOL_PRED*100:.1f}% rel):"
+        )
+        for t, mid, orc, rel in pred_failures[:5]:
+            failures.append(
+                f"  τ={t}: midline={mid:.6f} oracle={orc:.6f} ({rel*100:.2f}% rel)"
+            )
 
     if failures:
         report = (
-            f"\n[{case_name}] cohort_maturity model parity violated\n"
+            f"\n[{case_name}] cohort_maturity model-curve canary violated\n"
             + "\n".join(table_lines)
             + "\n\n"
             + "\n".join(failures)

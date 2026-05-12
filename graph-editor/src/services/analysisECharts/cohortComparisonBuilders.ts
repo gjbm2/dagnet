@@ -169,6 +169,8 @@ export function buildCohortMaturityEChartsOption(
     tauDays: number;
     baseRate: number | null;
     projectedRate: number | null;
+    rateBlended: number | null;
+    applicableCoverage: number | null;
     midpoint: number | null;
     fanUpper: number | null;
     fanLower: number | null;
@@ -221,6 +223,8 @@ export function buildCohortMaturityEChartsOption(
       tauDays: tau,
       baseRate: parse(r?.rate),
       projectedRate: parse(r?.projected_rate),
+      rateBlended: parse(r?.rate_blended),
+      applicableCoverage: parse(r?.applicable_coverage),
       midpoint: parse(r?.midpoint),
       fanUpper: parse(r?.fan_upper),
       fanLower: parse(r?.fan_lower),
@@ -333,8 +337,8 @@ export function buildCohortMaturityEChartsOption(
         ? Number(extSetting)
         : (maxTau ?? sFutureMax);
 
-      const evidenceData: number[][] = [];
-      const forecastData: number[][] = [];
+      const evidenceData: (number | null)[][] = [];
+      const forecastData: (number | null)[][] = [];
       for (const p of points) {
         if (p.tauDays >= countTauMax) continue;
         const ey = p.evidenceY ?? null;
@@ -480,8 +484,10 @@ export function buildCohortMaturityEChartsOption(
       }
     }
 
-    if (mode !== 'f') {
-      // Solid line (epoch A): complete evidence — all cohorts present.
+    if (mode === 'e') {
+      // E mode: empirical only, no truing-up. Two segments by epoch:
+      //   solid (epoch A): all cohorts mature, baseRate = full Σy/Σx
+      //   dashed (epoch B): mature subset only, ratePure
       const solidPts = points.filter(p => p.tauDays <= sSolidMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
       const realEvidenceCount = solidPts.filter(p => p.value[1] !== null).length;
       const sSolid = mkLine({
@@ -490,12 +496,7 @@ export function buildCohortMaturityEChartsOption(
         smooth: true,
       });
       if (sSolid) seriesOut.push(sSolid);
-    }
 
-    if (mode === 'e') {
-      // Evidence only: dashed line in epoch B using pure evidence rate
-      // (only cohorts with real observations at this tau contribute).
-      // No projected x, no midpoint, no fan.
       const dashedPurePts = points
         .filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax && p.ratePure !== null)
         .map(p => ({ value: [p.tauDays, p.ratePure] as [number, number | null], ...toMeta(p) }));
@@ -516,23 +517,59 @@ export function buildCohortMaturityEChartsOption(
     }
 
     if (mode === 'f+e') {
-      // Dashed line (epoch B): incomplete evidence — some cohorts dropped out.
-      // Uses blended rate (observed x for mature, projected x for immature).
-      const dashedEvidencePts = points.filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
-      // See §5.1 / §4.6: coverage modulates opacity, not visibility.
-      // showSymbol must be on so the rewrite below can fade markers;
-      // coverage = 0 still produces opacity 0 (invisible) via the alpha
-      // mapping rather than series-level suppression.
-      const realDashedEvCount = dashedEvidencePts.filter(p => p.value[1] !== null).length;
+      // E+F mode emits two distinct curves:
+      //
+      //   E line   — TEMP DIAGNOSTIC: raw selected evidence `rate`.
+      //              Do not read `rate_blended` here while coverage/frontier
+      //              semantics are under investigation; otherwise bad
+      //              coverage can replace evidence display with model values.
+      //              Split visually at tau_solid_max, but keep rendering
+      //              wherever evidence exists so epoch-boundary drift is
+      //              visible instead of silently censoring the curve.
+      //
+      //   E+F curve — `midpoint` (per-cohort calibrated E+F surface).
+      //              Drawn across all epochs so epoch-A variation is visible.
+
+      const solidPts = points
+        .filter(p => p.tauDays <= sSolidMax && p.baseRate !== null)
+        .map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+      const dashedPts = points
+        .filter(p => p.tauDays >= sSolidMax && p.baseRate !== null)
+        .map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+
+      const realSolidCount = solidPts.filter(p => p.value[1] !== null).length;
+      const sSolid = mkLine({
+        id: `${scenarioId}::solid`, name, colour, lineType: 'solid',
+        data: solidPts, showSymbol: realSolidCount > 0,
+        smooth: true,
+      });
+      if (sSolid) seriesOut.push(sSolid);
+
+      const realDashedCount = dashedPts.filter(p => p.value[1] !== null).length;
       const sDashedEv = mkLine({
         id: `${scenarioId}::dashedEvidence`, colour, lineType: 'dashed', opacity: 0.75,
-        data: dashedEvidencePts,
-        showSymbol: realDashedEvCount > 0,
+        data: dashedPts,
+        showSymbol: realDashedCount > 0,
         smooth: true,
       });
       if (sDashedEv) seriesOut.push(sDashedEv);
 
-      // Dotted line (epochs B+C): best estimate midpoint — evidence + model.
+      const blendedEpochAPts = points
+        .filter(p => p.tauDays <= sSolidMax && p.rateBlended !== null)
+        .map(p => ({ value: [p.tauDays, p.rateBlended] as [number, number | null], ...toMeta(p) }));
+      const sBlendedEpochA = mkLine({
+        id: `${scenarioId}::rateBlendedEpochA`,
+        colour,
+        lineType: 'dashed',
+        opacity: 0.55,
+        data: blendedEpochAPts,
+        showSymbol: false,
+        smooth: true,
+        showInLegend: false,
+      });
+      if (sBlendedEpochA) seriesOut.push(sBlendedEpochA);
+
+      // Dotted line (epochs B+C): per-cohort calibrated E+F estimate.
       const midpointPts = points.filter(p => p.tauDays >= sSolidMax && p.midpoint !== null).map(p => ({ value: [p.tauDays, p.midpoint] as [number, number | null], ...toMeta(p) }));
       const sMidpoint = mkLine({
         id: `${scenarioId}::midpoint`, name: 'Total Forecast (e+f)', colour, lineType: 'dotted', opacity: 0.6,
@@ -572,9 +609,14 @@ export function buildCohortMaturityEChartsOption(
       }
 
       for (const level of bandLevels) {
-        // Build polygon data from fan_bands (f+e) or model_bands (f)
+        // Build polygon data from fan_bands (f+e) or model_bands (f).
+        // For the f+e fan we filter to τ ≥ sSolidMax — epoch A's fan
+        // would coincide with the solid E line (zero width / collapsed)
+        // and shouldn't render. The F-mode fan (`mode === 'f'`) renders
+        // across all τ since it's the unconditioned predictive overlay.
         const poly: Array<[number, number, number]> = [];
         for (const p of points) {
+          if (mode !== 'f' && p.tauDays < sSolidMax) continue;
           const bands = mode === 'f' ? p.modelBands : p.fanBands;
           if (bands && bands[level]) {
             const [lo, hi] = bands[level];

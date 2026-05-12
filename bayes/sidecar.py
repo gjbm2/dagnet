@@ -107,4 +107,13 @@ def load_sidecar(
         return None
     if data.get("sidecar_fingerprint") != expected_fingerprint:
         return None
+    # Reject sidecars with empty fitted_at — schema violation post-fix.
+    # Returning None forces `_ensure_bayes_sidecar` to rebuild via the
+    # harness, which in turn uses the post-fix worker that always
+    # emits a real fitted_at. Defence-in-depth alongside the FE
+    # `wrapPatchIfRaw` fallback (Phase 2) — that fallback handles
+    # legacy sidecars that have only generated_at, but the canonical
+    # fixtures going forward must carry a real fitted_at.
+    if not data.get("fitted_at"):
+        return None
     return data

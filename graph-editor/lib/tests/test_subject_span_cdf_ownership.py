@@ -60,6 +60,147 @@ def _single_cohort(*, n=100.0, k=50.0, frontier_age=10, eval_age=10):
     )
 
 
+def _condition_with_cohort(
+    *,
+    S: int,
+    mu: float, sigma: float, mu_sd: float, sigma_sd: float,
+    alpha: float, beta: float,
+    n_obs: int, k_obs: int,
+    observed_date: str = '2026-03-15',
+    retrieved_at: str = '2026-03-25',
+):
+    """Build a single-cohort PrimitiveEvidenceResolution and run
+    ``condition_primitive``.
+
+    73n stage-9 moved IS conditioning out of the trajectory engine into
+    ``runner.primitive_conditioning``; the trajectory engine is now a
+    pure projector. ``TestIsLikelihoodConsumesPreparedCdf`` exercises
+    the live IS path here — driving the conditioner with a fixture that
+    can dial per-draw CDF dispersion via the resolved-latency
+    ``mu_sd`` / ``sigma_sd`` knobs.
+    """
+    from evidence_merge import (
+        EvidenceCandidate, EvidenceIdentity, EvidenceRole, EvidenceScope,
+        ObservationCoordinate, SliceFamily, SourceKind, TemporalBasis,
+    )
+    from runner.model_resolver import ResolvedLatency, ResolvedModelParams
+    from runner.prefix_arrival import (
+        PrefixArrivalIdentity, build_prefix_arrival_map,
+    )
+    from runner.primitive_conditioning import (
+        ConditioningPolicyOptions, condition_primitive,
+    )
+    from runner.primitive_evidence import (
+        bind_primitive_evidence, make_primitive_scope_from_evidence_scope,
+    )
+    from runner.primitives import TransitionIdentity
+    from runner.timing_span import TimingTransitionPrimitive
+
+    src, dst = 'U', 'V'
+    edge_id = 'e-u-v'
+    graph = {
+        'nodes': [
+            {'uuid': 'u-u', 'id': src},
+            {'uuid': 'u-v', 'id': dst},
+        ],
+        'edges': [{'uuid': edge_id, 'from': 'u-u', 'to': 'u-v'}],
+    }
+    transitions = {
+        (src, dst): TimingTransitionPrimitive(
+            p=alpha / (alpha + beta), mu=mu, sigma=max(sigma, 0.01),
+            onset=0.0,
+            p_sd=0.0, mu_sd=0.0, sigma_sd=0.0, onset_sd=0.0,
+            source='test_synthetic',
+        ),
+    }
+    arrival_map = build_prefix_arrival_map(
+        graph=graph, root_node_id=src,
+        root_day_weights={observed_date: 1.0},
+        transitions=transitions,
+        identity=PrefixArrivalIdentity(
+            scenario_id='scn-1', request_root=src,
+            context_key=None, regime_key='default',
+            as_at='2026-04-01',
+            model_source_preference='best_available',
+            parameter_fingerprint='fp-1',
+        ),
+        max_tau=60,
+    )
+    ev_scope = EvidenceScope(
+        role=EvidenceRole.WINDOW_SUBJECT_HELPER,
+        subject_from=src, subject_to=dst,
+        date_from='2026-03-01', date_to='2026-03-31',
+        as_at='2026-04-01', scenario_id='scn-1',
+        anchor=None, context_key=None, regime_key=None,
+    )
+    primitive_scope = make_primitive_scope_from_evidence_scope(
+        evidence_scope=ev_scope,
+        model_source_preference='best_available',
+        resolved_source_identity='bayesian',
+    )
+    candidates = [EvidenceCandidate(
+        source=SourceKind.SNAPSHOT,
+        identity=EvidenceIdentity(
+            role=EvidenceRole.WINDOW_SUBJECT_HELPER,
+            subject_from=src, subject_to=dst,
+            anchor=None, slice_family=SliceFamily.WINDOW,
+            context_key=None, regime_key=None,
+            population_identity=None,
+        ),
+        coordinate=ObservationCoordinate(
+            observed_date=observed_date,
+            retrieved_at=retrieved_at,
+            temporal_basis=TemporalBasis.WINDOW_DAY,
+            asat_materialised=False,
+        ),
+        n=int(n_obs), k=int(k_obs), provenance={},
+    )]
+    resolution = bind_primitive_evidence(
+        transition=TransitionIdentity(src, dst, edge_id),
+        primitive_scope=primitive_scope,
+        evidence_scope=ev_scope,
+        candidates=candidates,
+        arrival_weights=arrival_map.get(src),
+    )
+    resolved = ResolvedModelParams(
+        p_mean=alpha / (alpha + beta), p_sd=0.0,
+        alpha=alpha, beta=beta,
+        alpha_pred=alpha, beta_pred=beta,
+        n_effective=None,
+        edge_latency=ResolvedLatency(
+            mu=mu, sigma=max(sigma, 0.01), onset_delta_days=0.0, t95=0.0,
+            mu_sd=mu_sd, sigma_sd=sigma_sd, onset_sd=0.0,
+            onset_mu_corr=0.0,
+        ),
+        path_latency=None,
+        source='analytic',
+    )
+    return condition_primitive(
+        resolution=resolution,
+        resolved_model=resolved,
+        scenario_seed=42,
+        options=ConditioningPolicyOptions(
+            draw_count=S, timing_cdf_max_tau=60,
+        ),
+    )
+
+
+def _read_ess_from_notes(prim) -> float:
+    """Parse the IS ESS from a conditioned primitive's ``notes``.
+
+    ``primitive_conditioning`` records the IS step's ESS on a
+    ``maturity_aware_mode=… ess=N.NN`` note line for the LATENT path.
+    """
+    import re
+    for note in prim.notes:
+        m = re.search(r'\bess=([\d.]+)', note)
+        if m:
+            return float(m.group(1))
+    raise AssertionError(
+        f"primitive notes carry no 'ess=' line: {list(prim.notes)}"
+    )
+
+
 class TestSubjectSpanSourceDiagnostic:
     """The trajectory return must expose which CDF object the engine used."""
 
@@ -124,91 +265,82 @@ class TestSubjectSpanSourceDiagnostic:
 
 
 class TestIsLikelihoodConsumesPreparedCdf:
-    """The IS likelihood must read per-draw completeness from ``cdf_arr``,
-    not recompute from constant ``(mu, sigma, onset)``.
+    """The IS likelihood must read the prepared per-draw CDF, not
+    recompute completeness from constant edge-level ``(mu, sigma,
+    onset)`` — the 73h "computed and discarded" pattern.
+
+    73n stage-9 moved IS conditioning out of the trajectory engine
+    (now a pure projector) into ``runner.primitive_conditioning``. The
+    same per-draw CDF wiring lives there: the IS log-likelihood loop
+    reads ``proposal_cdf_draws[:, tau_idx]`` per particle (see
+    ``primitive_conditioning._evaluate_likelihood_plan``). These tests
+    drive that path via ``condition_primitive`` and read the IS ESS
+    from the conditioned primitive's ``notes`` provenance.
     """
 
     def test_per_draw_cdf_variation_drives_is_separation(self):
-        """Construct a degenerate prepared subject span where the per-draw
-        CDF splits sharply by particle index: half saturated, half not.
+        """Force per-draw CDF dispersion via ``mu_sd`` on the resolved
+        latency: with ``mu ~ N(2.3, 2.0²)`` and ``sigma=0.5``, the
+        sampled timing particles span CDF(τ=10) values from ≈0 (high-μ
+        draws) to ≈1 (low-μ draws). The cohort observation k/n=0.5 at
+        τ=10 is consistent only with the high-CDF particles; the IS
+        step must collapse the floor particles' weight, dropping ESS
+        far below S.
 
-        With constant edge-level ``(mu, sigma, onset)``, the legacy
-        recompute path produced a single per-draw completeness value,
-        so every draw's IS-likelihood factor was identical and the
-        binomial weights varied only in ``p``. Stage 4 wires the IS
-        likelihood to read ``cdf_arr`` directly, so the per-draw split
-        actually shows up in the IS effective sample size.
-
-        Concretely: with the rigged half/half ``mc_cdf_arr``, evidence
-        of ``k/n = 0.5`` matching ``p · 1.0`` (saturated half) and
-        contradicting ``p · 0.01`` (floor half) collapses the floor
-        half's weight to near zero, halving the effective sample size
-        relative to the constant-CDF baseline below. With the legacy
-        recompute path this collapse could not happen — completeness
-        was the same scalar for every particle.
+        With a tightly-concentrated p prior (α=β=500 → p_draws ≈ 0.5
+        with negligible variance) the only source of log-likelihood
+        separation across particles is the per-draw CDF. Under the
+        legacy recompute path (one scalar CDF for every particle) the
+        IS could not separate at all and ESS would sit at S.
         """
-        from runner.forecast_state import compute_forecast_trajectory
-
         S = 200
-        T = 31
-        # Half saturated (CDF=1), half floor (CDF=0.01) — the floor must
-        # be > 0 to keep the binomial likelihood finite.
-        mc_cdf_arr = np.zeros((S, T))
-        mc_cdf_arr[:S // 2, :] = 1.0
-        mc_cdf_arr[S // 2:, :] = 0.01
-        # Subject probability identical per draw — forcing the IS split
-        # to come from completeness, not from ``p``.
-        mc_p_s = np.full(S, 0.5)
-
-        cohort = _single_cohort(n=100.0, k=50.0, frontier_age=10, eval_age=10)
-
-        sweep = compute_forecast_trajectory(
-            resolved=_resolved(p_mean=0.5, alpha=500.0, beta=500.0),
-            cohorts=[cohort],
-            max_tau=T - 1,
-            mc_cdf_arr=mc_cdf_arr,
-            mc_p_s=mc_p_s,
-            num_draws=S,
+        prim = _condition_with_cohort(
+            S=S,
+            mu=2.3, sigma=0.5, mu_sd=2.0, sigma_sd=0.0,
+            alpha=500.0, beta=500.0,
+            n_obs=100, k_obs=50,
         )
 
-        assert sweep.n_cohorts_conditioned == 1
-        # The saturated-half/floor-half log-likelihood gap is enormous
-        # (∼260 nats) so even with tempering the floor half's weight is
-        # collapsed to near zero. The effective sample size therefore
-        # tracks the saturated half — at most S/2 plus rounding.
-        # Under the legacy recompute path, completeness was a single
-        # scalar across draws and ESS sat at S (no IS separation).
-        assert sweep.is_ess <= S * 0.55, (
-            f"IS effective sample size {sweep.is_ess} not reduced as "
-            f"expected; the per-draw cdf_arr split is not biting"
+        # Conditioning happened (and via the latent multinomial-IS path,
+        # not the F≡1 conjugate fallback). Successor of the former
+        # ``n_cohorts_conditioned == 1`` assertion under the new layer.
+        from runner.primitives import ConditioningStatus
+        assert prim.status == ConditioningStatus.CONDITIONED
+        assert any(
+            'maturity_aware_mode=maturity_aware_is_joint' in n
+            for n in prim.notes
+        ), f"expected latent IS path; notes={list(prim.notes)}"
+
+        # Per-draw CDF separation collapses the IS weight. Same
+        # threshold as the legacy trajectory-engine pin.
+        ess = _read_ess_from_notes(prim)
+        assert ess <= S * 0.55, (
+            f"IS effective sample size {ess} not reduced as "
+            f"expected; the per-draw CDF dispersion is not biting"
         )
 
     def test_uniform_cdf_no_is_separation(self):
-        """Regression guard: when the prepared per-draw CDF is identical
-        across draws and matches the evidence, IS should leave the rate
-        draws essentially undisturbed.
+        """Regression guard: with no per-draw CDF variation
+        (``mu_sd=sigma_sd=onset_sd=0`` → identical CDF across particles)
+        and a tightly-concentrated p prior, log-likelihood values
+        across draws are near-identical and the IS step leaves ESS at
+        S. Confirms the IS step does not invent separation that isn't
+        present in the per-draw CDF.
         """
-        from runner.forecast_state import compute_forecast_trajectory
-
-        S = 100
-        T = 31
-        # All draws share the same ramp CDF.
-        ramp = np.clip(np.linspace(0.0, 1.0, T), 0.0, 1.0)
-        mc_cdf_arr = np.tile(ramp, (S, 1))
-        mc_p_s = np.full(S, 0.3)
-
-        sweep = compute_forecast_trajectory(
-            resolved=_resolved(p_mean=0.3, alpha=300.0, beta=700.0),
-            cohorts=[_single_cohort(n=100.0, k=30.0)],
-            max_tau=T - 1,
-            mc_cdf_arr=mc_cdf_arr,
-            mc_p_s=mc_p_s,
-            num_draws=S,
+        S = 200
+        prim = _condition_with_cohort(
+            S=S,
+            mu=2.3, sigma=0.5, mu_sd=0.0, sigma_sd=0.0,
+            alpha=10000.0, beta=10000.0,
+            n_obs=10, k_obs=5,
         )
 
-        # Even with conditioning, the constant per-draw CDF means the
-        # only IS variation comes from p_draws, so ESS stays high.
-        assert sweep.is_ess > S * 0.5
+        ess = _read_ess_from_notes(prim)
+        assert ess > S * 0.5, (
+            f"IS effective sample size {ess} unexpectedly reduced; "
+            f"with constant per-draw CDF and a tight p prior the IS "
+            f"step should leave the draws near-uniform"
+        )
 
 
 class TestSigmaZeroPreparedSubjectSpan:

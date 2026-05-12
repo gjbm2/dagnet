@@ -374,11 +374,12 @@ describe('WindowFetchPlannerService', () => {
             id: 'edge1',
             paramId: 'param1',
             hasConnection: true,
-            latencyConfig: { latency_parameter: true, t95: 5 },
+            latencyConfig: { latency_parameter: true, t95: 2 },
           }],
         });
-        
-        // Retrieved 9 days ago, query is for dates 17-10 days ago (all mature beyond t95 of 5)
+
+        // Effective maturity = ceil(t95 * SNAPSHOT_OBSERVATION_T95_MULTIPLIER) = ceil(2*2) = 4 days.
+        // Retrieved 9 days ago, query is for dates 17-10 days ago (all mature beyond effective t95 of 4)
         const tenDaysAgo = new Date(TODAY);
         tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
         const nineDaysAgo = new Date(TODAY);
@@ -401,7 +402,7 @@ describe('WindowFetchPlannerService', () => {
           return undefined;
         });
         
-        // Query ends 10 days ago - well beyond t95 of 5
+        // Query ends 10 days ago - well beyond effective maturity of 4
         const dsl = `window(${daysAgo(17)}:${daysAgo(10)})`;
         const result = await windowFetchPlannerService.analyse(graph, dsl, 'initial_load');
         

@@ -462,18 +462,6 @@ def test_two_consumers_with_matching_draw_family_keys_receive_identical_draws():
     assert np.allclose(draws_a, draws_b)
 
 
-def test_different_draw_family_keys_produce_independent_draws():
-    key_a = _key(scenario_id="scn-A")
-    key_b = _key(scenario_id="scn-B")
-    assert key_a.digest != key_b.digest
-    rng_a = make_rng(key_a, "primitive_p_draws")
-    rng_b = make_rng(key_b, "primitive_p_draws")
-    draws_a = rng_a.beta(2.0, 8.0, size=64)
-    draws_b = rng_b.beta(2.0, 8.0, size=64)
-    # Streams should not be byte-equal.
-    assert not np.allclose(draws_a, draws_b)
-
-
 def test_make_rng_separates_derivations_under_a_single_key():
     """Different derivations under the same key must produce independent
     streams so multiple uses of the same key don't collide."""

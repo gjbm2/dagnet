@@ -240,8 +240,37 @@ class RepositoryOperationsService {
    */
   async pullLatestRemoteWins(
     repository: string,
-    branch: string
+    branch: string,
+    options?: { overwriteGraphs?: boolean }
   ): Promise<{ success: boolean; conflictsResolved: number; conflicts?: any[] }> {
+    // Pre-pass for headless callers (e.g. ?retrieveall): clear `sha` on every
+    // graph-type IDB record in this workspace so `pullLatest` treats them as
+    // new files and routes through the clean-overwrite branch, skipping the
+    // 3-way merge entirely. This is the guarantee `pullLatestRemoteWins`'s
+    // name implies but the merge-then-resolve-conflicts path does not provide
+    // (silent stale-base merges keep local values without raising a conflict).
+    if (options?.overwriteGraphs) {
+      const graphFiles = await db.files
+        .where('source.repository').equals(repository)
+        .and(f => f.source?.branch === branch && f.type === 'graph')
+        .toArray();
+      let cleared = 0;
+      for (const f of graphFiles) {
+        if (f.sha) {
+          f.sha = undefined;
+          await db.files.put(f);
+          cleared++;
+        }
+      }
+      sessionLogService.info(
+        'git',
+        'GIT_PULL_OVERWRITE_GRAPHS_PREPASS',
+        `Cleared sha on ${cleared} graph file(s) to force remote-wins overwrite`,
+        undefined,
+        { repository, branch, cleared, total: graphFiles.length }
+      );
+    }
+
     // Headless/unattended default: auto-OK force-replace requests (overwrite remote, skip merge).
     // This ensures dashboard mode and daily automation converge without user interaction.
     const preflight = await this.pullLatest(repository, branch, { forceReplace: { mode: 'detect' } });

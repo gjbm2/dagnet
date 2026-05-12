@@ -16,6 +16,11 @@ import {
   type RefetchDecision,
 } from '../fetchRefetchPolicy';
 import type { ParameterValue } from '../../types/parameterData';
+import {
+  DEFAULT_T95_DAYS,
+  SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+  SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+} from '../../constants/latency';
 
 // Helper to create dates in UK format
 function ukDate(daysAgo: number, reference: Date = new Date()): string {
@@ -56,6 +61,31 @@ describe('fetchRefetchPolicy', () => {
       expect(computeEffectiveCohortMaturity({ latency_parameter: true, t95: 7 })).toBe(7);
       expect(computeEffectiveCohortMaturity({ latency_parameter: true, t95: undefined, path_t95: undefined })).toBe(30);
     });
+
+    it('uses forecast settings multipliers for observation refresh horizons', () => {
+      const multipliers = {
+        t95: SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+        pathT95: SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+      };
+
+      const windowDecision = shouldRefetch({
+        existingSlice: undefined,
+        latencyConfig: { latency_parameter: true, t95: 7 },
+        requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(0, referenceDate) },
+        isCohortQuery: false,
+        referenceDate,
+        observationHorizonMultipliers: multipliers,
+      });
+      expect(windowDecision.type).toBe('partial');
+      expect(windowDecision.matureCutoff).toBe(ukDate(15, referenceDate));
+
+      expect(
+        computeEffectiveCohortMaturity(
+          { latency_parameter: true, t95: 7, path_t95: 21 },
+          multipliers,
+        ),
+      ).toBe(32);
+    });
     
     it('should fall back to conservative default when t95 is not available', () => {
       const decision = shouldRefetch({
@@ -71,7 +101,7 @@ describe('fetchRefetchPolicy', () => {
       
       expect(decision.type).toBe('partial');
       // Cutoff should be default + 1 = 31 days ago
-      expect(decision.matureCutoff).toBe(ukDate(31, referenceDate));
+      expect(decision.matureCutoff).toBe(ukDate(DEFAULT_T95_DAYS + 1, referenceDate));
     });
     
     it('should treat t95=0 as missing and fall back to conservative default', () => {
@@ -87,7 +117,7 @@ describe('fetchRefetchPolicy', () => {
       });
       
       expect(decision.type).toBe('partial');
-      expect(decision.matureCutoff).toBe(ukDate(31, referenceDate));
+      expect(decision.matureCutoff).toBe(ukDate(DEFAULT_T95_DAYS + 1, referenceDate));
     });
     
     it('should round up t95 to be conservative', () => {
@@ -154,8 +184,8 @@ describe('fetchRefetchPolicy', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
         latencyConfig: { latency_parameter: true, t95: 7 },
-        // Window ends 10 days ago, beyond the 8-day maturity cutoff
-        requestedWindow: { start: ukDate(20, referenceDate), end: ukDate(10, referenceDate) },
+        // Window ends 30 days ago, beyond the 15-day observation cutoff
+        requestedWindow: { start: ukDate(40, referenceDate), end: ukDate(30, referenceDate) },
         isCohortQuery: false,
         referenceDate,
       });
@@ -172,7 +202,7 @@ describe('fetchRefetchPolicy', () => {
         referenceDate,
       });
       
-      // Cutoff should be t95 + 1 = 8 days ago
+      // Cutoff should be t95 + 1 = 8 days ago when no settings multipliers are supplied
       expect(decision.type).toBe('partial');
       expect(decision.matureCutoff).toBe(ukDate(8, referenceDate));
     });
@@ -314,17 +344,17 @@ describe('fetchRefetchPolicy', () => {
         dates: [
           ukDate(30, referenceDate),
           ukDate(20, referenceDate),
-          ukDate(10, referenceDate),
+          ukDate(15, referenceDate),
         ],
         n_daily: [100, 100, 100],
         k_daily: [50, 50, 50],
-        cohort_to: ukDate(10, referenceDate),
+        cohort_to: ukDate(15, referenceDate),
       };
       
       const decision = shouldRefetch({
         existingSlice: matureSlice,
         latencyConfig: { latency_parameter: true, t95: 7 },
-        requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(10, referenceDate) },
+        requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(15, referenceDate) },
         isCohortQuery: true,
         referenceDate,
       });

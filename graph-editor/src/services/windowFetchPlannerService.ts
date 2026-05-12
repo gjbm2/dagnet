@@ -50,6 +50,7 @@ import type { FetchPlan, FetchPlanItem } from './fetchPlanTypes';
 import { computePlannerQuerySignaturesForGraph } from './plannerQuerySignatureService';
 import { isSignatureCheckingEnabled } from './signaturePolicyService';
 import { devDiagnosticService } from './devDiagnosticService';
+import { forecastingSettingsService } from './forecastingSettingsService';
 
 // =============================================================================
 // Types
@@ -244,13 +245,18 @@ class WindowFetchPlannerService {
       const querySignatures = isSignatureCheckingEnabled()
         ? await computePlannerQuerySignaturesForGraph({ graph, dsl })
         : undefined;
+      const forecasting = await forecastingSettingsService.getForecastingModelSettings();
 
       const { plan: fetchPlan, diagnostics: planDiagnostics } = this.buildFetchPlanForAnalysis(
         graph,
         dsl,
         window,
         timestamp,
-        querySignatures
+        querySignatures,
+        {
+          t95: forecasting.SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+          pathT95: forecasting.SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+        },
       );
       
       // Convert FetchPlan items to PlannerItems for UI compatibility
@@ -1382,7 +1388,8 @@ class WindowFetchPlannerService {
     dsl: string,
     window: DateRange,
     referenceNow?: string,
-    querySignatures?: Record<string, string>
+    querySignatures?: Record<string, string>,
+    observationHorizonMultipliers?: { t95?: number; pathT95?: number },
   ): FetchPlanBuilderResult {
     return buildFetchPlan({
       graph,
@@ -1392,6 +1399,7 @@ class WindowFetchPlannerService {
       fileState: createProductionFileStateAccessor(),
       connectionChecker: createProductionConnectionChecker(),
       querySignatures,
+      observationHorizonMultipliers,
     });
   }
 
@@ -1487,9 +1495,17 @@ class WindowFetchPlannerService {
     dsl: string,
     window: DateRange,
     referenceNow?: string,
-    querySignatures?: Record<string, string>
+    querySignatures?: Record<string, string>,
+    observationHorizonMultipliers?: { t95?: number; pathT95?: number },
   ): FetchPlan {
-    return this.buildFetchPlanForAnalysis(graph, dsl, window, referenceNow, querySignatures).plan;
+    return this.buildFetchPlanForAnalysis(
+      graph,
+      dsl,
+      window,
+      referenceNow,
+      querySignatures,
+      observationHorizonMultipliers,
+    ).plan;
   }
 
   private summariseItemsForLog(

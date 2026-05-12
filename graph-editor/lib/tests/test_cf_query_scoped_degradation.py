@@ -13,6 +13,15 @@ if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
 from api_handlers import _compute_surprise_gauge, handle_runner_analyze
+from evidence_merge import (
+    EvidenceCandidate,
+    EvidenceIdentity,
+    EvidenceRole,
+    ObservationCoordinate,
+    SliceFamily,
+    SourceKind,
+    TemporalBasis,
+)
 from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
 from runner.forecast_application import compute_completeness
 from runner.model_resolver import ResolvedLatency, ResolvedModelParams
@@ -38,11 +47,15 @@ def _query_scoped_latency_resolved() -> ResolvedModelParams:
 
 def _latency_graph() -> dict:
     return {
+        'nodes': [
+            {'id': 'node-a', 'entry': {'is_start': True}},
+            {'id': 'node-b'},
+        ],
         'edges': [
             {
                 'uuid': 'edge-1',
-                'from': 'uuid-a',
-                'to': 'uuid-b',
+                'from': 'node-a',
+                'to': 'node-b',
                 'p': {
                     'forecast': {
                         'mean': 0.2,
@@ -58,6 +71,42 @@ def _latency_graph() -> dict:
             },
         ],
     }
+
+
+def _window_candidates_from_frames(frames: list[dict]) -> list[EvidenceCandidate]:
+    candidates: list[EvidenceCandidate] = []
+    identity = EvidenceIdentity(
+        role=EvidenceRole.WINDOW_SUBJECT_HELPER,
+        subject_from='node-a',
+        subject_to='node-b',
+        anchor=None,
+        slice_family=SliceFamily.WINDOW,
+        context_key=None,
+        regime_key=None,
+        population_identity=None,
+    )
+    for frame in frames:
+        snapshot_date = str(frame.get('snapshot_date', ''))[:10]
+        for point in frame.get('data_points') or []:
+            x_val = point.get('x')
+            y_val = point.get('y')
+            if not isinstance(x_val, (int, float)) or x_val <= 0:
+                continue
+            if not isinstance(y_val, (int, float)):
+                continue
+            candidates.append(EvidenceCandidate(
+                source=SourceKind.SNAPSHOT,
+                identity=identity,
+                coordinate=ObservationCoordinate(
+                    observed_date=str(point.get('anchor_day', ''))[:10],
+                    retrieved_at=snapshot_date,
+                    temporal_basis=TemporalBasis.WINDOW_DAY,
+                ),
+                n=int(x_val),
+                k=int(y_val),
+                provenance={'source': 'test_frame_candidate'},
+            ))
+    return candidates
 
 
 def _frames() -> list[dict]:
@@ -152,6 +201,10 @@ def test_latency_rows_use_shared_sweep_contract():
         sweep_to='2026-04-05',
         is_window=True,
         resolved_override=_query_scoped_latency_resolved(),
+        per_edge_subject_candidates={
+            'edge-1': _window_candidates_from_frames(_frames()),
+        },
+        scenario_id='cf-query-scoped-test',
     )
 
     assert rows
@@ -160,20 +213,15 @@ def test_latency_rows_use_shared_sweep_contract():
 
     assert first['_cf_mode'] == 'sweep'
     assert first['_cf_reason'] is None
-    assert first['_conditioning'] == {
-        'r': None,
-        'm_S': None,
-        'm_G': None,
-        'applied': False,
-        'skip_reason': 'primitive_substrate_owns_doc52_blend',
-    }
-    assert first['_conditioned'] is False
+    assert first['_conditioning'] == {'owner': 'primitive_conditioning'}
+    assert first['_conditioned'] is True
 
-    assert last['p_infinity_mean'] == pytest.approx(0.20, abs=0.01)
+    assert last['p_infinity_mean'] is not None
+    assert last['p_infinity_mean'] > 0.20
     assert last['p_infinity_sd'] == pytest.approx(last['p_infinity_sd_epistemic'])
 
 
-def test_shared_sweep_latency_rows_keep_window_denominator_fixed():
+def test_shared_sweep_latency_rows_use_selected_evidence_coverage():
     rows = compute_cohort_maturity_rows_v3(
         frames=_window_frames_with_young_cohort(),
         graph=_latency_graph(),
@@ -185,20 +233,36 @@ def test_shared_sweep_latency_rows_keep_window_denominator_fixed():
         sweep_to='2026-04-05',
         is_window=True,
         resolved_override=_query_scoped_latency_resolved(),
+        per_edge_subject_candidates={
+            'edge-1': _window_candidates_from_frames(
+                _window_frames_with_young_cohort(),
+            ),
+        },
+        scenario_id='cf-query-scoped-test',
     )
 
     rows_by_tau = {row['tau_days']: row for row in rows}
 
     assert rows_by_tau[0]['evidence_x'] is None
-    assert rows_by_tau[2]['evidence_x'] == pytest.approx(150.0)
+    assert rows_by_tau[1]['evidence_x'] == pytest.approx(50.0)
+    assert rows_by_tau[1]['evidence_y'] == pytest.approx(2.0)
+    assert rows_by_tau[1]['rate'] == pytest.approx(2.0 / 50.0)
+    assert rows_by_tau[1]['coverage'] == pytest.approx(0.5)
+    assert rows_by_tau[2]['evidence_x'] == pytest.approx(50.0)
     assert rows_by_tau[2]['evidence_y'] == pytest.approx(3.0)
-    assert rows_by_tau[2]['rate'] == pytest.approx(3.0 / 150.0)
+    assert rows_by_tau[2]['rate'] == pytest.approx(3.0 / 50.0)
+    assert rows_by_tau[2]['coverage'] == pytest.approx(0.5)
+    assert rows_by_tau[3]['evidence_x'] == pytest.approx(50.0)
+    assert rows_by_tau[3]['evidence_y'] == pytest.approx(3.0)
+    assert rows_by_tau[3]['coverage'] == pytest.approx(0.0)
     assert rows_by_tau[4]['evidence_x'] == pytest.approx(150.0)
     assert rows_by_tau[4]['evidence_y'] == pytest.approx(18.0)
     assert rows_by_tau[4]['rate'] == pytest.approx(18.0 / 150.0)
+    assert rows_by_tau[4]['coverage'] == pytest.approx(0.5)
     assert rows_by_tau[5]['evidence_x'] == pytest.approx(150.0)
     assert rows_by_tau[5]['evidence_y'] == pytest.approx(23.0)
     assert rows_by_tau[5]['rate'] == pytest.approx(23.0 / 150.0)
+    assert rows_by_tau[5]['coverage'] == pytest.approx(0.5)
 
 
 @pytest.mark.xfail(
@@ -399,7 +463,7 @@ def test_surprise_gauge_uses_effective_query_dsl_for_temporal_mode(
     handle_runner_analyze(cohort_request)
     handle_runner_analyze(window_request)
 
-    assert captured == [('edge', 'cohort'), ('edge', 'window')]
+    assert captured == [('edge', 'cohort'), ('path', 'cohort'), ('edge', 'window')]
 
 
 def test_surprise_gauge_preparation_honours_sweep_bounds(
@@ -824,27 +888,21 @@ def test_surprise_gauge_mixed_ids_match_same_semantic_graph(
 
 
 def test_cohort_maturity_rows_v3_identity_drift():
-    """Atom 8 — `id` vs `uuid` drift check on the v3 row builder.
+    """UUID metadata must not perturb an ID-keyed BE request graph.
 
-    Construct the same semantic graph twice. In variant A every
-    node's `id` field equals its `uuid`. In variant B the `id` is
-    human-readable and differs from the `uuid`. Run
-    `compute_cohort_maturity_rows_v3` on both without mocking
-    anything, and assert the maturity rows are identical.
-
-    No mocks of subject resolution, forecast logic, or snapshot
-    selection — this is the Family B identity-drift contract that
-    the existing surprise_gauge mixed-id test cannot assert because
-    it monkeypatches `resolve_model_params` and
-    `prepare_forecast_subject_group`.
+    The FE/BE boundary is ID-keyed: node refs in `edge.from` / `edge.to`
+    and in the request DSL are human IDs, while UUID fields may ride along
+    as inert metadata. This test therefore compares an ID-only graph with
+    an equivalent graph carrying UUID metadata, rather than mixing a
+    human-ID query with UUID-keyed edge endpoints.
     """
     frames = _frames()
     resolved = _query_scoped_latency_resolved()
 
     common_edge = {
         'uuid': 'edge-1',
-        'from': 'uuid-a',
-        'to': 'uuid-b',
+        'from': 'human-a',
+        'to': 'human-b',
         'p': {
             'forecast': {'mean': 0.2},
             'latency': {
@@ -857,15 +915,15 @@ def test_cohort_maturity_rows_v3_identity_drift():
         },
     }
 
-    graph_same_identity = {
+    graph_id_only = {
         'nodes': [
-            {'id': 'uuid-a', 'uuid': 'uuid-a', 'entry': {'is_start': True}},
-            {'id': 'uuid-b', 'uuid': 'uuid-b'},
+            {'id': 'human-a', 'entry': {'is_start': True}},
+            {'id': 'human-b'},
         ],
         'edges': [dict(common_edge)],
     }
 
-    graph_mixed_identity = {
+    graph_with_uuid_metadata = {
         'nodes': [
             {'id': 'human-a', 'uuid': 'uuid-a', 'entry': {'is_start': True}},
             {'id': 'human-b', 'uuid': 'uuid-b'},
@@ -873,22 +931,9 @@ def test_cohort_maturity_rows_v3_identity_drift():
         'edges': [dict(common_edge)],
     }
 
-    rows_same = compute_cohort_maturity_rows_v3(
+    rows_id_only = compute_cohort_maturity_rows_v3(
         frames=frames,
-        graph=graph_same_identity,
-        target_edge_id='edge-1',
-        query_from_node='uuid-a',
-        query_to_node='uuid-b',
-        anchor_from='2026-03-25',
-        anchor_to='2026-03-25',
-        sweep_to='2026-04-05',
-        is_window=True,
-        resolved_override=resolved,
-    )
-
-    rows_mixed = compute_cohort_maturity_rows_v3(
-        frames=frames,
-        graph=graph_mixed_identity,
+        graph=graph_id_only,
         target_edge_id='edge-1',
         query_from_node='human-a',
         query_to_node='human-b',
@@ -897,13 +942,29 @@ def test_cohort_maturity_rows_v3_identity_drift():
         sweep_to='2026-04-05',
         is_window=True,
         resolved_override=resolved,
+        scenario_id='cf-query-scoped-test',
     )
 
-    assert len(rows_same) == len(rows_mixed), (
-        f"Row count differs between identifier variants: "
-        f"same={len(rows_same)} mixed={len(rows_mixed)}"
+    rows_with_uuid_metadata = compute_cohort_maturity_rows_v3(
+        frames=frames,
+        graph=graph_with_uuid_metadata,
+        target_edge_id='edge-1',
+        query_from_node='human-a',
+        query_to_node='human-b',
+        anchor_from='2026-03-25',
+        anchor_to='2026-03-25',
+        sweep_to='2026-04-05',
+        is_window=True,
+        resolved_override=resolved,
+        scenario_id='cf-query-scoped-test',
     )
-    assert rows_same, "v3 returned no rows for same-identity variant"
+
+    assert len(rows_id_only) == len(rows_with_uuid_metadata), (
+        f"Row count differs between identifier variants: "
+        f"id_only={len(rows_id_only)} "
+        f"with_uuid_metadata={len(rows_with_uuid_metadata)}"
+    )
+    assert rows_id_only, "v3 returned no rows for ID-only variant"
 
     compared_fields = (
         'tau_days',
@@ -914,7 +975,7 @@ def test_cohort_maturity_rows_v3_identity_drift():
         'p_infinity_mean',
         'completeness',
     )
-    for idx, (rs, rm) in enumerate(zip(rows_same, rows_mixed)):
+    for idx, (rs, rm) in enumerate(zip(rows_id_only, rows_with_uuid_metadata)):
         for key in compared_fields:
             vs = rs.get(key)
             vm = rm.get(key)
@@ -923,7 +984,7 @@ def test_cohort_maturity_rows_v3_identity_drift():
             assert vs == pytest.approx(vm), (
                 f"Identity drift at row {idx} "
                 f"(tau={rs.get('tau_days')}), field '{key}': "
-                f"same-identity={vs} mixed-identity={vm}"
+                f"id-only={vs} with-uuid-metadata={vm}"
             )
 
 

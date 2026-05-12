@@ -232,7 +232,7 @@ Replace the `compute_forecast_trajectory` call in `surprise_gauge` with reads fr
 - The **conditioned** posterior moments come from `runtime.public_moments` and the per-Cohort completeness exposed for daily-conversions in phase 2.
 - The **unconditioned** moments come from the unconditioned `predictive` overlay already exposed at `runtime.unconditioned_overlays['predictive']` (see `ResolvedCFRuntime.unconditioned_overlays` in [cohort_forecast_v3.py:907](graph-editor/lib/runner/cohort_forecast_v3.py#L907)). This is the same overlay the cohort_maturity tau reducer uses for `model_*` fan bands; reusing it for surprise_gauge does not introduce a new unconditioned object.
 
-The gauge is a scalar projection, not a row reducer, so this migration adds no new reducer to the substrate. It removes one consumer of `compute_forecast_trajectory`. After phase 5a, combined with phase 4, the only remaining callers of `compute_forecast_trajectory` are non-public test paths and `surprise_gauge`'s deleted block. Phase 5a explicitly authorises deleting `compute_forecast_trajectory` and `forecast_state.CohortEvidence` once a final static search confirms zero public callers and the test paths have been migrated to substrate fixtures.
+The gauge is a scalar projection, not a row reducer, so this migration adds no new reducer to the substrate. It removes the last public-path consumer of `compute_forecast_trajectory`. Note: `cohort_forecast_v3.py` still imports `CohortEvidence` from `forecast_state` as a data-container dataclass; phase 5a does not delete `forecast_state` or its symbols. Deletion happens in phase 7 after the v1/v2 cohort-maturity paths have been retired in phase 6 and the residual consumers identified.
 
 The variable definitions for `surprise_gauge` (`p`, `completeness`, the z-score formula, the zone classification thresholds in `classify_zone`) are the existing definitions in `api_handlers.py` and are not redefined by this work. Phase 5a is a substitution of the data source, not a redesign of the gauge.
 
@@ -275,8 +275,99 @@ Phase 5 is complete when:
 - `surprise_gauge` emits its two variables from runtime-owned objects (no `compute_forecast_trajectory` call remains in `api_handlers.py` outside of explicitly retained test paths) and its outside-in tests pass;
 - `conversion_funnel` outside-in tests pass against the post-refactor substrate (no funnel code changes unless a regression is found);
 - `bridge_view` decision is recorded in this plan; if direct-CF was chosen, the migration is shipped with tests;
-- `conversion_rate` decision is recorded in this plan; if in-scope was chosen, the bin reducer is shipped with phase-1-style blind tests; otherwise the deferral note is recorded with a pointer to doc 49 Phase 3 as the next home;
-- `compute_forecast_trajectory` and `forecast_state.CohortEvidence` are deletable (no public callers); deletion either happens here as a final cleanup or is recorded as the next atom with a static-search invariant blocking re-introduction.
+- `conversion_rate` decision is recorded in this plan; if in-scope was chosen, the bin reducer is shipped with phase-1-style blind tests; otherwise the deferral note is recorded with a pointer to doc 49 Phase 3 as the next home.
+
+### Temporary xfail ledger for pre-73q graph projections
+
+The following existing tests are marked `xfail(strict=True)` while 73q is
+incomplete. This is intentional skip debt, not closure: the current 73q graph
+projections and legacy consumer seams are acknowledged unreliable until the
+shared substrate, date reducer, surprise-gauge migration, and funnel verification
+work above are complete.
+
+- `test_doc56_phase0_behaviours.py::test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split` — revisit during Phase 5a. It must either be rewritten against the runtime-backed `surprise_gauge` contract or retired in favour of the new Phase 5a outside-in tests.
+- `test_funnel_contract.py::TestF4FModeMatchesPathProductOfPromotedMeans::test_f_median_matches_path_product_of_evidence_means` — revisit during Phase 5b. It must either be rewritten against the post-refactor `conversion_funnel` outside-in contract or retired in favour of the Phase 5b tests.
+- `test_selected_cohort_pop_d_distribution.py::test_per_source_day_forward_fill_preserves_monotonicity_under_sparse` and `test_selected_cohort_pop_d_distribution.py::test_m_select_construction_for_multi_hop_downstream_node` — revisit during Phases 2-3. They must be rewritten if their low-level M-select/Y-prefix assertions still express the shared-substrate contract after per-Cohort projection arrays and accessors are introduced; otherwise retire them with the replacement coverage named.
+- `graph-editor/e2e/shareLiveChart.spec.ts::live share (conserve-mass fixture) produces distinct scenario graphs + non-empty inbound-n (regression)` — revisit during Phase 5c (`bridge_view` migration). The assertion checks that the two scenarios on the analyze request differ on `edge.p.mean` for `switch-registered-to-switch-success` when visibility_mode is `'e'` vs `'f'`. That divergence relied on the pre-73q semantic where `p.mean` was overwritten from `p.evidence.mean` or `p.forecast.mean` according to visibility_mode. Under current semantics `p.mean` is the canonical blended value and is invariant across visibility modes; visibility-mode divergence now lives in display-layer projections only (funnel builders already consume it; bridge_view does not yet). When bridge_view is migrated to consume `p.evidence.*` / `p.forecast.*` directly, rewrite the test to assert on a display-level discriminator (e.g. ECharts series values on the bridge chart instance) rather than on the request-graph edge.
+
+73q is not complete until each temporary xfail above has been re-run and either
+converted to a passing test, rewritten into the new invariant suite, or removed
+with an explicit replacement test named in this document.
+
+### Phase 6 — Retire cohort_maturity v1 and v2
+
+The legacy chart paths `cohort_maturity_v1` and `cohort_maturity_v2` are independent of daily-conversions but block phase 7's cleanup sweep because their handlers, modules, registries, and tests still reference symbols phase 7 needs to delete. Phase 6 retires them as a self-contained chunk.
+
+Removal scope, audited by static reads:
+
+- **Backend handlers and dispatch.** Delete `_handle_cohort_maturity_v2` and the `cohort_maturity_v2` branch at [api_handlers.py:652-653](graph-editor/lib/api_handlers.py#L652-L653). Delete the `cohort_maturity_v1` branch at [api_handlers.py:654-655](graph-editor/lib/api_handlers.py#L654-L655) and remove the `cohort_maturity_v1` membership from `_is_cohort_maturity` at [api_handlers.py:2551](graph-editor/lib/api_handlers.py#L2551). The `_handle_snapshot_analyze_subjects` function survives because non-v1 analyses still route through it; only the v1-specific logic inside it is removed.
+- **Subject-resolution mappings.** Delete the `cohort_maturity_v1` and `cohort_maturity_v2` entries in `analysis_subject_resolution.py` (scope-rule and read-mode tables at lines 73-74 and 88-89).
+- **Frontend registries.** Delete the `cohort_maturity_v1` and `cohort_maturity_v2` entries from [analysisTypes.ts](graph-editor/src/components/panels/analysisTypes.ts), [analysisTypeResolutionService.ts](graph-editor/src/services/analysisTypeResolutionService.ts), and the alias mappings at [AnalysisChartContainer.tsx:254-255](graph-editor/src/components/charts/AnalysisChartContainer.tsx#L254-L255). Update [snapshotBootTrace.ts:104](graph-editor/src/lib/snapshotBootTrace.ts#L104) to drop the v1/v2 disjuncts.
+- **Span-evidence emit labels.** [span_evidence.py:45,61,188,210](graph-editor/lib/runner/span_evidence.py) emits `analysis_type: 'cohort_maturity_v2'` in its diagnostic output. Either retarget those to `'cohort_maturity'` or remove the field if it's unused; choose by inspecting the consumer.
+- **Tests.** Delete tests that exclusively cover v1 or v2 surfaces (e.g. `analysisRequestContract.test.ts:150-151,169` lines pinning the v2 contract). Tests that cover behaviour shared with v3 are retargeted to v3 if not already present elsewhere.
+
+Phase 6 is purely a deletion plus a retargeting of three diagnostic labels. The chart family observable from the FE collapses from `cohort_maturity` / `cohort_maturity_v1` / `cohort_maturity_v2` to a single `cohort_maturity`. No migration of behaviour: v1 and v2 charts have been superseded by v3 since 73n; this just removes the dead routes.
+
+Phase 6 acceptance:
+
+- A static search shows zero references to `cohort_maturity_v1` or `cohort_maturity_v2` in production code (BE Python, FE TypeScript, BE / FE registries).
+- The v3 cohort_maturity outside-in tests still pass unchanged.
+- The phase 1 daily-conversions invariant suite still passes (it does not depend on v1/v2 paths).
+- No new dead-code references appear: imports that became unused are also removed.
+
+### Phase 7 — Cleanup sweep
+
+Phase 7 is the cleanup atom that becomes possible once phases 4, 5, and 6 are landed. It is a deletion-and-quietening sweep. Every item below is justified by an audit of static references; nothing is deleted speculatively.
+
+#### Modules and symbols deletable post phases 4–6
+
+- **`runner/forecast_state.py` symbols.**
+  - `compute_forecast_trajectory` and its supporting helpers (`build_node_arrival_cache`, `_resolve_edge_p`, `_compute_completeness_at_age` if no internal residual remains): no public callers after phases 4 and 5a; no v1/v2 callers after phase 6.
+  - `_warn_legacy_pmean_carrier`: still imported at [path_runner.py:113](graph-editor/lib/runner/path_runner.py#L113) and [graph_builder.py:209](graph-editor/lib/runner/graph_builder.py#L209). Phase 7 inspects each call site: if the warning fires for a code path that no longer exists, delete the warning and its call sites; if the warning still applies to live code, keep it and rehome to a non-legacy module.
+  - `CohortEvidence`: still imported by `cohort_forecast_v3.py:4267` as a data container. Phase 7 either rehomes the dataclass to a non-legacy module (e.g. into `cohort_forecast_v3.py` directly or into a new `runner/cohort_evidence.py`) or shrinks `forecast_state.py` down to just this dataclass.
+  - The remaining `forecast_state.py` is deleted only when every symbol is either deleted or rehomed and the file is empty.
+
+- **`runner/cohort_forecast.py` (v1, 1526 LOC).** Used only by `cohort_forecast_v2.py` and the v1 dispatch path; both gone after phase 6. Deleted whole.
+
+- **`runner/cohort_forecast_v2.py` (1210 LOC).** Used only by `_handle_cohort_maturity_v2`; gone after phase 6. Deleted whole.
+
+- **`runner/forecast_application.py` symbols.**
+  - `annotate_rows` and `annotate_data_point`: callers at [api_handlers.py:1210, 2547, 3312](graph-editor/lib/api_handlers.py) sit in v1/v2 chart paths that go away in phase 6. After phase 6 there are no callers; both functions are deleted.
+  - `compute_completeness`: still used by [_append_synthetic_future_frames@api_handlers.py:2400](graph-editor/lib/api_handlers.py#L2400), which is called by both the v1 path (gone) and the v3 path (alive). The v3 path's residual model-derived completeness call is a legitimate item but **not** in 73q's scope: it is named here as a follow-up atom (migrate `_append_synthetic_future_frames` to read runtime-owned completeness instead of model-CDF). `compute_completeness` and `_append_synthetic_future_frames` survive phase 7.
+
+- **API handler residuals.**
+  - The daily-conversions enrichment block (already deleted in phase 4): confirm static absence.
+  - The surprise-gauge enrichment block (rewritten in phase 5a): confirm static absence of `compute_forecast_trajectory` import and call.
+  - Comments labelled `POST-73n`, `73n follow-up`, "still surviving", "legacy trajectory consumer": delete or rewrite. The migration is no longer pending.
+
+- **TODO.md entries.** Delete the `73n follow-up` items that name daily-conversions, surprise-gauge, or v1/v2 retirement. Other `73n` items unrelated to this work are left alone.
+
+#### Tests
+
+Phase 7 deletes tests whose only purpose is to bless deleted production code:
+
+- Tests that import `compute_forecast_trajectory`, `CohortEvidence` (as legacy-engine fixtures, not as a v3 data container), or `annotate_rows` to assert legacy behaviour, except where the test has been retargeted to the runtime-backed path in phase 4 or phase 5a.
+- Tests for `_handle_cohort_maturity_v2`, the v1 dispatch path, or v1/v2 chart contracts in the FE.
+- Tests for the v1/v2 entries in `analysisTypes.ts`, `analysisTypeResolutionService.ts`, etc.
+- Tests for the daily-conversions `annotate_rows` fallback (already a silent no-op in production; the test was pinning the no-op).
+
+Each deleted test is checked for any unique semantic assertion not covered elsewhere; if found, the assertion is rehomed to a v3 test before the legacy test is deleted.
+
+#### Documentation
+
+- Archive the doc-29 series of forecast-engine implementation plans where they describe the legacy trajectory engine that no longer exists. Documents that contain mixed legacy/current content are split: legacy sections move to `docs/archive/project-bayes/`, current sections stay.
+- Update `docs/current/codebase/INVARIANTS.md` and `docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` to remove any "still pending migration" footnotes that this work has cleared.
+- Archive 73q itself when phase 7 completes — it has done its job and the cleanup it specifies is complete.
+
+#### Phase 7 acceptance
+
+- `forecast_state.py` is either deleted or contains only `CohortEvidence` (with deletion of the rest); a follow-up atom is filed if `CohortEvidence` rehome is chosen but not done here.
+- `cohort_forecast.py` and `cohort_forecast_v2.py` are deleted.
+- `annotate_rows` and `annotate_data_point` are deleted from `forecast_application.py`.
+- A static search shows zero remaining references to `compute_forecast_trajectory`, `cohort_maturity_v1`, `cohort_maturity_v2`, or the daily-conversions/surprise-gauge legacy enrichment markers.
+- No tests reference deleted symbols.
+- TODO.md no longer carries `73n follow-up` items related to this work.
+- Anti-regression invariants are recorded in `INVARIANTS.md` so future work cannot reintroduce the deleted symbols by accident.
 
 ## Invariants
 
@@ -322,4 +413,11 @@ The atom is complete when:
 - after phase 5a, a static search shows no `surprise_gauge` `compute_forecast_trajectory` call;
 - after phase 5b, `conversion_funnel` outside-in tests pass against the post-refactor substrate;
 - phase 5c and 5d decisions are recorded in this plan; any in-scope migration is shipped with its tests, any deferral has a documented next home;
-- if all phase 5 migrations are shipped, `compute_forecast_trajectory` and `forecast_state.CohortEvidence` are deleted from the codebase or have their deletion recorded as the next atom with a static-search invariant against re-introduction.
+- after phase 6, no production code references `cohort_maturity_v1` or `cohort_maturity_v2`;
+- after phase 7, the legacy modules and symbols listed in the cleanup sweep are deleted, dead tests are gone, the doc references are archived, and anti-regression invariants are recorded.
+
+## Test debt to pick up when this lands (added 12-May-26)
+
+The following canary is currently `xfail(strict=False)` pending this cutover:
+
+- **`graph-editor/lib/tests/test_conditioned_forecast_parity.py::TestPhase4AsatVisibility::test_daily_conversions_boundary_shift`**. Asserts the asat-vs-live boundary contract on synth-simple-abc: live → all `mature` rows; asat → fewer `mature` rows, plus a `forecast` zone, plus a **null-completeness** boundary band where data thins out before the forecast horizon. Today the legacy enrichment in `api_handlers.py` produces mature → forecast directly with no null-completeness band, so the test fails on `asat.null_completeness_rows > 0`. The post-cutover date reducer described under §"Reducer field contract — Completeness / Layer" inherits the band from the shared substrate, at which point this canary should pass naturally; remove the xfail then. If the cutover deliberately changes the band semantics, the test's threshold conditions need updating to match the new contract rather than being deleted.

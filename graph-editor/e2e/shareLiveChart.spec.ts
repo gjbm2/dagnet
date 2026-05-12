@@ -1761,6 +1761,7 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
   });
 
   test('live share (conserve-mass fixture) produces distinct scenario graphs + non-empty inbound-n (regression)', async ({ browser, baseURL }, testInfo) => {
+    test.fixme(true, 'xfail pending 73q Phase 5c bridge_view migration: assertion is on per-scenario p.mean divergence, which relied on the pre-73q write-back of p.forecast/p.evidence into p.mean. Under current semantics p.mean is the canonical blended value and is invariant across visibility_mode; visibility-mode divergence now lives in display-layer projections (funnel does this; bridge does not yet). Re-enable when bridge_view is migrated and rewrite to assert on a display-level discriminator. See docs/current/project-bayes/73q-daily-conversions-shared-runtime-cutover-plan.md xfail ledger.');
     const state: ShareLiveStubState = { version: 'conserve-mass', counts: {} };
     const context = await browser.newContext();
     const page = await context.newPage();

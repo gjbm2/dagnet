@@ -89,6 +89,7 @@ SKIP_REASONS = frozenset(
         "after_as_at",
         "after_retrieved_at",
         "covered_by_snapshot",
+        "covered_by_reconstructed",
         "superseded_by_later_retrieval",
     }
 )
@@ -519,11 +520,11 @@ def merge_evidence_candidates(
     """
 
     skipped: list[SkippedCandidate] = []
-    eligible: list[EvidenceCandidate] = []
+    admitted: list[EvidenceCandidate] = []
 
     covered = snapshot_covered_observations or set()
 
-    # Step 1: scope-level admission
+    # Step 1a: scope-level admission + caller-supplied snapshot coverage
     for c in candidates:
         reason = _validate_candidate(c, scope)
         if reason is not None:
@@ -533,6 +534,28 @@ def merge_evidence_candidates(
             (_dedupe_key(c.identity), c.coordinate.observed_date) in covered
         ):
             skipped.append(SkippedCandidate(c, "covered_by_snapshot"))
+            continue
+        admitted.append(c)
+
+    # Step 1b: RECONSTRUCTED coverage. A reconstructed-as-at row materialises
+    # the as-at boundary at its `(identity, observed_date)` and is
+    # authoritative for that coordinate, so any plain FILE candidate at the
+    # same coordinate is covered and dropped before per-retrieval grouping
+    # — analogous to the explicit `covered_by_snapshot` shortcut, but
+    # derived from the candidate list itself. SNAPSHOT candidates outrank
+    # RECONSTRUCTED, so they are unaffected.
+    recon_covered = {
+        (_dedupe_key(c.identity), c.coordinate.observed_date)
+        for c in admitted
+        if c.source == SourceKind.RECONSTRUCTED
+    }
+    eligible: list[EvidenceCandidate] = []
+    for c in admitted:
+        if (
+            c.source not in (SourceKind.SNAPSHOT, SourceKind.RECONSTRUCTED)
+            and (_dedupe_key(c.identity), c.coordinate.observed_date) in recon_covered
+        ):
+            skipped.append(SkippedCandidate(c, "covered_by_reconstructed"))
             continue
         eligible.append(c)
 

@@ -52,6 +52,12 @@ class TestForecastingSettingsDefaults:
     def test_blend_completeness_power(self):
         assert ForecastingSettings().blend_completeness_power == 2.25
 
+    def test_snapshot_observation_t95_multiplier(self):
+        assert ForecastingSettings().snapshot_observation_t95_multiplier == 2.0
+
+    def test_snapshot_observation_path_t95_multiplier(self):
+        assert ForecastingSettings().snapshot_observation_path_t95_multiplier == 1.5
+
     def test_bayes_fit_history_interval_days(self):
         assert ForecastingSettings().bayes_fit_history_interval_days == 0
 
@@ -142,6 +148,8 @@ class TestSettingsFromDict:
             't95_percentile': 0.99,
             'forecast_blend_lambda': 0.25,
             'blend_completeness_power': 1.5,
+            'snapshot_observation_t95_multiplier': 2.5,
+            'snapshot_observation_path_t95_multiplier': 1.25,
         }
         s = settings_from_dict(d)
         assert s.min_fit_converters == 50
@@ -154,6 +162,8 @@ class TestSettingsFromDict:
         assert s.t95_percentile == 0.99
         assert s.forecast_blend_lambda == 0.25
         assert s.blend_completeness_power == 1.5
+        assert s.snapshot_observation_t95_multiplier == 2.5
+        assert s.snapshot_observation_path_t95_multiplier == 1.25
 
     def test_extra_fields_ignored(self):
         s = settings_from_dict({'not_a_real_field': 999, 'forecast_blend_lambda': 0.1})

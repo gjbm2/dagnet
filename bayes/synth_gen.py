@@ -59,7 +59,13 @@ from typing import Any
 from bayes.dsl_explosion import explode_dsl
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
+for _path in (
+    os.path.join(REPO_ROOT, "bayes"),
+    os.path.join(REPO_ROOT, "graph-editor"),
+    os.path.join(REPO_ROOT, "graph-editor", "lib"),
+):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +140,15 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
         "edges": [
             ("drift10d10d-a-to-b", "9bd28742-1ade-4f0a-b047-457cacfa8712", "SYNTH-drift10d10d-a-to-b-w", "SYNTH-drift10d10d-a-to-b-c"),
             ("drift10d10d-b-to-c", "5f277cbf-e5da-4af5-a6b2-c735dd2a099e", "SYNTH-drift10d10d-b-to-c-w", "SYNTH-drift10d10d-b-to-c-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
+    "window-rate-prop": {
+        "graph_file": "synth-window-rate-prop.json",
+        "graph_id": "graph-synth-window-rate-prop",
+        "edges": [
+            ("wrp-a-to-b", "f2d0c5c4-7c45-4de8-a0a5-94ef7c0f6a11", "SYNTH-wrp-a-to-b-w", "SYNTH-wrp-a-to-b-c"),
+            ("wrp-b-to-c", "79b7e4f9-f69d-44c0-bd5c-cd06fd5c70c2", "SYNTH-wrp-b-to-c-w", "SYNTH-wrp-b-to-c-c"),
         ],
         "base_date": "2025-12-12",
     },
@@ -283,6 +298,69 @@ def discover_synth_graphs(data_repo: str | None = None) -> list[dict]:
             })
 
     return results
+
+
+def _truth_graph_name(truth_path: str, truth: dict) -> str:
+    graph_name = (truth.get("graph") or {}).get("name")
+    if graph_name:
+        return str(graph_name)
+    return os.path.basename(truth_path).replace(".truth.yaml", "")
+
+
+def _truth_param_id_for_edge(truth: dict, graph_name: str, edge_key: str) -> str:
+    """Return the parameter id a truth-file edge key will generate.
+
+    This mirrors graph_from_truth._edge_id without importing the generator
+    during freshness checks. The invariant is load-bearing: generated
+    parameter ids must be unique across synth truth files, otherwise one
+    fixture can overwrite another fixture's parameter YAML.
+    """
+    graph_cfg = truth.get("graph") or {}
+    raw_ids = graph_cfg.get("raw_ids", False)
+    prefix = ""
+    if not raw_ids:
+        prefix = graph_name.replace("synth-", "").replace("-test", "")
+        if not prefix.startswith("synth"):
+            prefix = f"synth-{prefix}"
+
+    if raw_ids or not prefix:
+        return edge_key
+    if edge_key.startswith(prefix) or edge_key.startswith(graph_name):
+        return edge_key
+    return f"{prefix}-{edge_key}"
+
+
+def _find_synth_param_id_collisions(
+    data_repo: str | None = None,
+    *,
+    target_graph_name: str | None = None,
+) -> dict[str, list[str]]:
+    """Find generated parameter ids shared by multiple synth truth files."""
+    owners: dict[str, set[str]] = {}
+    for item in discover_synth_graphs(data_repo):
+        truth = item.get("truth") or {}
+        graph_name = _truth_graph_name(item.get("truth_path", ""), truth)
+        edges = truth.get("edges") or {}
+        if not isinstance(edges, dict):
+            continue
+        for edge_key, edge_cfg in edges.items():
+            if not isinstance(edge_cfg, dict):
+                continue
+            param_id = _truth_param_id_for_edge(truth, graph_name, str(edge_key))
+            owners.setdefault(param_id, set()).add(graph_name)
+
+    collisions = {
+        param_id: sorted(graphs)
+        for param_id, graphs in owners.items()
+        if len(graphs) > 1
+    }
+    if target_graph_name:
+        collisions = {
+            param_id: graphs
+            for param_id, graphs in collisions.items()
+            if target_graph_name in graphs
+        }
+    return collisions
 
 
 def _probe_fe_hash_alignment(
@@ -501,9 +579,27 @@ def verify_synth_data(
     # ── Accumulate reasons ──────────────────────────────────────────
     reasons: list[str] = []
 
-    # Schema version: v1 meta (no schema_version) forces regen
-    if meta and meta.get("schema_version", 1) < 2:
-        reasons.append("Meta sidecar is v1 (pre-comprehensive checks) — regen required")
+    # Generated parameter YAMLs are shared workspace artefacts. If two
+    # truth files generate the same parameter id, whichever fixture
+    # bootstraps last overwrites the other's file and corrupts from-file
+    # materialisation (notably asat paths).
+    collisions = _find_synth_param_id_collisions(data_repo, target_graph_name=graph_name)
+    for param_id, graph_names in sorted(collisions.items()):
+        reasons.append(
+            f"Synthetic parameter id collision: {param_id} shared by "
+            f"{', '.join(graph_names)}"
+        )
+
+    # Schema version: meta below current version forces regen. Bumped to
+    # 3 when graph_from_truth started salting event_ids with the graph name
+    # so fixture variants sharing topology (e.g. synth-mirror-4step +
+    # -slow + -wide) get distinct event SHAs and thus distinct core_hash
+    # families — without the bump, the old meta on disk would look fresh
+    # by hash and the regen would not fire.
+    if meta and meta.get("schema_version", 1) < 3:
+        reasons.append(
+            "Meta sidecar pre-dates event_id graph-name salting — regen required"
+        )
 
     # Truth file hash
     if meta and meta.get("truth_sha256") != truth_sha:
@@ -867,7 +963,7 @@ def save_synth_meta(
             graph_sha = hashlib.sha256(f.read()).hexdigest()
 
     meta = {
-        "schema_version": 2,
+        "schema_version": 3,
         "truth_sha256": truth_sha,
         "graph_sha256": graph_sha,
         "event_hashes": event_hashes or {},
@@ -1197,6 +1293,7 @@ def derive_truth_from_graph(graph_snapshot: dict, topology) -> dict:
 DEFAULT_SIM_CONFIG = {
     "mean_daily_traffic": 5000,
     "n_days": 100,
+    "base_date": "2025-11-01",
     "kappa_sim_default": 50.0,     # entry-day (user-cohort) overdispersion
     "kappa_step_default": 50.0,    # step-day (nodal) overdispersion — drawn per (calendar_day_at_from_node, edge)
     "failure_rate": 0.05,          # 5% of fetch nights fail
@@ -1211,6 +1308,7 @@ DEFAULT_SIM_CONFIG = {
     "frame_drop_rate": 0.0,      # per-row random drop probability (independent of failure_rate)
     "toggle_rate": 0.0,          # per-date probability that an edge×slice toggles emitting on/off
     "initial_absent_pct": 0.0,   # fraction of edge×slice combos that start not-emitting
+    "edge_fetch_until": {},      # optional per-edge final retrieval date (YYYY-MM-DD)
 }
 
 
@@ -1263,6 +1361,11 @@ def simulate_graph(
     frame_drop_rate = sim_config.get("frame_drop_rate", 0.0)
     toggle_rate = sim_config.get("toggle_rate", 0.0)
     initial_absent_pct = sim_config.get("initial_absent_pct", 0.0)
+    edge_fetch_until_raw = sim_config.get("edge_fetch_until", {}) or {}
+    edge_fetch_until_dates = {
+        str(edge_id): datetime.strptime(str(until), "%Y-%m-%d")
+        for edge_id, until in edge_fetch_until_raw.items()
+    }
     seed = sim_config["seed"]
     base_date_str = sim_config.get("base_date", "2025-11-01")
     base_date = datetime.strptime(base_date_str, "%Y-%m-%d")
@@ -1283,10 +1386,8 @@ def simulate_graph(
         pid = et.param_id
         t = _resolve_truth_edge(truth, pid)
         if t:
-            onset = t.get("onset", 0.0)
-            mu = t.get("mu", 1.0)
-            sigma = t.get("sigma", 0.5)
-            edge_t95 = onset + math.exp(mu + 1.645 * sigma)
+            onset = float(t.get("onset", 0.0) or 0.0)
+            edge_t95 = _edge_latency_t95(t)
             total_onset += onset
             if edge_t95 > max_edge_t95:
                 max_edge_t95 = edge_t95
@@ -1841,6 +1942,7 @@ def simulate_graph(
         frame_drop_rate=frame_drop_rate,
         toggle_rate=toggle_rate,
         initial_absent_pct=initial_absent_pct,
+        edge_fetch_until_dates=edge_fetch_until_dates,
         alt_cohort_daily=alt_cohort_daily,
     )
 
@@ -1969,6 +2071,108 @@ def _traverse(
                        step_day_fn=step_day_fn)
 
 
+def _edge_latency_t95(params: dict[str, Any]) -> float:
+    """Approximate 95th percentile for the configured synthetic latency DGP."""
+    onset = float(params.get("onset", 0.0) or 0.0)
+    shape = str(params.get("latency_shape") or params.get("latency_distribution") or "lognormal")
+    if shape == "uniform":
+        high = float(params.get("latency_high", params.get("high", 0.0)) or 0.0)
+        return onset + max(high, 0.0)
+    if shape == "stepped":
+        steps = params.get("latency_steps") or params.get("steps") or []
+        max_day = 0.0
+        for step in steps:
+            if isinstance(step, dict):
+                day = step.get("day", step.get("offset", 0.0))
+            elif isinstance(step, (list, tuple)) and step:
+                day = step[0]
+            else:
+                continue
+            try:
+                max_day = max(max_day, float(day))
+            except (TypeError, ValueError):
+                continue
+        return onset + max_day
+    mu = float(params.get("mu", 1.0) or 0.0)
+    sigma = float(params.get("sigma", 0.5) or 0.0)
+    t95 = onset + math.exp(mu + 1.645 * sigma)
+    if shape == "capped_lognormal":
+        cap = params.get("latency_cap", params.get("cap"))
+        if cap is not None:
+            try:
+                t95 = min(t95, onset + max(float(cap), 0.0))
+            except (TypeError, ValueError):
+                pass
+    return t95
+
+
+def _draw_edge_latency(
+    params: dict[str, Any],
+    rng: np.random.Generator,
+    *,
+    mu: float,
+    sigma: float,
+    onset: float,
+) -> float:
+    """Draw latency from the truth-configured synthetic DGP.
+
+    Default behaviour remains the historical lognormal branch. Additional
+    shapes let synth fixtures exercise real-world pathologies where the
+    modelling approximation is lognormal but the generated observations are
+    stepped, uniform, or capped.
+    """
+    shape = str(params.get("latency_shape") or params.get("latency_distribution") or "lognormal")
+    if shape == "uniform":
+        low = float(params.get("latency_low", params.get("low", 0.0)) or 0.0)
+        high = float(params.get("latency_high", params.get("high", low)) or low)
+        if high < low:
+            low, high = high, low
+        return onset + float(rng.uniform(low, high))
+    if shape == "stepped":
+        steps = params.get("latency_steps") or params.get("steps") or []
+        values: list[float] = []
+        probs: list[float] = []
+        for step in steps:
+            if isinstance(step, dict):
+                day = step.get("day", step.get("offset", 0.0))
+                prob = step.get("prob", step.get("weight", 1.0))
+            elif isinstance(step, (list, tuple)) and step:
+                day = step[0]
+                prob = step[1] if len(step) > 1 else 1.0
+            else:
+                continue
+            try:
+                day_f = float(day)
+                prob_f = max(float(prob), 0.0)
+            except (TypeError, ValueError):
+                continue
+            if prob_f <= 0.0:
+                continue
+            values.append(day_f)
+            probs.append(prob_f)
+        if values:
+            probs_arr = np.asarray(probs, dtype=np.float64)
+            probs_arr = probs_arr / probs_arr.sum()
+            idx = int(rng.choice(len(values), p=probs_arr))
+            return onset + values[idx]
+        return onset
+    if shape == "capped_lognormal":
+        if sigma > 0.001:
+            raw = float(rng.lognormal(mu, sigma))
+        else:
+            raw = 0.0
+        cap = params.get("latency_cap", params.get("cap"))
+        if cap is not None:
+            try:
+                raw = min(raw, max(float(cap), 0.0))
+            except (TypeError, ValueError):
+                pass
+        return onset + raw
+    if sigma > 0.001:
+        return onset + float(rng.lognormal(mu, sigma))
+    return 0.0
+
+
 def _take_edge(
     edge_id: str,
     t_current: float,
@@ -1993,10 +2197,7 @@ def _take_edge(
     mu = user_mus.get(edge_id, params.get("mu", 0.0)) if user_mus else params.get("mu", 0.0)
     sigma = user_sigmas.get(edge_id, params.get("sigma", 0.0)) if user_sigmas else params.get("sigma", 0.0)
     onset = user_onsets.get(edge_id, params.get("onset", 0.0)) if user_onsets else params.get("onset", 0.0)
-    if sigma > 0.001:
-        latency = onset + rng.lognormal(mu, sigma)
-    else:
-        latency = 0.0
+    latency = _draw_edge_latency(params, rng, mu=mu, sigma=sigma, onset=onset)
 
     t_arrival = t_current + latency
     person[f"edge:{edge_id}"] = t_arrival
@@ -2165,6 +2366,7 @@ def _generate_observations_nightly(
     frame_drop_rate: float = 0.0,
     toggle_rate: float = 0.0,
     initial_absent_pct: float = 0.0,
+    edge_fetch_until_dates: dict[str, datetime] | None = None,
     alt_cohort_daily: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
@@ -2502,8 +2704,23 @@ def _generate_observations_nightly(
     # sparsity model left empty (see post-simulation log below).
     _sparsity_emitted_counts: dict[tuple[str, str], int] = {}
 
+    edge_param_id_by_uuid = {
+        str(edge_id): str(et.param_id)
+        for edge_id, et in topology.edges.items()
+        if getattr(et, "param_id", None)
+    }
+
     def _sparsity_gate(edge_id: str, slice_key: str) -> bool:
         """Return True if this row should be emitted (not dropped by sparsity)."""
+        edge_until = (edge_fetch_until_dates or {}).get(edge_id)
+        if edge_until is None:
+            edge_until = (edge_fetch_until_dates or {}).get(
+                edge_param_id_by_uuid.get(str(edge_id), ""),
+            )
+        if edge_until is not None:
+            fetch_date = base_date + timedelta(days=fetch_night)
+            if fetch_date.date() > edge_until.date():
+                return False
         if not _sparsity_active:
             return True
         key = (edge_id, slice_key)
@@ -4210,7 +4427,9 @@ Examples:
     if not args.bust_cache and not args.clean and not args.dry_run:
         graph_name_for_verify = os.path.basename(truth_path).replace(".truth.yaml", "")
         freshness = verify_synth_data(graph_name_for_verify, data_repo,
-                                      check_enrichment=getattr(args, 'enrich', False))
+                                      check_enrichment=getattr(args, 'enrich', False),
+                                      check_param_files=True,
+                                      check_event_hashes=True)
         if freshness["status"] == "fresh":
             _progress(100, "done", f"data fresh — skipped")
             print(f"\nData is fresh — skipping rebuild ({freshness['reason']})")

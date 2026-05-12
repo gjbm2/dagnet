@@ -186,7 +186,7 @@ export async function getParameterFromFile(options: {
   
   if (targetSlice) {
     const parsed = parseConstraints(targetSlice);
-    
+
     // Check for cohort() first - cohort evidence window
     const todayUK = formatDateUK(new Date());
 
@@ -278,33 +278,21 @@ export async function getParameterFromFile(options: {
               });
 
               if (virtualResult.success && virtualResult.count > 0) {
-                // Tier 1: reconstruct daily arrays from snapshot rows
-                // For uncontexted queries, use the mode clause as the slice key
-                // (e.g. 'window()' or 'cohort()') — snapshot rows are keyed by this.
+                // Tier 1: file-row truncation by per-row anchor_day, with
+                // per-anchor-day snapshot overlay. File data accrues over
+                // time and is the primary record; snapshot rows for the
+                // queried slice provide point-in-time-correct values that
+                // overlay matching file rows. Snapshot-only anchor_days
+                // (not present in the file) are not added here — the file
+                // is the canonical row index and lag-array positional
+                // alignment is fragile.
                 const targetSliceKey = sliceFamilyKey || modeClause || '';
                 const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {
                   workspace: { repository: workspaceRepo, branch: workspaceBranch },
                 });
 
                 if (timeSeries.length > 0 && paramFile?.data?.values) {
-                  // Replace the daily arrays on the value entry whose own
-                  // slice family matches the asat query's slice — context
-                  // dimensions plus mode (cohort/window). Pre-fix this loop
-                  // overwrote every values[] entry, so a query for one slice
-                  // clobbered every other slice's arrays with the queried
-                  // slice's data. Match by slice family so unrelated slices
-                  // are left untouched.
-                  //
-                  // Lag arrays (median/mean/anchor_*) are rewritten from the
-                  // same timeSeries on the matched entries to preserve the
-                  // positional-alignment contract relied on by
-                  // parameterValueToCohortData.
                   const values = paramFile.data.values as any[];
-                  // Build the asat query's family key from the parsed
-                  // target — context dims + mode + cohort anchor.
-                  // Different cohort anchors are different populations
-                  // (#6 + reviewer-M2); cohort/window date BOUNDS are
-                  // query filters and are not part of the family.
                   const targetFamilyKey = _familyKeyFromDSL(targetSlice);
                   const matchedValues = _selectAsatTargetValues(values, targetFamilyKey);
                   if (matchedValues.length === 0) {
@@ -313,21 +301,95 @@ export async function getParameterFromFile(options: {
                       { availableSlices: values.map(v => v.sliceDSL ?? '(bare)') }
                     );
                   } else {
+                    // Build snapshot map keyed by UK-normalised date so it
+                    // matches file row dates (file dates are stored in UK
+                    // format `d-MMM-yy`, snapshot rows return ISO
+                    // `YYYY-MM-DD`). Prior to this normalisation, lookups
+                    // silently missed and snapshot overlay never fired.
+                    const snapshotByDate = new Map<string, any>();
+                    for (const pt of timeSeries) {
+                      try {
+                        snapshotByDate.set(normalizeToUK(pt.date), pt);
+                      } catch {
+                        // Skip rows with unparseable date — defensive.
+                      }
+                    }
+                    let totalOverlaid = 0;
+                    let totalAppended = 0;
+                    let totalRowsKept = 0;
                     for (const v of matchedValues) {
-                      v.n_daily = timeSeries.map(pt => pt.n);
-                      v.k_daily = timeSeries.map(pt => pt.k);
-                      v.dates = timeSeries.map(pt => pt.date);
-                      v.median_lag_days = timeSeries.map(pt => pt.median_lag_days);
-                      v.mean_lag_days = timeSeries.map(pt => pt.mean_lag_days);
-                      v.anchor_median_lag_days = timeSeries.map(pt => (pt as any).anchor_median_lag_days);
-                      v.anchor_mean_lag_days = timeSeries.map(pt => (pt as any).anchor_mean_lag_days);
-                      v.n = timeSeries.reduce((sum: number, pt: any) => sum + pt.n, 0);
-                      v.k = timeSeries.reduce((sum: number, pt: any) => sum + pt.k, 0);
+                      // Upsert daily series by date: file rows (truncated to asat)
+                      // first, then snapshot rows overwrite matching dates and
+                      // append snapshot-only dates. Snapshot rows are
+                      // self-contained (n, k, all four lag fields) so appending
+                      // preserves parallel-array alignment without fabrication.
+                      type DailyCell = {
+                        n: number;
+                        k: number;
+                        median_lag_days?: number;
+                        mean_lag_days?: number;
+                        anchor_median_lag_days?: number;
+                        anchor_mean_lag_days?: number;
+                      };
+                      const byDate = new Map<string, DailyCell>();
+
+                      if (Array.isArray(v.dates) && Array.isArray(v.n_daily) && Array.isArray(v.k_daily)) {
+                        for (let i = 0; i < v.dates.length; i++) {
+                          let dUK: string;
+                          try {
+                            const parsedDate = parseUKDate(normalizeToUK(v.dates[i]));
+                            if (parsedDate > asatDateObj) continue;
+                            dUK = normalizeToUK(v.dates[i]);
+                          } catch { continue; }
+                          byDate.set(dUK, {
+                            n: v.n_daily[i],
+                            k: v.k_daily[i],
+                            median_lag_days: Array.isArray(v.median_lag_days) ? v.median_lag_days[i] : undefined,
+                            mean_lag_days: Array.isArray(v.mean_lag_days) ? v.mean_lag_days[i] : undefined,
+                            anchor_median_lag_days: Array.isArray(v.anchor_median_lag_days) ? v.anchor_median_lag_days[i] : undefined,
+                            anchor_mean_lag_days: Array.isArray(v.anchor_mean_lag_days) ? v.anchor_mean_lag_days[i] : undefined,
+                          });
+                        }
+                      }
+
+                      let overlaid = 0;
+                      let appended = 0;
+                      for (const [dUK, snap] of snapshotByDate.entries()) {
+                        const prior = byDate.get(dUK);
+                        byDate.set(dUK, {
+                          n: snap.n,
+                          k: snap.k,
+                          median_lag_days: snap.median_lag_days ?? prior?.median_lag_days,
+                          mean_lag_days: snap.mean_lag_days ?? prior?.mean_lag_days,
+                          anchor_median_lag_days: (snap as any).anchor_median_lag_days ?? prior?.anchor_median_lag_days,
+                          anchor_mean_lag_days: (snap as any).anchor_mean_lag_days ?? prior?.anchor_mean_lag_days,
+                        });
+                        if (prior) overlaid++; else appended++;
+                      }
+
+                      const sortedDates = [...byDate.keys()].sort(
+                        (a, b) => parseUKDate(a).getTime() - parseUKDate(b).getTime()
+                      );
+                      const n_daily = sortedDates.map(d => byDate.get(d)!.n);
+                      const k_daily = sortedDates.map(d => byDate.get(d)!.k);
+
+                      v.dates = sortedDates;
+                      v.n_daily = n_daily;
+                      v.k_daily = k_daily;
+                      v.median_lag_days = sortedDates.map(d => byDate.get(d)!.median_lag_days);
+                      v.mean_lag_days = sortedDates.map(d => byDate.get(d)!.mean_lag_days);
+                      v.anchor_median_lag_days = sortedDates.map(d => byDate.get(d)!.anchor_median_lag_days);
+                      v.anchor_mean_lag_days = sortedDates.map(d => byDate.get(d)!.anchor_mean_lag_days);
+                      v.n = n_daily.reduce((sum: number, x: number) => sum + (x || 0), 0);
+                      v.k = k_daily.reduce((sum: number, x: number) => sum + (x || 0), 0);
                       v._asat = parsed.asat;
                       v._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
+                      totalOverlaid += overlaid;
+                      totalAppended += appended;
+                      totalRowsKept += sortedDates.length;
                     }
                     asatApplied = true;
-                    console.log(`[DataOperationsService] asat tier 1: reconstructed ${timeSeries.length} daily points from snapshot DB on ${matchedValues.length} matching slice(s) of ${values.length}`);
+                    console.log(`[DataOperationsService] asat tier 1: ${totalRowsKept} row(s) <= ${asatDateUK} across ${matchedValues.length} matching slice(s) of ${values.length}; ${totalOverlaid} overlaid + ${totalAppended} appended from ${timeSeries.length} snapshot row(s)`);
                   }
                 }
 

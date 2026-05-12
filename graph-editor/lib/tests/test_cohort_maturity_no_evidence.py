@@ -1,18 +1,22 @@
-"""cohort_maturity no-evidence degeneration contract test.
+"""cohort_maturity no-evidence model-curve analytic-median canary.
 
-At a public-tooling no-evidence limit (early `asat()` on a window that
-still yields rows), the cohort_maturity result must collapse onto one
-model-only forecast family:
+Companion to ``test_cohort_maturity_no_evidence_truth.py`` covering both
+window and cohort temporal modes (the truth file fixes the window-mode
+boundary; this one exercises the cohort path on the same single edge).
 
-    - conditioned row midpoint (`midpoint`)
-    - forecast-only row midpoint (`model_midpoint`)
-    - metadata overlay curve (`metadata.model_curves[*].curve`)
+For each row in the bulk-CDF region, the chart's per-family medians
+must track the closed-form analytic anticipation:
 
-must all coincide, while raw `evidence_x` / `evidence_y` stay null.
+    model_curve_midpoint  ≈ Beta_median(α, β)        × CDF(τ)
+    model_midpoint        ≈ Beta_median(α_pred, β_pred) × CDF(τ)
 
-Fan upper/lower bounds (`fan_upper`/`fan_lower`) must equal their
-model-only counterparts (`model_fan_upper`/`model_fan_lower`) at every
-informative tau.
+Beta_median is ``scipy.stats.beta.ppf(0.5, ·, ·)`` (closed form via
+inverse CDF). CDF is the shifted lognormal at the prior's mean params.
+No MC is invoked by the oracle.
+
+Multi-hop variants are intentionally out of scope — composing the
+analytic median across multiple edges is not a closed-form expression
+and warrants a separate, composition-aware oracle.
 
 Replaces ``graph-ops/scripts/cohort-maturity-no-evidence-test.sh``.
 The bash file is preserved as a thin shim that delegates here.
@@ -21,6 +25,7 @@ The bash file is preserved as a thin shim that delegates here.
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 from pathlib import Path
@@ -28,7 +33,12 @@ from typing import Any, Optional
 
 import pytest
 
-from conftest import requires_data_repo, requires_db, _ensure_synth_ready
+from conftest import (
+    requires_data_repo,
+    requires_db,
+    _ensure_synth_ready,
+    _ensure_bayes_sidecar_for_asat,
+)
 from _daemon_client import DaemonError, get_default_client
 
 
@@ -38,18 +48,28 @@ _ANALYSE_SH = _REPO_ROOT / "graph-ops" / "scripts" / "analyse.sh"
 _PYTHON_BE_URL = os.environ.get("PYTHON_API_URL", "http://localhost:9000")
 
 _GRAPH = "synth-mirror-4step"
+_EDGE_NAME = "m4-delegated-to-registered"
 _WINDOW = "31-Jan-26:15-Mar-26"
 _ASAT = "1-Feb-26"
-_EPS = 1e-6
-_MIN_INFORMATIVE_ROWS = 5
-_NEAR_ZERO_FLOOR = 1e-4
 
-# Same case matrix as cohort-maturity-no-evidence-test.sh (lines 206-216).
+# Same tolerances and bulk-CDF guard as the truth-degeneracy companion
+# test. The first-order analytic identity ``median(p × CDF) ≈
+# Beta_median × CDF`` is sharp where CDF dispersion is small (epistemic
+# basis). Predictive uses a 4×-larger ``mu_sd_pred`` and carries a
+# bounded ~2-3% second-order correction the predictive tolerance
+# accommodates.
+_REL_TOL_EPI = 0.015
+_REL_TOL_PRED = 0.04
+_ABS_TOL = 5e-5
+_BULK_CDF_LO = 0.30
+_BULK_CDF_HI = 0.95
+_MIN_INFORMATIVE_ROWS = 5
+
+# Single-hop only — multi-hop median composition is not a closed-form
+# anticipation and lives in a separate test design.
 _CASES: list[tuple[str, str]] = [
     ("window_single_hop", f"from(m4-delegated).to(m4-registered).window({_WINDOW}).asat({_ASAT})"),
     ("cohort_single_hop", f"from(m4-delegated).to(m4-registered).cohort({_WINDOW}).asat({_ASAT})"),
-    ("window_multi_hop", f"from(m4-created).to(m4-success).window({_WINDOW}).asat({_ASAT})"),
-    ("cohort_multi_hop", f"from(m4-created).to(m4-success).cohort({_WINDOW}).asat({_ASAT})"),
 ]
 
 
@@ -85,7 +105,7 @@ def _resolve_data_repo_path() -> Optional[str]:
 _DATA_REPO_PATH = _resolve_data_repo_path()
 
 
-def _run_analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
+def _run_analyse_with_sidecar(graph: str, dsl: str, sidecar: Path) -> dict[str, Any]:
     client = get_default_client() if _DATA_REPO_PATH else None
     if client is not None:
         args = [
@@ -93,8 +113,10 @@ def _run_analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
             "--name", graph,
             "--query", dsl,
             "--type", "cohort_maturity",
-            "--no-snapshot-cache",
+            "--no-cache", "--no-snapshot-cache",
             "--format", "json",
+            "--bayes-vars", str(sidecar),
+            "--display", '{"show_model_curve":true}',
         ]
         try:
             return client.call_json("analyse", args)
@@ -105,13 +127,49 @@ def _run_analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
             )
     cmd = [
         "bash", str(_ANALYSE_SH), graph, dsl,
-        "--type", "cohort_maturity", "--no-snapshot-cache", "--format", "json",
+        "--type", "cohort_maturity", "--no-cache", "--no-snapshot-cache",
+        "--format", "json",
+        "--bayes-vars", str(sidecar),
+        "--display", '{"show_model_curve":true}',
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(_REPO_ROOT), timeout=300)
     if result.returncode != 0:
         raise AssertionError(f"analyse.sh exit {result.returncode}\nstderr:\n{result.stderr[-2000:]}")
     idx = result.stdout.find("{")
     return json.loads(result.stdout[idx:])
+
+
+def _shifted_lognormal_cdf(tau: int, *, onset: float, mu: float, sigma: float) -> float:
+    model_age = float(tau) - onset
+    if model_age <= 0 or sigma <= 0:
+        return 0.0
+    z = (math.log(model_age) - mu) / sigma
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+
+def _beta_median(alpha: float, beta: float) -> float:
+    from scipy.stats import beta as _beta_dist
+    return float(_beta_dist.ppf(0.5, alpha, beta))
+
+
+def _read_sidecar_prior(sidecar_path: Path, edge_param_id: str) -> dict[str, float]:
+    sc = json.loads(sidecar_path.read_text())
+    edges = sc.get("webhook_payload_edges") or []
+    edge = next(
+        (e for e in edges if e.get("param_id") == edge_param_id),
+        None,
+    )
+    if edge is None:
+        pytest.fail(f"sidecar missing edge {edge_param_id!r}")
+    slc = (edge.get("slices") or {}).get("window()") or {}
+    required = (
+        "alpha", "beta", "alpha_pred", "beta_pred",
+        "mu_mean", "sigma_mean", "onset_mean",
+    )
+    missing = [k for k in required if slc.get(k) is None]
+    if missing:
+        pytest.fail(f"sidecar slice missing fields for {edge_param_id}: {missing}")
+    return {k: float(slc[k]) for k in required}
 
 
 @requires_db
@@ -123,107 +181,93 @@ def _run_analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
     ids=[c[0] for c in _CASES],
 )
 def test_cohort_maturity_no_evidence_collapse(case_name: str, dsl: str) -> None:
-    """At the no-evidence limit, midpoint/model_midpoint/overlay must collapse and evidence stay null."""
-    _ensure_synth_ready(_GRAPH, enriched=True, bayesian=False, check_fe_parity=False)
+    """Per-family chart medians must track Beta_median × CDF analytic
+    anticipation in the bulk-CDF window for window and cohort modes."""
+    _ensure_synth_ready(_GRAPH, enriched=True, bayesian=True, check_fe_parity=False)
 
-    payload = _run_analyse_cohort_maturity(_GRAPH, dsl)
+    sidecar_str = _ensure_bayes_sidecar_for_asat(_GRAPH, as_at=_ASAT)
+    if sidecar_str is None:
+        pytest.skip(f"[{case_name}] Bayes sidecar unavailable for {_GRAPH}")
+    sidecar_path = Path(sidecar_str)
+
+    prior = _read_sidecar_prior(sidecar_path, _EDGE_NAME)
+    alpha, beta = prior["alpha"], prior["beta"]
+    alpha_pred, beta_pred = prior["alpha_pred"], prior["beta_pred"]
+    mu, sigma, onset = prior["mu_mean"], prior["sigma_mean"], prior["onset_mean"]
+    epi_p_median = _beta_median(alpha, beta)
+    pred_p_median = _beta_median(alpha_pred, beta_pred)
+
+    payload = _run_analyse_with_sidecar(_GRAPH, dsl, sidecar_path)
     result_block = payload.get("result") or {}
 
     rows = result_block.get("data") or []
     if not rows:
         pytest.fail(f"[{case_name}] result.data is empty")
 
-    model_curves = (result_block.get("metadata") or {}).get("model_curves") or {}
-    if not model_curves:
-        pytest.fail(f"[{case_name}] metadata.model_curves missing")
-
-    first_curve_entry = next(iter(model_curves.values()))
-    curve = first_curve_entry.get("curve") or []
-    curve_by_tau: dict[int, float] = {}
-    for p in curve:
-        tau = p.get("tau_days")
-        rate = p.get("model_rate")
-        if tau is not None and rate is not None:
-            curve_by_tau[int(tau)] = float(rate)
-    if not curve_by_tau:
-        pytest.fail(f"[{case_name}] promoted overlay curve is empty")
-
-    # Build the eligible-row table: skip the dead/zero segment before the
-    # model has risen since it is mechanically equal and not informative.
     eligible: list[dict[str, Any]] = []
     for row in rows:
         tau = row.get("tau_days")
-        midpoint = row.get("midpoint")
         model_midpoint = row.get("model_midpoint")
-        if tau is None or midpoint is None or model_midpoint is None:
+        overlay = row.get("model_curve_midpoint")
+        if tau is None or model_midpoint is None or overlay is None:
             continue
         tau_i = int(tau)
-        overlay = curve_by_tau.get(tau_i)
-        if overlay is None:
-            continue
-        if max(abs(float(midpoint)), abs(float(model_midpoint)), abs(float(overlay))) < _NEAR_ZERO_FLOOR:
+        cdf_tau = _shifted_lognormal_cdf(tau_i, onset=onset, mu=mu, sigma=sigma)
+        if not (_BULK_CDF_LO <= cdf_tau <= _BULK_CDF_HI):
             continue
         eligible.append({
             "tau": tau_i,
-            "midpoint": float(midpoint),
             "model_midpoint": float(model_midpoint),
             "overlay": float(overlay),
-            "evidence_x": row.get("evidence_x"),
-            "evidence_y": row.get("evidence_y"),
-            "fan_upper": row.get("fan_upper"),
-            "model_fan_upper": row.get("model_fan_upper"),
-            "fan_lower": row.get("fan_lower"),
-            "model_fan_lower": row.get("model_fan_lower"),
+            "oracle_epi": epi_p_median * cdf_tau,
+            "oracle_pred": pred_p_median * cdf_tau,
+            "cdf": cdf_tau,
         })
 
     if len(eligible) < _MIN_INFORMATIVE_ROWS:
         pytest.fail(
-            f"[{case_name}] only {len(eligible)} informative rows found "
+            f"[{case_name}] only {len(eligible)} bulk-CDF rows found in "
+            f"[{_BULK_CDF_LO:.2f}, {_BULK_CDF_HI:.2f}] "
             f"(need ≥ {_MIN_INFORMATIVE_ROWS})"
         )
+
+    def _drift(actual: float, oracle: float) -> tuple[float, float]:
+        abs_d = abs(actual - oracle)
+        denom = max(abs(oracle), _ABS_TOL)
+        return abs_d, abs_d / denom
 
     violations: list[str] = []
     for r in eligible:
         tau = r["tau"]
-        midpoint = r["midpoint"]
-        model_midpoint = r["model_midpoint"]
-        overlay = r["overlay"]
-
-        if r["evidence_x"] is not None or r["evidence_y"] is not None:
+        epi_abs, epi_rel = _drift(r["overlay"], r["oracle_epi"])
+        pred_abs, pred_rel = _drift(r["model_midpoint"], r["oracle_pred"])
+        if epi_abs > _ABS_TOL and epi_rel > _REL_TOL_EPI:
             violations.append(
-                f"tau={tau}: expected evidence_x/evidence_y null, "
-                f"got {r['evidence_x']!r}/{r['evidence_y']!r}"
+                f"tau={tau}: overlay={r['overlay']:.8f} drift "
+                f"vs Beta_median(α, β)·CDF={r['oracle_epi']:.8f} "
+                f"({epi_rel*100:.2f}% rel; tol {_REL_TOL_EPI*100:.1f}%)"
             )
-        if abs(midpoint - model_midpoint) > _EPS:
+        if pred_abs > _ABS_TOL and pred_rel > _REL_TOL_PRED:
             violations.append(
-                f"tau={tau}: midpoint={midpoint:.8f} != model_midpoint={model_midpoint:.8f}"
-            )
-        if abs(overlay - model_midpoint) > _EPS:
-            violations.append(
-                f"tau={tau}: overlay={overlay:.8f} != model_midpoint={model_midpoint:.8f}"
-            )
-
-        fu, mfu = r["fan_upper"], r["model_fan_upper"]
-        fl, mfl = r["fan_lower"], r["model_fan_lower"]
-        if fu is not None and mfu is not None and abs(float(fu) - float(mfu)) > _EPS:
-            violations.append(
-                f"tau={tau}: fan_upper={float(fu):.8f} != model_fan_upper={float(mfu):.8f}"
-            )
-        if fl is not None and mfl is not None and abs(float(fl) - float(mfl)) > _EPS:
-            violations.append(
-                f"tau={tau}: fan_lower={float(fl):.8f} != model_fan_lower={float(mfl):.8f}"
+                f"tau={tau}: model_midpoint={r['model_midpoint']:.8f} drift "
+                f"vs Beta_median(α_pred, β_pred)·CDF={r['oracle_pred']:.8f} "
+                f"({pred_rel*100:.2f}% rel; tol {_REL_TOL_PRED*100:.1f}%)"
             )
 
     if violations:
-        # Print a head-of-table preview alongside the violations so the
-        # operator sees what the actual values were.
         rows_preview = "\n".join(
-            f"  tau={r['tau']:4d}  midpoint={r['midpoint']:.8f}  "
-            f"model_mid={r['model_midpoint']:.8f}  overlay={r['overlay']:.8f}"
+            f"  tau={r['tau']:4d}  cdf={r['cdf']:.4f}  "
+            f"overlay={r['overlay']:.8f}  oracle_epi={r['oracle_epi']:.8f}  "
+            f"model_mid={r['model_midpoint']:.8f}  oracle_pred={r['oracle_pred']:.8f}"
             for r in eligible[:8]
         )
         report = (
-            f"\n[{case_name}] degeneration invariant violated:\n"
+            f"\n[{case_name}] analytic-median canary violated:\n"
+            f"  Beta_median(epi)  = {epi_p_median:.6f}  "
+            f"(α={alpha:.3f}, β={beta:.3f})\n"
+            f"  Beta_median(pred) = {pred_p_median:.6f}  "
+            f"(α_pred={alpha_pred:.3f}, β_pred={beta_pred:.3f})\n"
+            f"  CDF prior params  μ={mu:.4f}  σ={sigma:.4f}  onset={onset:.4f}\n"
             f"{rows_preview}\n\nViolations (first 10):\n  "
             + "\n  ".join(violations[:10])
         )

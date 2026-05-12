@@ -10,6 +10,15 @@ forecasting:
   # Default maturity horizon (days) when no reliable edge-specific t95 is available.
   DEFAULT_T95_DAYS: 30
 
+  # Snapshot observation refresh horizons.
+  #
+  # t95/path_t95 remain modelling maturity horizons. These multipliers extend
+  # the fetch/refresh window so cohort-maturity evidence coverage keeps
+  # observing late-tail conversions instead of treating "mostly mature" as
+  # "fully observed".
+  SNAPSHOT_OBSERVATION_T95_MULTIPLIER: 2.0
+  SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER: 1.5
+
   # Forecast prior strength (λ) for blending forecast vs evidence in immature data.
   FORECAST_BLEND_LAMBDA: 0.15
 

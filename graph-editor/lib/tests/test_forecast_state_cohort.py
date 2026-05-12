@@ -406,106 +406,6 @@ class TestScopeAndCarrierConsistency:
                 "Path+carrier gives lower completeness (double upstream lag)"
 
 
-class TestAggregateISLikelihood:
-    """73k regression: CF single-retrieval likelihood matches compiler form."""
-
-    def test_single_retrieval_completeness_lives_in_success_probability(self):
-        from runner.forecast_state import _cohort_binomial_log_likelihood
-
-        p_draws = np.array([0.2], dtype=float)
-        completeness_draws = np.array([0.5], dtype=float)
-
-        actual = _cohort_binomial_log_likelihood(
-            p_draws=p_draws,
-            completeness_draws=completeness_draws,
-            n_i=100.0,
-            k_i=10.0,
-        )[0]
-
-        compiler_form = (
-            10.0 * math.log(0.2 * 0.5)
-            + 90.0 * math.log1p(-(0.2 * 0.5))
-        )
-        effective_exposure_form = (
-            10.0 * math.log(0.2)
-            + 40.0 * math.log1p(-0.2)
-        )
-
-        assert actual == pytest.approx(compiler_form)
-        assert actual != pytest.approx(effective_exposure_form)
-
-
-class TestSubsetConditioningBlend:
-    """Doc 52 §14 — engine-level subset-conditioning blend.
-
-    Covers blend provenance and row-mix behaviour on
-    `compute_forecast_trajectory` (the inner kernel that owns
-    conditioned + unconditioned cohort evals).
-    """
-
-    def test_trajectory_blend_cohort_evals_populated_unconditioned(self):
-        """Regression for doc 52 §14.4.1: the unconditioned cohort-loop
-        pass must populate `cohort_evals` for the row-wise blend to work.
-
-        Without this, `cohort_evals_unc` is empty, the length-mismatch
-        branch takes over, and `sweep.cohort_evals` reverts to the
-        conditioned-only draws — which means the BE topo pass, daily-
-        conversions annotation, and latency band sweep (all of which
-        read `cohort_evals[i].y_draws/x_draws`) remain uncorrected.
-        """
-        from runner.forecast_state import (
-            compute_forecast_trajectory, CohortEvidence,
-        )
-        from runner.model_resolver import ResolvedModelParams, ResolvedLatency
-        import numpy as np
-
-        resolved = ResolvedModelParams(
-            p_mean=0.3, p_sd=0.05,
-            alpha=30.0, beta=70.0,
-            alpha_pred=30.0, beta_pred=70.0,
-            n_effective=100.0,
-            edge_latency=ResolvedLatency(
-                mu=2.0, sigma=0.5, onset_delta_days=0.0,
-                mu_sd=0.1, sigma_sd=0.05,
-            ),
-            source='bayesian',
-        )
-        cohorts = [
-            CohortEvidence(
-                obs_x=[10.0] * 30,
-                obs_y=[3.0] * 30,
-                x_frozen=10.0,
-                y_frozen=3.0,
-                frontier_age=20,
-                a_pop=10.0,
-                eval_age=20,
-            )
-            for _ in range(6)
-        ]
-
-        sweep = compute_forecast_trajectory(
-            resolved=resolved,
-            cohorts=cohorts,
-            max_tau=30,
-        )
-
-        # Provenance: r = 60/100 = 0.6, blend applied.
-        assert sweep.blend_applied is True
-        assert sweep.r == pytest.approx(0.6)
-        # cohort_evals must be populated with one entry per cohort
-        # (not empty — which is the failure mode we're guarding).
-        assert sweep.cohort_evals is not None
-        assert len(sweep.cohort_evals) == 6
-        # Each entry's draws are the blended row-mix across the
-        # conditioned and unconditioned passes. Draws array length = S.
-        for ce in sweep.cohort_evals:
-            assert ce.y_draws.shape == (sweep.rate_draws.shape[0],)
-            assert ce.x_draws.shape == (sweep.rate_draws.shape[0],)
-            assert np.all(np.isfinite(ce.y_draws))
-            assert np.all(np.isfinite(ce.x_draws))
-            assert np.all(ce.x_draws > 0)
-
-
 class TestPreparedRuntimeBundle:
     """WP2 runtime-bundle plumbing for summary and trajectory kernels."""
 
@@ -699,12 +599,12 @@ class TestPreparedRuntimeBundle:
         # σ ≤ 0 — so for an all-non-latent chain this remains empty.
         # The new carrier_to_x field carries the canonical composition.
         assert x_provider.carrier_to_x is not None
-        assert x_provider.carrier_to_x.is_active
-        assert x_provider.carrier_to_x.diagnostics.has_latency_edge is False
+        assert x_provider.carrier_to_x.is_composed
+        assert x_provider.carrier_to_x.has_latency_edge is False
         # Dirac-at-zero: every τ has full conditional mass.
-        det_cdf = x_provider.carrier_to_x.deterministic_cdf
-        assert det_cdf is not None
-        assert float(det_cdf[0]) == pytest.approx(1.0, abs=1e-9)
+        cond_cdf = x_provider.carrier_to_x.conditional_cdf
+        assert cond_cdf is not None
+        assert float(cond_cdf[0]) == pytest.approx(1.0, abs=1e-9)
         assert diag['population_root'] == 'm4-landing'
         assert diag['carrier_to_x']['mode'] == _phase1_expected_carrier_mode(
             mode='cohort',

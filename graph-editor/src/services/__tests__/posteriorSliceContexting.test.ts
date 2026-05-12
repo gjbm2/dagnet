@@ -189,6 +189,41 @@ describe('contextGraphForEffectiveDsl — in-schema contexting', () => {
     expect(graph.edges[0].p.latency.posterior).toBeUndefined();
   });
 
+  it('emits a session-log warning when asat() strict-drops a fit (Phase 6a)', async () => {
+    // Defence-in-depth (asat-bayes-vars-fix plan §Phase 6a). The strict-drop
+    // is by design; the session-log entry surfaces it so a future regression
+    // — e.g. wrapPatchIfRaw silently defaulting fitted_at to NOW for past
+    // asat queries — is observable instead of silent.
+    const { sessionLogService } = await import('../sessionLogService');
+    const calls: Array<{ category: string; operation: string; details?: string }> = [];
+    const original = sessionLogService.warning.bind(sessionLogService);
+    (sessionLogService as any).warning = (
+      category: string,
+      operation: string,
+      message: string,
+      details?: string,
+    ): string => {
+      calls.push({ category, operation, details });
+      return 'stub';
+    };
+
+    try {
+      const graph = makeGraphWithEdge('p-strict-drop');
+      contextGraphForEffectiveDsl(
+        graph,
+        resolverFor('p-strict-drop', { posterior: makePosterior() }),
+        'window().asat(1-Jan-25)',
+      );
+    } finally {
+      (sessionLogService as any).warning = original;
+    }
+
+    const stricts = calls.filter((c) => c.operation === 'BAYES_SLICE_STRICT_DROP_AT_ASAT');
+    expect(stricts.length).toBe(1);
+    expect(stricts[0].details).toContain('paramId=p-strict-drop');
+    expect(stricts[0].details).toContain('asat=1-Jan-25');
+  });
+
   it('clears posterior strictly when parameter file has no posterior slices (73b §7.5)', () => {
     const graph = makeGraphWithEdge('p-1');
     graph.edges[0].p.posterior = { distribution: 'beta', alpha: 7, beta: 13 } as any;

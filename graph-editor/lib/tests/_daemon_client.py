@@ -74,7 +74,19 @@ class DaemonClient:
 
     @classmethod
     def start(cls, *, env: Optional[dict[str, str]] = None) -> "DaemonClient":
-        """Spawn the daemon and wait for the ready handshake."""
+        """Spawn the daemon and wait for the ready handshake.
+
+        Sets `DAGNET_DAEMON_IDLE_MS` to 1 hour by default so the daemon
+        does not self-terminate mid-pytest-run from its 5-minute default
+        idle timeout. The lib suite interleaves long stretches of non-
+        daemon tests between daemon-using tests; the default timeout
+        would fire during those gaps and produce cascade failures
+        like `daemon is no longer running (exit 0)` on the next call.
+        Override with `DAGNET_DAEMON_IDLE_MS=...` if a shorter window
+        is genuinely needed.
+        """
+        spawn_env = env or dict(os.environ)
+        spawn_env.setdefault("DAGNET_DAEMON_IDLE_MS", str(60 * 60 * 1000))
         proc = subprocess.Popen(
             ["bash", str(_DAEMON_SH)],
             stdin=subprocess.PIPE,
@@ -82,7 +94,7 @@ class DaemonClient:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            env=env or dict(os.environ),
+            env=spawn_env,
         )
         ready_line = proc.stdout.readline()
         if not ready_line:
@@ -112,6 +124,65 @@ class DaemonClient:
             if len(self._stderr_buf) > 1000:
                 del self._stderr_buf[:500]
 
+    def _restart_after_death(self) -> None:
+        """Re-spawn the daemon in place after it has exited.
+
+        Replaces ``self._proc`` and resets per-process state. Counter
+        and stderr buffer are kept across the restart so request ids
+        stay monotonic and earlier diagnostics remain visible. Raises
+        DaemonError if the restart itself fails to produce a fresh
+        ready handshake.
+
+        Called from ``call()`` when ``self._proc.poll()`` has returned
+        non-None (daemon idle timeout fired, OOM, external kill, etc.).
+        """
+        prev_exit = self._proc.returncode
+        prev_stderr_tail = "".join(self._stderr_buf[-50:])
+        spawn_env = dict(os.environ)
+        spawn_env.setdefault("DAGNET_DAEMON_IDLE_MS", str(60 * 60 * 1000))
+        proc = subprocess.Popen(
+            ["bash", str(_DAEMON_SH)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=spawn_env,
+        )
+        ready_line = proc.stdout.readline()
+        if not ready_line:
+            stderr = proc.stderr.read() if proc.stderr else ""
+            raise DaemonError(
+                f"daemon restart failed (prior exit {prev_exit}). "
+                f"prior stderr tail:\n{prev_stderr_tail}\n"
+                f"new daemon stderr:\n{stderr}",
+                exit_code=proc.returncode or -1,
+                stdout="",
+                stderr=stderr,
+            )
+        ready = json.loads(ready_line)
+        if not ready.get("ready"):
+            raise DaemonError(
+                f"unexpected daemon ready handshake on restart: {ready_line!r}",
+                exit_code=-1,
+                stdout=ready_line,
+                stderr="",
+            )
+        # Replace process state. Stderr drain thread is daemon=True and
+        # tied to the old proc; spawn a fresh one for the new proc.
+        self._proc = proc
+        self._spawn_monotonic = time.monotonic()
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr, daemon=True
+        )
+        self._stderr_thread.start()
+        print(
+            f"[daemon-client] auto-restarted daemon after death "
+            f"(prior exit {prev_exit}); request will retry on the new process",
+            file=sys.stderr,
+            flush=True,
+        )
+
     def _next_id(self) -> str:
         with self._lock:
             self._counter += 1
@@ -123,14 +194,13 @@ class DaemonClient:
         Raises DaemonError on non-zero exit. Thread-safe via internal lock,
         but the daemon serialises requests internally so concurrent callers
         will block on each other's I/O.
+
+        Auto-restarts the daemon if it has died between calls (e.g. idle
+        timeout, OOM, or external kill). The retry happens once; if the
+        restart itself fails the original DaemonError surfaces.
         """
         if self._proc.poll() is not None:
-            raise DaemonError(
-                f"daemon is no longer running (exit {self._proc.returncode})",
-                exit_code=self._proc.returncode or -1,
-                stdout="",
-                stderr="".join(self._stderr_buf[-200:]),
-            )
+            self._restart_after_death()
 
         req_id = self._next_id()
         req = {"id": req_id, "command": command, "args": args}
@@ -152,6 +222,12 @@ class DaemonClient:
             )
 
         if not line:
+            # Daemon closed stdout mid-request. If the process has exited,
+            # auto-restart and retry the call once. Otherwise surface the
+            # original error.
+            if self._proc.poll() is not None:
+                self._restart_after_death()
+                return self.call(command, args)
             stderr = "".join(self._stderr_buf[-200:])
             raise DaemonError(
                 f"daemon closed stdout mid-request. stderr tail:\n{stderr}",

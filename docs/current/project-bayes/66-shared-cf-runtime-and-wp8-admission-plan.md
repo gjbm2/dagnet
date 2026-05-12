@@ -622,6 +622,15 @@ becomes true.
 - a stage weakens a parity or degeneracy guard instead of fixing the
   underlying drift
 
+## 8a. Test debt to pick up when WP8 lands (added 12-May-26)
+
+When WP8's substrate-unification work lands and the cross-cutting
+natural-degeneracy parity test described in
+`cohort-maturity-evidence-coverage-design.md` §sub-stage 2a / 2c is in
+place, the following stale canary in the test suite must be revisited:
+
+- **`graph-editor/lib/tests/test_doc56_phase0_behaviours.py::test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split`** — currently marked `xfail(strict=False)` with a reason citing this section. The test asserts that on the bayesian sidecar path, `window(...)` and `cohort(...)` `p_infinity_mean` values must differ by ≥ 0.04 — i.e. they must *not* converge. That contract was a witness for the legacy "downstream convergence defect" where collapsing posteriors meant the upstream selection effect was being lost in the bayesian sweep. WP8's substrate unification inverts the contract: cohort and window now consume the same primitive evidence substrate, the same likelihood is fed to the same posterior, and asymptote separation is no longer architecturally possible on this fixture. The 0.595 vs 0.593 numbers observed at writing are convolution noise around an equality that is now correct by design. Either delete the test (the WP8 parity test covers the new contract directly) or invert it into a collapse witness with a small-tolerance equality assertion. Cross-reference: [post-cf-rebuild-py-test-audit-7-may-26.md](../post-cf-rebuild-py-test-audit-7-may-26.md) calls out the sister test `test_query_scoped_identity_carrier_collapses_public_evidence_basis`, which has already been loosened to `rel=0.05`; the `TODO.md` entry "Multi-hop window/cohort parity: re-test on a smooth fixture" tracks both.
+
 ## 9. Final acceptance criteria
 
 This plan should be considered delivered only when all of the following

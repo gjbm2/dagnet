@@ -96,6 +96,30 @@ const MAX_ID_LENGTH = 64; // Per schema
 // UUID format validation (v4 UUID)
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function canonicaliseForSignal(value: any): any {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => canonicaliseForSignal(item))
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const key of Object.keys(value).sort()) {
+      out[key] = canonicaliseForSignal(value[key]);
+    }
+    return out;
+  }
+  return value ?? null;
+}
+
+function canonicalSignalPart(value: any): string {
+  return JSON.stringify(canonicaliseForSignal(value));
+}
+
+function nodeDisplayName(node: any): string {
+  return `"${node.id || node.uuid?.substring(0, 8) || 'unknown'}"`;
+}
+
 /**
  * Integrity Check Service
  * 
@@ -1557,6 +1581,53 @@ export class IntegrityCheckService {
           suggestion: 'Ensure this is intentional; if nodes represent distinct states, they should have distinct events'
         });
       }
+    }
+
+    // #7b: Multiple graph nodes materialise to the same provider-level event signal.
+    // `event_id` is an indirection; CF/window primitive reuse depends on the
+    // provider query being able to distinguish graph node states.
+    const materialisedSignalToNodes = new Map<string, {
+      provider: string;
+      providerEventName: string;
+      filtersLabel: string;
+      nodes: any[];
+    }>();
+    for (const node of nodes) {
+      if (!node.event_id || !node.uuid) continue;
+      const eventData = eventFiles.get(node.event_id)?.data;
+      const providerEventNames = eventData?.provider_event_names;
+      if (!providerEventNames || typeof providerEventNames !== 'object') continue;
+
+      for (const [provider, providerEventName] of Object.entries(providerEventNames)) {
+        if (providerEventName === undefined || providerEventName === null || providerEventName === '') continue;
+        const filters = provider === 'amplitude' ? (eventData?.amplitude_filters || []) : [];
+        const providerNamePart = canonicalSignalPart(providerEventName);
+        const filtersPart = canonicalSignalPart(filters);
+        const key = `${provider}|${providerNamePart}|${filtersPart}`;
+        if (!materialisedSignalToNodes.has(key)) {
+          materialisedSignalToNodes.set(key, {
+            provider,
+            providerEventName: providerNamePart,
+            filtersLabel: filtersPart,
+            nodes: [],
+          });
+        }
+        materialisedSignalToNodes.get(key)!.nodes.push(node);
+      }
+    }
+    for (const signal of materialisedSignalToNodes.values()) {
+      if (signal.nodes.length <= 1) continue;
+      const names = signal.nodes.map(nodeDisplayName).join(', ');
+      issues.push({
+        fileId: graphFileId,
+        type: 'graph',
+        severity: 'warning',
+        category: 'semantic',
+        field: `${signal.provider} provider signal: ${signal.providerEventName}`,
+        message: `Multiple nodes materialise to the same ${signal.provider} event signal: ${names} — window primitives will see a hidden mixture of node states`,
+        suggestion: 'Use distinct provider event names or provider filters for distinct graph states, or model the shared signal as one node',
+        details: `provider_event_name=${signal.providerEventName}; filters=${signal.filtersLabel}`,
+      });
     }
 
     // #9: Placeholder labels (e.g. "Node 14")

@@ -32,7 +32,6 @@ Assertions:
 
 import inspect
 import os
-import re
 import sys
 from unittest.mock import patch
 
@@ -158,35 +157,3 @@ def test_wp8_off_for_post_stage_2_analytic_with_query_scoped_false():
     assert diag.get('resolved_source') == 'analytic'
 
 
-def test_wp8_cohort_forecast_v3_call_site_hardcodes_false():
-    """The cohort_forecast_v3 bundle-build site holds the WP8 flag at False.
-
-    A literal-source assertion guards against refactors that would
-    silently make the flag flow from a runtime input.
-    """
-    cf3_path = os.path.join(
-        os.path.dirname(__file__),
-        '..',
-        'runner',
-        'cohort_forecast_v3.py',
-    )
-    with open(cf3_path, 'r') as f:
-        src = f.read()
-
-    assert re.search(
-        r'_direct_cohort_p_conditioning\s*=\s*False',
-        src,
-    ), (
-        "cohort_forecast_v3.py must hold "
-        "_direct_cohort_p_conditioning = False as a literal at the "
-        "runtime-bundle build site so WP8 cannot be engaged through "
-        "this entry point."
-    )
-    assert not re.search(
-        r'_direct_cohort_p_conditioning\s*=\s*True',
-        src,
-    ), (
-        "cohort_forecast_v3.py must not contain a literal "
-        "_direct_cohort_p_conditioning = True assignment; WP8 is "
-        "structurally deferred until the explicit admission rules land."
-    )

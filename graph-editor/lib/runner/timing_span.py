@@ -27,6 +27,7 @@ class TimingTransitionPrimitive:
     mu: float
     sigma: float
     onset: float
+    latency_parameter: Optional[bool] = None
     p_sd: float = 0.0
     mu_sd: float = 0.0
     sigma_sd: float = 0.0
@@ -254,8 +255,14 @@ def compose_timing_span_from_transition_primitives(
             )
         p = float(getattr(primitive, 'p', 0.0) or 0.0)
         mu = float(getattr(primitive, 'mu', 0.0) or 0.0)
-        sigma = float(getattr(primitive, 'sigma', 0.0) or 0.0)
-        onset = float(getattr(primitive, 'onset', 0.0) or 0.0)
+        latency_parameter = getattr(primitive, 'latency_parameter', None)
+        if latency_parameter is False:
+            mu = 0.0
+            sigma = 0.0
+            onset = 0.0
+        else:
+            sigma = float(getattr(primitive, 'sigma', 0.0) or 0.0)
+            onset = float(getattr(primitive, 'onset', 0.0) or 0.0)
         densities[(from_id, to_id)] = _edge_sub_probability_density(
             tau_grid,
             p,

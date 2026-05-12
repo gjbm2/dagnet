@@ -2278,12 +2278,32 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     completeness = last_row.get('completeness')
                     completeness_sd = last_row.get('completeness_sd')
 
-                    # Raw evidence totals are no longer manufactured at
-                    # preparation time. The runtime provenance below reports
-                    # primitive-bound evidence; chart-display evidence stays
-                    # on selected A-clock rows.
-                    evidence_k = None
-                    evidence_n = None
+                    # Per-edge observed evidence totals (n, k) for the CF
+                    # response. Source: the maturity rows' `evidence_x` /
+                    # `evidence_y`, which `_project_runtime_rows` writes as
+                    # the τ-aggregated observed sums across `engine_cohorts`
+                    # (obs_x[τ] / obs_y[τ], falling back to x_frozen / y_frozen
+                    # past each cohort's obs window). At τ = saturation_tau
+                    # every cohort has either reached its frontier or rolled
+                    # to its frozen value, so the saturated row carries the
+                    # per-edge totals the IS conditioning saw. Active-carrier
+                    # rows can leave the saturated cell None (no
+                    # selected-bucket entry past the last obs τ); walk back
+                    # to the latest row that exposes them.
+                    evidence_n = last_row.get('evidence_x')
+                    evidence_k = last_row.get('evidence_y')
+                    if evidence_n is None or evidence_k is None:
+                        for _row in reversed(maturity_rows):
+                            if evidence_n is None and _row.get('evidence_x') is not None:
+                                evidence_n = _row.get('evidence_x')
+                            if evidence_k is None and _row.get('evidence_y') is not None:
+                                evidence_k = _row.get('evidence_y')
+                            if evidence_n is not None and evidence_k is not None:
+                                break
+                    if evidence_n is not None:
+                        evidence_n = int(round(float(evidence_n)))
+                    if evidence_k is not None:
+                        evidence_k = int(round(float(evidence_k)))
 
                     from runner.forecast_state import _last_forensic
                     # Doc 52 §14.6: subset-conditioning provenance,

@@ -119,7 +119,21 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
         p_param = edge.get('p')
         if isinstance(p_param, dict):
             p_n = p_param.get('n')
-        
+
+        # Capture the blended p.mean (FE topo Step 2 / CF current-answer scalar)
+        # separately from the carrier value `_extract_probability` plants on
+        # `p`. The visibility-mode 'f+e' branch restores this onto edge['p']
+        # for path-multiplying runners; carrier reads continue to use the
+        # resolver-routed carrier value.
+        p_blended = None
+        if not (edge.get('case_id') and edge.get('case_variant')):
+            if isinstance(p_param, dict):
+                _m = p_param.get('mean')
+                if isinstance(_m, (int, float)):
+                    p_blended = float(_m)
+            elif isinstance(p_param, (int, float)):
+                p_blended = float(p_param)
+
         # Extract costs and uncertainty
         cost_gbp = _extract_cost(edge.get('cost_gbp'))
         cost_gbp_stdev = _extract_cost_stdev(edge.get('cost_gbp'))
@@ -132,6 +146,7 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
             uuid=edge.get('uuid'),
             id=edge.get('id'),
             p=p_mean,
+            p_blended=p_blended,
             p_stdev=p_stdev,
             p_distribution=p_distribution,
             evidence=evidence,
@@ -596,7 +611,16 @@ def apply_visibility_mode(G: nx.DiGraph, mode: str) -> None:
         mode: Visibility mode ('f+e', 'f', or 'e')
     """
     if mode == 'f+e':
-        # Keep p (mean) as-is - no changes needed
+        # 'f+e' displays the blended p.mean (FE topo Step 2 / CF authoritative
+        # current-answer scalar). The converter plants the carrier-baseline
+        # value on data['p'] for model-bearing reads; here we restore the
+        # blended scalar from data['p_blended'] so simpler runners — which
+        # multiply edge['p'] along paths — walk the live blended value
+        # (FE's blend, then CF's refined value once it lands).
+        for u, v, data in G.edges(data=True):
+            blended = data.get('p_blended')
+            if blended is not None:
+                data['p'] = float(blended)
         return
     
     if mode == 'e':

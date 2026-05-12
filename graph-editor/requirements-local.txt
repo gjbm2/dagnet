@@ -25,3 +25,8 @@ modal>=1.0.0
 
 # MCP SDK (bayes/tracker/ investigation tracker server — dev-only)
 mcp>=1.2.0
+
+# py-spy (sampling profiler — used to dump live stacks from the BE
+# worker when investigating wedged-request issues; pure dev tool, never
+# imported from runtime code)
+py-spy>=0.4.0

@@ -1057,3 +1057,228 @@ def test_coverage_is_fractional_under_partial_share_placement():
     )
     assert row['evidence_x_coverage'] == pytest.approx(0.4)
     assert row['evidence_y_coverage'] == pytest.approx(0.4)
+
+
+def test_subject_coverage_source_day_support_sums_to_one_when_dense():
+    """Coverage sums over required source-row support, not row mass.
+
+    One A cohort can reach X on two source days before the same snapshot
+    age: 40% on 2-Mar and 60% on 3-Mar. If both subject source rows are
+    present at the snapshot, the subject-side coverage for that
+    (cohort, τ) cell is 0.4 + 0.6 = 1.0 even though the observed subject
+    count may be zero. This is the epoch-A clean-fixture contract:
+    latency tells us which source rows are required; dense retrievals
+    cover all of them.
+    """
+    from runner.cohort_forecast_v3 import (
+        _PriorCarrierBackmap,
+        _build_observed_span_evidence_surface,
+    )
+
+    primitive = _weighted_primitive(
+        edge_id='b-to-c',
+        source='node-b',
+        dest='node-c',
+        rows=[
+            {
+                'observed_date': '2026-03-02',
+                'retrieved_at': '2026-03-03',
+                'n': 100,
+                'k': 0,
+                'n_weighted': 100.0,
+                'k_weighted': 0.0,
+                'root_day_shares': {'2026-03-02': 1.0},
+            },
+            {
+                'observed_date': '2026-03-03',
+                'retrieved_at': '2026-03-03',
+                'n': 100,
+                'k': 0,
+                'n_weighted': 100.0,
+                'k_weighted': 0.0,
+                'root_day_shares': {'2026-03-03': 1.0},
+            },
+        ],
+    )
+    runtime = SimpleNamespace(
+        graph={
+            'nodes': [{'id': 'node-b'}, {'id': 'node-c'}],
+            'edges': [{'from': 'node-b', 'to': 'node-c', 'id': 'b-to-c'}],
+        },
+    )
+    carrier_backmap = _PriorCarrierBackmap(
+        anchor_days=('2026-03-01',),
+        carrier_pmf_by_anchor={'2026-03-01': (0.0, 0.4, 0.6)},
+    )
+
+    surface, _buckets = _build_observed_span_evidence_surface(
+        runtime=runtime,
+        role='subject_x_to_end_on_a_clock',
+        root_node='node-b',
+        end_node='node-c',
+        primitives=[primitive],
+        anchor_days=['2026-03-01'],
+        max_tau=3,
+        root_day_to_anchor_weights=carrier_backmap,
+    )
+
+    assert surface is not None and surface.has_cells()
+    cell = surface.cells_by_anchor_day['2026-03-01'][2]
+    assert cell.observed_count == pytest.approx(0.0)
+    assert cell.landing_coverage == pytest.approx(1.0), (
+        'Dense source rows across the carrier latency support must cover '
+        'the whole (cohort, τ) cell: 0.4 + 0.6 = 1.0. Coverage must not '
+        'fade merely because the subject rows are zero-valued.'
+    )
+
+
+def test_subject_coverage_drops_when_source_day_support_is_missing():
+    """Missing source rows reduce coverage by missing support weight.
+
+    Same carrier support as the dense test (40% on 2-Mar, 60% on 3-Mar),
+    but only the 2-Mar source row is present at the snapshot. Coverage is
+    therefore 0.4, not 1.0. This is the real sparseness signal the chart
+    should fade for.
+    """
+    from runner.cohort_forecast_v3 import (
+        _PriorCarrierBackmap,
+        _build_observed_span_evidence_surface,
+    )
+
+    primitive = _weighted_primitive(
+        edge_id='b-to-c',
+        source='node-b',
+        dest='node-c',
+        rows=[{
+            'observed_date': '2026-03-02',
+            'retrieved_at': '2026-03-03',
+            'n': 100,
+            'k': 0,
+            'n_weighted': 100.0,
+            'k_weighted': 0.0,
+            'root_day_shares': {'2026-03-02': 1.0},
+        }],
+    )
+    runtime = SimpleNamespace(
+        graph={
+            'nodes': [{'id': 'node-b'}, {'id': 'node-c'}],
+            'edges': [{'from': 'node-b', 'to': 'node-c', 'id': 'b-to-c'}],
+        },
+    )
+    carrier_backmap = _PriorCarrierBackmap(
+        anchor_days=('2026-03-01',),
+        carrier_pmf_by_anchor={'2026-03-01': (0.0, 0.4, 0.6)},
+    )
+
+    surface, _buckets = _build_observed_span_evidence_surface(
+        runtime=runtime,
+        role='subject_x_to_end_on_a_clock',
+        root_node='node-b',
+        end_node='node-c',
+        primitives=[primitive],
+        anchor_days=['2026-03-01'],
+        max_tau=3,
+        root_day_to_anchor_weights=carrier_backmap,
+    )
+
+    assert surface is not None and surface.has_cells()
+    cell = surface.cells_by_anchor_day['2026-03-01'][2]
+    assert cell.observed_count == pytest.approx(0.0)
+    assert cell.landing_coverage == pytest.approx(0.4), (
+        'Only the 40% source-day support row is present, so coverage must '
+        'be 0.4. This catches regressions that binarise any observed row '
+        'to full coverage.'
+    )
+
+
+def test_carrier_and_subject_coverage_vary_independently():
+    """Per design §3.4 (field separation) and §2.3 (per-row min):
+    `evidence_x_coverage` and `evidence_y_coverage` are semantically
+    independent fields — the carrier-side and subject-side per-cohort
+    placement shares can differ at the same (cohort, τ) cell. This
+    happens whenever the join-conditioned carrier backmap distributes
+    a subject row across multiple anchors (latency-distribution
+    smoothing, §2.4 property 4): the carrier surface keeps full unit
+    landing on each anchor, while the subject surface picks up only
+    the backmap-allocated fraction.
+
+    The row builder must surface both fields with their per-role values
+    and compute `coverage = min(carrier, subject)`. A test that asserts
+    `coverage_x == coverage_y` tautologically would not catch the
+    pre-fix bug where both fields collapsed onto a single boolean
+    freshness flag.
+    """
+    from runner.cohort_forecast_v3 import (
+        SelectedAClockEvidence,
+        SelectedAClockEvidenceCell,
+        _project_runtime_rows,
+    )
+
+    runtime = _active_runtime(
+        subject_cdf=[0.0, 0.10, 0.30, 0.60, 0.85, 0.95],
+        carrier_cdf=[0.0, 0.30, 0.70, 1.00, 1.00, 1.00],
+    )
+    cohort = _active_cohort(a_pop=100.0, frontier_age=0)
+    cells = {
+        '2026-03-01': {
+            2: SelectedAClockEvidenceCell(
+                anchor_day='2026-03-01',
+                tau=2,
+                x_at_query_x=30.0,
+                y_at_subject_end=3.0,
+                source='asymmetric_share_synth',
+                # Carrier landed in full (1.0) but the subject row's
+                # share fanned across multiple anchors, leaving 0.6 on
+                # this anchor at this τ.
+                carrier_landing_coverage=1.0,
+                subject_landing_coverage=0.6,
+            ),
+        },
+    }
+    selected = SelectedAClockEvidence(
+        cells_by_anchor_day=cells,
+        anchor_from='2026-03-01',
+        anchor_to='2026-03-01',
+        source='asymmetric_share_synth',
+    )
+
+    rows = _project_runtime_rows(
+        runtime=runtime,
+        evidence_by_tau={},
+        engine_cohorts=[cohort],
+        cohort_list=[{'anchor_day': '2026-03-01'}],
+        cohort_eval_ages=[2],
+        cohort_weights=[100.0],
+        max_tau=5,
+        tau_solid_max=2,
+        tau_future_max=5,
+        sweep_to='2026-03-06',
+        band_level=0.90,
+        selected_a_clock_evidence=selected,
+    )
+    by_tau = {int(r['tau_days']): r for r in rows}
+    row = by_tau[2]
+
+    assert row['evidence_x_coverage'] == pytest.approx(1.0), (
+        f'Carrier-side coverage must reflect the carrier surface\'s '
+        f'per-cohort landing share (1.0 here). '
+        f'Got {row["evidence_x_coverage"]!r}.'
+    )
+    assert row['evidence_y_coverage'] == pytest.approx(0.6), (
+        f'Subject-side coverage must reflect the post-backmap subject '
+        f'surface share (0.6 here). '
+        f'Got {row["evidence_y_coverage"]!r}.'
+    )
+    assert row['coverage'] == pytest.approx(0.6), (
+        f'Per-row coverage = min(evidence_x_coverage, evidence_y_coverage) '
+        f'per design §2.3. min(1.0, 0.6) = 0.6. '
+        f'Got {row["coverage"]!r}.'
+    )
+    # Field independence (§3.4): the two role coverages MUST differ
+    # under asymmetric per-role shares — a tautological equality would
+    # mask the boolean-collapse bug.
+    assert row['evidence_x_coverage'] != row['evidence_y_coverage'], (
+        f'evidence_x_coverage and evidence_y_coverage must vary '
+        f'independently per design §3.4. Got both = '
+        f'{row["evidence_x_coverage"]!r}.'
+    )

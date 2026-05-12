@@ -235,6 +235,18 @@ class ConsoleMirrorService {
 
   private enqueue(entry: MirrorEntry): void {
     this.queue.push(entry);
+    // SELF-INSTRUMENTATION (TEMP): every enqueue logs to the ORIGINAL
+    // console (bypassing the mirror proxy) so we can see in DevTools whether
+    // entries from a specific code path are reaching the queue. Tag is the
+    // first arg if it's a string starting with '['.
+    try {
+      const w = this.originals.log;
+      if (w && entry.kind === 'log') {
+        const firstArg = entry.args[0];
+        const tag = typeof firstArg === 'string' ? firstArg.slice(0, 60) : '<non-string>';
+        w(`[consoleMirror.enqueue] q=${this.queue.length} tag=${tag}`);
+      }
+    } catch { /* ignore */ }
     // Flush quickly but batch to reduce network spam.
     if (this.queue.length >= 50) {
       this.flushSoon(0);
@@ -255,21 +267,76 @@ class ConsoleMirrorService {
     if (!this.enabled) return;
     if (this.queue.length === 0) return;
 
-    const batch = this.queue.splice(0, this.queue.length);
+    // Pack a batch by SERIALISED BODY SIZE, not entry count.
+    //
+    // Why: the previous version capped at 500 entries with `keepalive: true`.
+    // The fetch spec limits keepalive request bodies to 64 KB, so any flooded
+    // batch (e.g. 461 SHA warnings ~250 B each) produced a body well over that
+    // limit, the POST was rejected, the catch path requeued, and the queue
+    // stalled forever.
+    //
+    // Fix: drop `keepalive: true` on regular flushes (we don't need page-unload
+    // survival here), and pack against the server middleware's 2 MB hard cap.
+    const BODY_CAP = 1_500_000;
+    const w = this.originals.warn || console.warn;
+    const lg = this.originals.log;
+
+    const batch: MirrorEntry[] = [];
+    const parts: string[] = [];
+    let bodyLen = '{"entries":[]}'.length;
+    let dropped = 0;
+    while (this.queue.length > 0) {
+      const e = this.queue[0];
+      let s: string;
+      try {
+        s = JSON.stringify(e);
+      } catch {
+        // Per-entry stringify guard: drop just this one rather than sinking the batch.
+        this.queue.shift();
+        dropped++;
+        continue;
+      }
+      // +1 for comma separator (none before first entry).
+      const incr = s.length + (batch.length === 0 ? 0 : 1);
+      if (batch.length > 0 && bodyLen + incr > BODY_CAP) break;
+      // Defensive: a single oversize entry would otherwise loop forever.
+      if (batch.length === 0 && bodyLen + incr > BODY_CAP) {
+        this.queue.shift();
+        dropped++;
+        w(`[consoleMirror] dropped oversize entry (${s.length}B)`);
+        continue;
+      }
+      batch.push(e);
+      parts.push(s);
+      bodyLen += incr;
+      this.queue.shift();
+    }
+    if (batch.length === 0) return;
+    if (this.queue.length > 0) this.flushSoon(0);
+    if (dropped > 0) lg?.(`[consoleMirror.flush] dropped ${dropped} unserialisable entries`);
+
+    const body = `{"entries":[${parts.join(',')}]}`;
+    lg?.(`[consoleMirror.flush] posting ${batch.length} entries (${body.length}B)`);
     try {
       const resp = await fetch(this.endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ entries: batch }),
-        keepalive: true,
+        body,
       });
       if (!resp.ok) {
-        const w = this.originals.warn || console.warn;
-        w('[consoleMirror] flush failed:', resp.status);
+        // Requeue on server failure. Use concat (NOT `unshift(...batch)`) —
+        // the spread form throws RangeError "too many arguments" for large
+        // batches in some browsers.
+        this.queue = batch.concat(this.queue);
+        w(`[consoleMirror] flush failed: ${resp.status}; requeued ${batch.length} entries (q=${this.queue.length})`);
+        this.flushSoon(1000);
+      } else {
+        lg?.(`[consoleMirror.flush] ok ${batch.length} entries`);
       }
     } catch (err) {
-      const w = this.originals.warn || console.warn;
-      w('[consoleMirror] flush error:', err);
+      this.queue = batch.concat(this.queue);
+      w(`[consoleMirror] flush error; requeued ${batch.length} entries (q=${this.queue.length}):`, err);
+      this.flushSoon(1000);
     }
   }
 }

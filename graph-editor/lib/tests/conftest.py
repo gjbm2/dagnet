@@ -36,7 +36,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 import yaml
@@ -506,6 +506,111 @@ def _ensure_bayes_sidecar(
         return None
     _SIDECAR_CACHE[cache_key] = str(sidecar_path)
     return str(sidecar_path)
+
+
+_UK_DATE_RE = re.compile(r"^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})$")
+_UK_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _parse_uk_date(s: str):
+    """Parse `d-MMM-yy` or `d-MMM-yyyy` to a datetime at 00:00 UTC."""
+    from datetime import datetime
+    m = _UK_DATE_RE.match(s.strip())
+    if not m:
+        raise ValueError(f"unrecognised UK date {s!r} (expected d-MMM-yy)")
+    d, mon, y = m.groups()
+    month = _UK_MONTHS.get(mon.lower())
+    if month is None:
+        raise ValueError(f"unrecognised month {mon!r} in {s!r}")
+    yy = int(y)
+    year = 2000 + yy if yy < 70 else (1900 + yy if yy < 100 else yy)
+    return datetime(year, month, int(d))
+
+
+def _ensure_bayes_sidecar_for_asat(
+    graph_name: str,
+    *,
+    as_at: Optional[str] = None,
+):
+    """Like `_ensure_bayes_sidecar`, but ensures the sidecar's
+    `fitted_at` is on or before `as_at` so `resolveAsatPosterior`
+    accepts it.
+
+    Returns the path to a sidecar (potentially a backdated copy) the
+    test should pass to `--bayes-vars`. Idempotent: rerun produces the
+    same path.
+
+    `as_at` is a UK-format date string (`d-MMM-yy`). When None, the
+    helper degrades to `_ensure_bayes_sidecar` semantics — a test that
+    does not use `asat()` (or whose asat is in the future relative to
+    the canonical fit) can call this helper interchangeably.
+
+    The backdated copy lives at
+    `bayes/fixtures/.test-cache/<graph>.fitted-<yyyymmdd>.bayes-vars.json`
+    (gitignored). The canonical sidecar at
+    `bayes/fixtures/<graph>.bayes-vars.json` is NEVER mutated. Sidecar
+    fingerprints are content-based (truth + param hashes) so backdating
+    `fitted_at` does not bust the cache key.
+
+    Implements asat-bayes-vars-fix plan §Phase 4a.
+    """
+    from datetime import timedelta, datetime
+    canonical = _ensure_bayes_sidecar(graph_name)
+    if canonical is None:
+        return None
+    if as_at is None:
+        return canonical
+
+    # 1-day buffer: `resolveAsatPosterior` rejects fits with
+    # `fitted_at > asat`. Worker `fitted_at` is timestamped to seconds
+    # whereas asat is a calendar date (parsed as 00:00:00 on the day);
+    # `fitted_at = same-day-as-asat` would still drop. Anchoring the
+    # backdated value at the start of (asat - 1 day) ensures the fit
+    # survives every clock skew within reason.
+    target_dt = _parse_uk_date(as_at) - timedelta(days=1)
+    target_iso = target_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    with open(canonical) as f:
+        data = json.load(f)
+
+    # If the canonical sidecar's fitted_at is already <= target, no
+    # backdating needed — return canonical as-is.
+    current = data.get("fitted_at") or ""
+    if current:
+        try:
+            current_dt = datetime.strptime(current.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+            if current_dt <= target_dt:
+                return canonical
+        except ValueError:
+            pass  # Treat unparseable as "needs backdate".
+
+    canonical_path = Path(canonical)
+    cache_dir = canonical_path.parent / ".test-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    as_at_slug = _parse_uk_date(as_at).strftime("%Y%m%d")
+    backdated_path = cache_dir / f"{graph_name}.fitted-{as_at_slug}.bayes-vars.json"
+
+    # Reuse cached backdated copy if its fingerprint and fitted_at match.
+    if backdated_path.exists():
+        try:
+            with open(backdated_path) as f:
+                cached = json.load(f)
+            if (
+                cached.get("sidecar_fingerprint") == data.get("sidecar_fingerprint")
+                and cached.get("fitted_at") == target_iso
+            ):
+                return str(backdated_path)
+        except (json.JSONDecodeError, OSError):
+            pass  # Fall through to rewrite.
+
+    data["fitted_at"] = target_iso
+    with open(backdated_path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    return str(backdated_path)
 
 
 def _apply_bayes_sidecar_in_memory(

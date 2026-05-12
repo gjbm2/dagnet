@@ -467,6 +467,22 @@ class TestPhase4AsatVisibility:
             "first_null_completeness_date": null_comp[0]["date"] if null_comp else None,
         }
 
+    @pytest.mark.xfail(
+        reason=(
+            "Stale pending 73q daily_conversions shared-runtime cutover. "
+            "Daily Conversions today bypasses the shared preparation path "
+            "(doc 60 §3.2) and runs its own enrichment in api_handlers, "
+            "which currently produces mature → forecast directly without "
+            "emitting a null-completeness boundary band on asat() queries. "
+            "73q's date reducer (project-bayes/73q-daily-conversions-"
+            "shared-runtime-cutover-plan.md, §Reducer field contract — "
+            "Completeness / Layer) inherits the band from the shared "
+            "substrate. Pick this canary up when 73q lands; the boundary "
+            "shift this test asserts is the natural behaviour of the "
+            "post-cutover reducer."
+        ),
+        strict=False,
+    )
     def test_daily_conversions_boundary_shift(self, dc_live, dc_asat) -> None:
         if GRAPH != "synth-simple-abc":
             pytest.skip("historical asat fixture is defined only for synth-simple-abc")
@@ -551,3 +567,158 @@ class TestPhase4AsatVisibility:
                 f"whole-graph CF asat visibility failed ({n_pass} pass, {n_fail} fail)\n"
                 + "\n".join(rows)
             )
+
+
+# ── Phase 5: CF <-> param-pack evidence round-trip ──────────────────────────
+
+def _param_pack(dsl: str) -> dict[str, Any]:
+    args = [
+        "--graph", _DATA_REPO_PATH or "",
+        "--name", GRAPH,
+        "--query", dsl,
+        "--no-cache", "--format", "json",
+    ]
+    client = get_default_client() if _DATA_REPO_PATH else None
+    if client is not None:
+        try:
+            return client.call_json("param-pack", args)
+        except DaemonError as exc:
+            raise AssertionError(
+                f"daemon param-pack failed for {dsl!r} (exit {exc.exit_code}): {exc}\n"
+                f"stderr:\n{exc.stderr[-2000:]}"
+            )
+    cmd = [
+        "bash", str(_REPO_ROOT / "graph-ops" / "scripts" / "param-pack.sh"),
+        GRAPH, dsl, "--no-cache", "--format", "json",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            cwd=str(_REPO_ROOT), timeout=300)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"param-pack.sh exited {result.returncode}\nstderr:\n{result.stderr[-2000:]}"
+        )
+    idx = result.stdout.find("{")
+    return json.loads(result.stdout[idx:])
+
+
+def _edge_name_from_uuid(graph: dict[str, Any], edge_uuid: str) -> Optional[str]:
+    """Resolve the edge id used in param-pack keys (e.g. ``simple-a-to-b``)."""
+    for e in graph.get("edges", []):
+        if e.get("uuid") == edge_uuid:
+            return e.get("id")
+    return None
+
+
+@pytest.fixture(scope="module")
+def param_pack_live(_ready_synth) -> dict[str, Any]:
+    return _param_pack(ASAT_TEMPORAL_DSL)
+
+
+@pytest.fixture(scope="module")
+def param_pack_asat(_ready_synth) -> dict[str, Any]:
+    return _param_pack(f"{ASAT_TEMPORAL_DSL}.asat({ASAT_DATE})")
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+class TestPhase5ParamPackEvidenceRoundTrip:
+    """Phase 5: the CF endpoint's per-edge ``evidence_n`` / ``evidence_k``
+    must reach ``edge.p.evidence.{n,k}`` via ``applyConditionedForecastToGraph``
+    and surface in the param-pack output. Asserts the full round-trip:
+    BE engine → CF response → FE upsert → param-pack.
+
+    Tolerance: integer rounding both sides (CF rounds to int in
+    ``api_handlers``; param-pack output already integer-valued for n/k),
+    so equality is exact.
+    """
+
+    def _edge_evidence_pairs(
+        self,
+        graph: dict[str, Any],
+        wg_payload: dict[str, Any],
+        pack: dict[str, Any],
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Yield (label, {cf_n, cf_k, pack_n, pack_k}) per parameterised edge."""
+        nmap = _node_id_map(graph)
+        wg_by_uuid = _wg_edges_by_uuid(wg_payload)
+        out: list[tuple[str, dict[str, Any]]] = []
+        for e in graph.get("edges", []):
+            p_id = (e.get("p") or {}).get("id", "")
+            to_name = nmap.get(e.get("to", ""), "")
+            from_name = nmap.get(e.get("from", ""), "")
+            if not p_id or "dropout" in to_name:
+                continue
+            cf_edge = wg_by_uuid.get(e["uuid"]) or {}
+            edge_id = _edge_name_from_uuid(graph, e["uuid"])
+            if not edge_id:
+                continue
+            label = f"{from_name} -> {to_name}"
+            out.append((label, {
+                "cf_n": cf_edge.get("evidence_n"),
+                "cf_k": cf_edge.get("evidence_k"),
+                "pack_n": pack.get(f"e.{edge_id}.p.evidence.n"),
+                "pack_k": pack.get(f"e.{edge_id}.p.evidence.k"),
+            }))
+        return out
+
+    def _assert_round_trip(
+        self,
+        label_pairs: list[tuple[str, dict[str, Any]]],
+        *,
+        scenario: str,
+    ) -> None:
+        rows: list[str] = []
+        rows.append(
+            f'{"edge":30s} | {"cf n":>10s} | {"pack n":>10s} | '
+            f'{"cf k":>10s} | {"pack k":>10s} | result'
+        )
+        rows.append("-" * 90)
+
+        def fmt(v):
+            return format(v, "10.0f") if isinstance(v, (int, float)) else "      None"
+
+        n_pass = 0
+        n_fail = 0
+        for label, p in label_pairs:
+            ok = (
+                isinstance(p["cf_n"], (int, float))
+                and isinstance(p["pack_n"], (int, float))
+                and isinstance(p["cf_k"], (int, float))
+                and isinstance(p["pack_k"], (int, float))
+                and int(round(float(p["cf_n"]))) == int(round(float(p["pack_n"])))
+                and int(round(float(p["cf_k"]))) == int(round(float(p["pack_k"])))
+            )
+            status = "PASS" if ok else "FAIL"
+            rows.append(
+                f'{label:30s} | {fmt(p["cf_n"])} | {fmt(p["pack_n"])} | '
+                f'{fmt(p["cf_k"])} | {fmt(p["pack_k"])} | {status}'
+            )
+            if ok:
+                n_pass += 1
+            else:
+                n_fail += 1
+
+        if n_fail > 0 or n_pass == 0:
+            pytest.fail(
+                f"[{scenario}] CF -> param-pack evidence round-trip failed "
+                f"({n_pass} pass, {n_fail} fail)\n" + "\n".join(rows)
+            )
+
+    def test_live_evidence_round_trip(
+        self, graph_data, wg_asat_live, param_pack_live,
+    ) -> None:
+        if GRAPH != "synth-simple-abc":
+            pytest.skip("round-trip fixture is defined only for synth-simple-abc")
+        pairs = self._edge_evidence_pairs(graph_data, wg_asat_live, param_pack_live)
+        assert pairs, "no parameterised edges to compare"
+        self._assert_round_trip(pairs, scenario="live")
+
+    def test_asat_evidence_round_trip(
+        self, graph_data, wg_asat, param_pack_asat,
+    ) -> None:
+        if GRAPH != "synth-simple-abc":
+            pytest.skip("round-trip fixture is defined only for synth-simple-abc")
+        pairs = self._edge_evidence_pairs(graph_data, wg_asat, param_pack_asat)
+        assert pairs, "no parameterised edges to compare"
+        self._assert_round_trip(pairs, scenario="asat")

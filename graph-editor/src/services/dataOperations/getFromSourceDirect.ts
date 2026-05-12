@@ -1704,11 +1704,16 @@ export async function getFromSourceDirect(options: {
             })
           : undefined;
         
+        const forecastingForFetchPolicy = await forecastingSettingsService.getForecastingModelSettings();
         refetchPolicy = shouldRefetch({
           existingSlice,
           latencyConfig,
           requestedWindow,
           isCohortQuery,
+          observationHorizonMultipliers: {
+            t95: forecastingForFetchPolicy.SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+            pathT95: forecastingForFetchPolicy.SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+          },
         });
         
         console.log('[DataOps:REFETCH_POLICY] Latency-aware refetch decision:', {

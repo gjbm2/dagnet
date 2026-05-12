@@ -27,12 +27,11 @@ edge; everything else is uniform.
 Window mode (Appendix A pin in
 `docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`):
 each parameterised subject edge is local-clock-bound at its own source
-node with identity weights over the public window. The fetch envelope
-is exactly `[anchor_from, anchor_to]` for every parameterised subject
-edge — single-hop, multi-hop, first edge, intermediate edge, last
-edge — all identical. No propagation. No extension. The local-clock
-binding admits every U-cohort with anchor_day in the public window
-regardless of which X-cohort it descended from.
+node. The first edge keeps the public selected window because it owns
+the displayed denominator. Downstream edges may extend to the evidence
+horizon so the selected-evidence value path can build age-only local
+rate kernels; this is still local-clock evidence, not a propagated
+same-Cohort binding.
 
 Cohort mode: two arrival maps. Subject sub-tree rooted at X with
 identity root weights over the public window; carrier sub-tree rooted
@@ -317,9 +316,11 @@ def build_request_envelope_plan(
     contains `EdgeFetchEnvelope`s keyed by edge identity for every
     parameterised subject and carrier edge in the request topology.
 
-    Window mode produces public-window envelopes for every subject edge
-    and no arrival maps (per-primitive local-clock binding has no
-    shared map).
+    Window mode produces a public-window envelope for the first subject
+    edge and evidence-horizon envelopes for downstream subject edges,
+    with no shared arrival map. Downstream widening supplies local
+    age-only rate kernels; it does not bind rows to a propagated X
+    cohort.
 
     Cohort mode produces:
       - subject envelopes from the X-rooted arrival map (forward
@@ -345,18 +346,29 @@ def build_request_envelope_plan(
     if subject_topo is None or not subject_topo.edge_list:
         return fallback
 
-    # Window mode: public window for every parameterised subject edge.
+    # Window mode: the first subject edge owns the selected X-window
+    # denominator, so it stays on the public window. Downstream subject
+    # edges supply age-only local evidence kernels for propagated selected
+    # mass; those kernels need local rows through the evidence horizon.
     if is_window:
         envs: List[EdgeFetchEnvelope] = []
         for from_id, to_id, edge_dict in subject_topo.edge_list:
             edge_uuid, edge_id = _edge_uuid_id(edge_dict, from_id, to_id)
+            downstream_to = _parse_iso(as_at)
+            if downstream_to is None or downstream_to < anchor_to:
+                downstream_to = anchor_to
+            edge_anchor_to = (
+                anchor_to
+                if str(from_id) == str(query_from_node)
+                else downstream_to
+            )
             envs.append(
                 EdgeFetchEnvelope(
                     edge_uuid=edge_uuid,
                     edge_id=edge_id,
                     role="subject",
                     anchor_from=anchor_from,
-                    anchor_to=anchor_to,
+                    anchor_to=edge_anchor_to,
                 )
             )
         return RequestEnvelopePlan(

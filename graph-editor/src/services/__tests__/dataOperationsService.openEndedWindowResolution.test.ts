@@ -422,8 +422,8 @@ describe('dataOperationsService window resolution regressions', () => {
             mean: 0.1,
             latency: {
               latency_parameter: true,
-              t95: 10,
-              path_t95: 10,
+              t95: 5,
+              path_t95: 5,
               anchor_node_id: 'A',
             },
           },
@@ -433,6 +433,10 @@ describe('dataOperationsService window resolution regressions', () => {
 
     // Build cached window data with a single missing mature day.
     // Reference date is fixed to 17-Dec-25 in beforeEach.
+    // NOTE: this test's edge has t95=5 (overridden below) so that
+    // effectiveMaturity = ceil(5 * SNAPSHOT_OBSERVATION_T95_MULTIPLIER=2) = 10d,
+    // putting matureCutoff at 6-Dec — leaves 4-Dec as a mature gap distinct from
+    // the immature 6-Dec→17-Dec tail.
     const start = parseUKDate('1-Dec-25');
     const end = parseUKDate('17-Dec-25');
     const missing = formatDateUK(parseUKDate('4-Dec-25'));

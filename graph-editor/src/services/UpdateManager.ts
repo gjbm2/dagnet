@@ -2192,6 +2192,18 @@ export class UpdateManager {
         // persisted scalar". Per-field `if (... !== undefined)` guards
         // previously kept stale values so non-latency edges inherited
         // pre-fix bogus path_mu/path_sigma/etc. forever.
+        // TEMP diagnostic: trace path_mu/path_sigma write into analytic entry.
+        console.log('[APPLY_BATCH_LAG_ANALYTIC]', {
+          edgeId: update.edgeId,
+          updLat_path_mu: updLat.path_mu,
+          updLat_path_sigma: updLat.path_sigma,
+          updLat_path_t95: updLat.path_t95,
+          updLat_path_mu_sd: updLat.path_mu_sd,
+          updLat_mu: updLat.mu,
+          updLat_sigma: updLat.sigma,
+          al_path_mu_before: analyticEntry.latency.path_mu,
+          al_path_sigma_before: analyticEntry.latency.path_sigma,
+        });
         const al = analyticEntry.latency;
         al.mu = updLat.mu;
         al.sigma = updLat.sigma;

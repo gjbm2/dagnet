@@ -314,6 +314,7 @@ def _resolved_to_timing_transition(
         mu=float(lat.mu) if lat.mu is not None else 0.0,
         sigma=float(lat.sigma) if (lat.sigma is not None and lat.sigma >= 0) else 0.0,
         onset=float(lat.onset_delta_days) if lat.onset_delta_days is not None else 0.0,
+        latency_parameter=getattr(lat, 'latency_parameter', None),
         p_sd=float(resolved.p_sd or 0.0),
         mu_sd=float(lat.mu_sd or 0.0),
         sigma_sd=float(lat.sigma_sd or 0.0),

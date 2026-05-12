@@ -1,6 +1,6 @@
 # Cohort Outside-In Suite — Post-73n Regression Tracker
 
-**Status**: Clusters A, B, C resolved. Cluster D open.
+**Status**: Clusters A, B, C resolved. Clusters D, E, F open.
 
 Cluster A close-out timeline:
 - Conditioner side resolved 6-May-26 (§3-compliant nested-cumulative
@@ -558,6 +558,28 @@ cohorts and for `_selected_anchor_day_keys` to return all three.
 
 #### Display-side residual (still open)
 
+##### Additional canary surfaces confirmed 8-May-26 (full-suite re-run)
+
+Eight further parametrised cases in [`test_cohort_maturity_model_parity.py`](../../graph-editor/lib/tests/test_cohort_maturity_model_parity.py) and [`test_cohort_maturity_no_evidence.py`](../../graph-editor/lib/tests/test_cohort_maturity_no_evidence.py) plus one in [`test_cohort_maturity_no_evidence_truth.py`](../../graph-editor/lib/tests/test_cohort_maturity_no_evidence_truth.py) confirm the same y-side residual on the parametric `[window_single_hop, cohort_single_hop_widened, window_multi_hop, cohort_multi_hop]` matrix:
+
+- `test_main_midline_matches_promoted_overlay[*]` (4 fails) — reports *"midline differs from overlay at 6 τ (worst: τ=20, rel=3.28%) — overlay path CDF diverges from main chart sweep"*. Wiring fix from Phase 2 Batch B landed (tests read `row.model_curve_midpoint`); the now-exposed substantive divergence is the rate-attributed Y-prefix residue documented above.
+- `test_cohort_maturity_no_evidence_collapse[*]` (4 fails) — under no-evidence the midpoint, model_mid, and overlay should all coincide; sample witness at τ=15: `fan_lower=0.000289 != model_fan_lower=0.000198` — fan band drift on the same surface.
+- `test_no_evidence_curve_matches_truth_analytic` (1 fail) — under truth-degeneracy on `synth-mirror-4step / m4-delegated-to-registered`, midpoint vs `expected` analytic value drifts by 1–6% across the τ grid (e.g. τ=7: midpoint 0.00182 vs expected 0.00302, ~40% gap at the early-τ tail). Originally framed in Phase 2 Batch B verify-run as "~16× off"; the gap on the post-Batch-B wiring-corrected response is materially smaller but the substantive residual remains.
+
+These nine fails plus the multi-hop canaries below all share the rate-attributed Y-prefix mechanism. Fixing it should close all of them; partial fixes can be tracked by which surfaces clear first.
+
+##### Multi-hop canary surfaces confirmed 8-May-26
+
+Three further canaries on multi-hop fixtures, same root cause:
+
+- `test_multihop_evidence_parity.py::TestMultihopCollapse::test_evidence_y_parity` — y-side divergence on `from(m4-delegated).to(m4-success)`, 21 τ values >5% gap.
+- `test_multihop_evidence_parity.py::TestMultihopCollapse::test_midpoint_parity` — midpoint divergence (derived from y), 15 τ values >15% gap.
+- `test_window_cohort_convergence.py::test_multi_hop_composition[synth-mirror-4step:c-d-e]` — multi-hop composition midpoint divergence on the same chain.
+
+evidence_x parity passes on all three; only the y-side projection fails. Same fix candidate (replace rate-attributed Y_prefix with primitive-bound observed Y on the A-clock per the existing adapter plan) closes all of them.
+
+##### Original residual
+
 With both fixes landed, all three selected anchors contribute and
 chart `evidence_x` is within ~10% of oracle on the SIMPLE single-hop
 fixture (e.g. τ=8: chart 2965 vs oracle 2696, ~10% over) — the
@@ -975,9 +997,378 @@ diagnosis. Either rewrite the test against the new architecture
 (call `condition_primitive` first, then check
 `n_cohorts_conditioned`) or retire the test as stale-by-design.
 
+## IS-tempering — strong-evidence over-influence (synthetic witness)
+
+Opened 7-May-26 (Phase 1 / Batch A1 of the post-CF-rebuild test audit).
+
+**Witness:** [`graph-editor/lib/tests/test_v3_strong_evidence_invariant.py::test_strong_evidence_midpoint_near_observed_rate`](../../graph-editor/lib/tests/test_v3_strong_evidence_invariant.py).
+Synthetic, no DB, no data repo.
+
+**Setup:** single-edge graph, prior `Beta(40, 10)` (mean 0.80, strength 50),
+18 cohorts × 300 exposures of true rate 0.50 (so k≈2700, n=5400). Latency
+saturates by age 20 days; the test reads midpoints at τ ≥ 30 (mature zone).
+
+**Reading:** v3 midpoint at maturity = **0.6113**, vs evidence 0.5000.
+Gap = 0.1113.
+
+**Validation of test target:** conjugate Beta-Binomial posterior for these
+priors and evidence is `Beta(40 + 2700, 10 + 2700) = Beta(2740, 2710)`,
+mean **0.5028**. The test's 0.50 target therefore matches the conjugate
+posterior within 0.003 — mathematically sound.
+
+**Implied prior weight:** the 0.6113 reading sits 37.1 % of the way from
+evidence (0.500) to prior (0.800). That implies a prior weight of 0.371.
+The conjugate prior weight given the priors+data masses is 50 / 5450 =
+**0.00917** (0.9 %). The actual reading therefore reflects a prior weight
+**~40× larger** than the priors+data masses warrant.
+
+**Reading of the defect.** The shrinkage is correctly directed (toward the
+prior, away from the evidence) but the magnitude is wrong by an order
+of magnitude. Two non-exclusive hypotheses:
+
+1. **IS tempering λ is too aggressive.** The conditioning step's
+   importance-sampling weight tempering reduces the effective evidence
+   strength. If λ < 1 too far, evidence mass is down-weighted and the
+   prior dominates beyond what the unsoftened data would justify.
+2. **The CF runtime isn't actually consuming the n=5400 evidence the
+   test sets up.** If the cohort frames are being filtered, deduped, or
+   collapsed somewhere in the pipeline, the effective n could be much
+   smaller than 5400, which would correctly produce a heavier prior
+   weight. A diagnostic on actual `evidence_x` / `evidence_y` totals
+   inside the test would distinguish (1) from (2).
+
+**Investigation hooks:**
+
+- Print per-row `evidence_x` / `evidence_y` from `v3_rows` at mature τ;
+  cross-check against the synth setup's expected n=5400 / k≈2700.
+- Trace IS λ in `runner.cohort_forecast_v3` /
+  `runner.primitive_conditioning.condition_primitive` for this fixture.
+- Compare against a Dirac-latency variant of the same fixture (collapses
+  the latency-marginalisation noise floor).
+
+**Risk class.** Synthetic witness, no production-data dependency. Stable
+across runs (random seed fixed at 42). Left RED until the IS path is
+investigated; the test is the canonical reproducer.
+
+**Resolution (7-May-26).** The first investigation hook (print
+`evidence_x` / `evidence_y` at mature τ) settled the question on the
+first probe: at the original fixture the runtime sees **n=300 / k=150**,
+not the n=5400 / k=2700 the docstring advertised. The test was passing
+`anchor_from = anchor_to = '2026-03-01'` (a zero-span window), but the
+synthetic frames placed cohort anchors on `[2026-03-01, 2026-02-27, …,
+2026-01-26]`, so the cohort-admission logic correctly admitted only the
+single cohort whose anchor_day fell inside the window. The other 17
+cohorts were excluded.
+
+A widened-window probe (`anchor_from = 2026-01-26`,
+`anchor_to = 2026-03-01`) confirmed that the runtime then reports
+`evidence_x = 5400` and `evidence_y ≈ 2679` per mature row, with
+midpoint settling at **0.5880** (gap 0.088 from evidence, inside the
+test's 0.10 tolerance). Hypothesis 2 of this entry is therefore the
+correct reading, with the proximate cause being the test fixture's
+window rather than any frame filtering / deduplication / collapse in
+the pipeline. The fixture has been corrected to pass the earliest
+cohort anchor as `anchor_from`; the test is now GREEN.
+
+**Residual finding (open as a smaller, separate question).** Even at
+n=5400 / k≈2700 the midpoint sits at 0.588, not the conjugate posterior
+mean of 0.5028. That implies a prior weight of ~0.29 vs the conjugate
+50 / 5450 = 0.0092 — about **30× heavier** than the priors+data masses
+warrant. The order-of-magnitude over-influence is reduced from the
+original 40× (which was inflated by the 1-cohort artefact) but is not
+zero. If pursued, the witness would be a tighter test on the same
+widened-window fixture asserting `|midpoint - evidence| < ~0.02` rather
+than 0.10. Not opened as a separate tracker entry yet.
+
+Probes preserved at `/tmp/probe_strong_evidence_is.py` (1-cohort
+diagnostic) and `/tmp/probe_strong_evidence_is_widened.py` (18-cohort
+confirmation). Move to durable storage if needed before /tmp GC.
+
+---
+
+## Cluster E — CF endpoint dropped per-edge `evidence_n` / `evidence_k` (CLOSED 8-May-26)
+
+**Date opened**: 8-May-26.
+**Date closed**: 8-May-26 (same-day full-suite re-run confirmed witness no longer fails).
+**Witness**: `test_conditioned_forecast_parity.py::TestPhase4AsatVisibility::test_whole_graph_cf_lowers_visible_evidence` (now passing).
+**Owner**: BE — `handle_conditioned_forecast` in `graph-editor/lib/api_handlers.py`.
+
+### Resolution
+
+Verified against full-suite re-run 8-May-26 (`39 failed, 1475 passed, 38 skipped, 2 xfailed in 1373.63s`): the witness is no longer in the failure set. Likely fix candidate 3 (BE flattens `weighted_evidence.{n_weighted,k_weighted}` into per-edge `evidence_n` / `evidence_k` at the response boundary) landed without an explicit tracker close-out. Forensic record below preserved for next regression of the same shape.
+
+### Forensic record (preserved for future regressions)
+
+### Symptom
+
+The CF endpoint's per-edge response now emits `evidence_n: None` and
+`evidence_k: None` unconditionally. Witness asserts that asat-scoped
+runs return lower `n` / `k` / `completeness` than live runs; observed
+`completeness` does drop (`live=0.8910 → asat=0.6436`) but `n`/`k`
+both come back `None` so the per-edge `ok` predicate fails.
+
+### Mechanism
+
+[`api_handlers.py:2281-2286`](../../graph-editor/lib/api_handlers.py#L2281)
+sets `evidence_k = None` and `evidence_n = None` unconditionally with
+the comment: *"Raw evidence totals are no longer manufactured at
+preparation time. The runtime provenance below reports primitive-bound
+evidence; chart-display evidence stays on selected A-clock rows."*
+
+The data exists deeper in the response — under
+`runtime_provenance.primitives.subject[*].provenance.weighted_evidence
+.{n_weighted_total, k_weighted_total}` — but no consumer reads it
+there. Zero hits across `graph-editor/src/services/` for
+`n_weighted_total` / `k_weighted_total` / `runtime_provenance`.
+
+### Downstream impact (silent)
+
+[`conditionedForecastService.ts:53-85`](../../graph-editor/src/services/conditionedForecastService.ts#L53)
+expects `evidence_n` / `evidence_k` per CF edge and writes them onto
+`p.evidence.{n,k}` in the graph. The contract is explicit at
+[`conditionedForecastService.ts:103-104`](../../graph-editor/src/services/conditionedForecastService.ts#L103):
+*"CF returns observed counts at the conditioned horizon. The FE graph
+projection persists n/k onto edge.p.evidence.{n,k}."*
+
+The FE applies a `finiteNonNeg()` guard at line 84; when the BE returns
+`None`, the FE silently drops the field and the graph never receives
+updated evidence after the CF pass. **Silent regression — no UI error,
+no console warning, the graph just stops accruing evidence post-CF.**
+
+### Risk class
+
+Silent contract break. The FE no-ops the missing fields rather than
+erroring; the graph drifts stale on `p.evidence.{n,k}` without any
+visible signal. Test 3 of batch E (this witness) is the only canary.
+
+### Fix candidates
+
+1. **Restore BE emission**: re-populate `evidence_n` / `evidence_k`
+   per edge from the surviving primitive-bound source
+   (`runtime_provenance.primitives.subject[<terminal>].provenance
+   .weighted_evidence.{n_weighted_total, k_weighted_total}`).
+   Mechanical; preserves the existing FE consumer contract.
+
+2. **Migrate the FE consumer** to read from the new nested location.
+   Touches `conditionedForecastService.ts` plus any other reader; the
+   nested path is harder to thread through the existing
+   `applyBatchLAGValues` shape.
+
+3. **Hybrid**: BE flattens `weighted_evidence.{n_weighted,k_weighted}`
+   into the per-edge `evidence_n` / `evidence_k` fields at the response
+   boundary (one-line projection at line 2285). Cheapest; preserves
+   the documented FE contract; no FE change needed.
+
+Default: option 3.
+
+### Hold-back
+
+The witness test stays RED until the fix lands. Do not "fix" the
+test by relaxing the n/k checks — that masks the real defect.
+
+---
+
+## Cluster F — Reconstructed-asat / file-evidence merge not deduping on shared identity+date
+
+**Date opened**: 8-May-26.
+**Witness**: `test_evidence_adapters.py::test_reconstructed_asat_adapter_coexists_with_raw_file_in_one_merge` (left RED).
+**Owner**: BE — `merge_evidence_candidates` in [`graph-editor/lib/evidence_merge.py:498`](../../graph-editor/lib/evidence_merge.py#L498).
+
+### Symptom
+
+Test fixture: a reconstructed-asat row at 2026-04-01 (`a=100, x=80, y=10`)
+plus a file row covering dates `[2026-04-01, 2026-04-02]` with
+`n_daily=[70, 30]` and `k_daily=[12, 5]`. Test asserts:
+
+```
+merged.totals.n == 80 + 30 == 110
+```
+
+Observed: `merged.totals.n == 180` (= 80 + 70 + 30). The merge is
+keeping BOTH the reconstructed row's `n=80` AND the file row's `n=70`
+for the shared date 2026-04-01 instead of letting the reconstructed
+row win.
+
+Same shape for `k`: expected `10 + 5 == 15`; observed includes the
+file row's `k=12` for the shared date.
+
+### Mechanism (preliminary)
+
+Test docstring is explicit about the intended contract: *"The
+reconstructed row wins for 2026-04-01 (snapshot/reconstructed beats
+file when they share an identity+date). The file row for 2026-04-02
+contributes uniquely."* Either:
+
+1. **Dedup logic regressed** — the identity+date key used to suppress
+   the file row when a reconstructed row covered the same cell, and
+   that suppression is no longer firing.
+2. **Contract changed** — the new merge semantics intentionally keeps
+   both, with the test stale against the new rule.
+
+Distinguishing: read `merge_evidence_candidates` in current source,
+find the dedup branch (or its absence), match against the audit's
+hint that "merge keying changed in §A1".
+
+### Risk class
+
+If (1), every merged evidence set on a shared date gets double-counted
+on `n` and `k` — silent over-counting that biases every downstream
+fitter. If (2), the test is stale and should be rewritten against
+the new contract; downstream consumers may need to re-derive against
+new totals.
+
+### Hold-back
+
+Witness test stays RED until the merge contract is settled. Do not
+"fix" the test by changing `80 + 30 == 110` to `80 + 70 + 30 == 180`
+without confirming case (2) explicitly — that masks case (1) if it's
+the live one.
+
+---
+
+## Cluster G — Identity-carrier seam undercollapses cohort vs window by ~1.5%
+
+**Date opened**: 8-May-26.
+**Witness**: [`test_doc56_phase0_behaviours.py:442`](../../graph-editor/lib/tests/test_doc56_phase0_behaviours.py#L442) `test_query_scoped_identity_carrier_collapses_public_evidence_basis` (left RED).
+**Owner**: BE — projection / admission logic on the cohort vs window seam (file path TBD by `--diag` probe).
+
+### Symptom
+
+The test asserts that under a degraded identity-carrier seam (where the
+upstream carrier has fully resolved, so cohort and window denominators
+should coincide), `evidence_x` at late taus collapses cohort↔window.
+Fixture: `synth-mirror-4step` with `from(m4-delegated).to(m4-success)`.
+
+Observed at the canary tau set (41, 44, 50, 65, 80):
+
+```
+cohort evidence_x:  6513.84
+window evidence_x:  6417.0
+gap:                ~1.5%, beyond pytest.approx default tol
+```
+
+73n contract pins exact collapse on the identity-carrier seam.
+
+### Mechanism (preliminary)
+
+Either:
+
+1. **Admission asymmetry** — cohort and window admit a different set of
+   rows on the post-collapse projection (one accepts, one rejects, on
+   some boundary cohorts or pruned anchors).
+2. **Aggregation asymmetry** — both admit the same rows but accumulate
+   them with different weights (e.g. one path normalises by N_cohort
+   and the other by N_window in a place where they should coincide).
+
+Distinguishing: log per-anchor contributions to `evidence_x` at
+`tau=41` for both surfaces; identify the minority of anchors that
+contribute differently.
+
+### Risk class
+
+1.5% is small enough to be plausibly fixture noise but the test was
+designed against a contract that says "exact". A real undercollapse
+biases the comparison every time consumers compare cohort vs window
+on a fully-resolved upstream seam; downstream impact depends on
+which UI surface reads `evidence_x` at this regime.
+
+### Hold-back
+
+Witness stays RED. Do not relax the tolerance without first proving the
+gap is fixture noise on a second graph fixture (the manifest's open
+question 2). Defer to a 30-min reproduction pass on a second fixture
+before deciding tolerance vs real defect.
+
+---
+
+## Cluster H — Downstream A≠X y-side projection collapses cohort vs window across surfaces
+
+**Date opened**: 8-May-26.
+**Witnesses**:
+- [`test_doc56_phase0_behaviours.py:545`](../../graph-editor/lib/tests/test_doc56_phase0_behaviours.py#L545) `test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split` (left RED).
+- [`test_doc56_phase0_behaviours.py:697`](../../graph-editor/lib/tests/test_doc56_phase0_behaviours.py#L697) `test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split` (left RED).
+
+**Owner**: BE — y-side projection / model-curve construction on downstream A≠X edges. Multiple surfaces (`surprise_gauge`, bayesian-sidecar `p_infinity_mean`).
+
+### Symptom
+
+On a downstream A≠X edge (the `from(simple-b).to(simple-c)` seam over
+`synth-simple-abc`, where the topological window denominator strictly
+exceeds the cohort denominator), the y-side projection collapses
+cohort↔window when the contract says they must diverge:
+
+- **Test 545**: `surprise_gauge.p["observed"]` returns equal cohort
+  and window values; expected `window > cohort` (window includes
+  everyone-already-at-X; cohort restricts to anchor-rooted-cohorts).
+- **Test 697**: bayesian-sidecar `p_infinity_mean` collapses
+  cohort↔window on the same seam.
+
+Same seam, two surfaces, same direction (overcollapse).
+
+### Mechanism (preliminary)
+
+The test author's in-file NOTE (line 697) names the suspected mechanism
+explicitly: *"x-side separation can survive while the y-side sweep /
+model projection still inflates or inverts, which shows up as
+`model_midpoint` / `p_infinity_mean` collapse."*
+
+Likely candidates:
+
+1. **Y-side prefix is rate-attributed model expectation, not raw
+   counts** — Cluster A's open "Display-side residual" already names
+   this for chart `evidence_y` (rate-attributed
+   `Σ_u M_select(U,C,u) · k(u,τ)/n(u,τ)` from
+   [`_build_rate_attributed_subject_prefix`](../../graph-editor/lib/runner/cohort_forecast_v3.py#L2640)).
+   If `surprise_gauge` and bayesian-sidecar `p_infinity_mean` share
+   that prefix, they inherit the same model-projected object across
+   cohort and window, which can silently collapse when both projections
+   share enough mass.
+2. **Downstream model-curve normalisation** — the `model_midpoint` /
+   `model_curve_midpoint` cohort_maturity_v3 emission was already
+   flagged ~16× off analytic prior on `test_no_evidence_curve_matches_truth_analytic`
+   (Batch B verify-run notes). Same y-side cluster, different test.
+
+Distinguishing: probe the per-edge `surprise_gauge` and bayesian
+`p_infinity_mean` build paths with diagnostics that report both the
+cohort and window inputs side by side, and trace the divergence point
+back through the y-prefix construction.
+
+### Relationship to Cluster A
+
+Cluster A's open "Display-side residual" subsection at lines 559-619
+covers the same root mechanism (rate-attributed y-prefix used as
+evidence-named field) on the chart `evidence_y` surface. Cluster H
+extends the same root cause to two additional consumer surfaces
+(`surprise_gauge`, bayesian-sidecar). Fixing Cluster A's chart
+`evidence_y` may close Cluster H if all three surfaces share the
+y-prefix; if not, each surface needs its own substitution.
+
+### Risk class
+
+Real production correctness defect on every downstream A≠X
+cohort vs window comparison. Both witness tests are designed against
+the topology contract (window denominator strictly larger); collapse
+hides what should be a visible cohort-vs-window split in:
+
+- the surprise gauge that callers read to detect anomalies,
+- the bayesian sidecar's predicted asymptote.
+
+UI consumers that drive decisions off either signal silently see
+identical cohort and window outputs when they should differ.
+
+### Hold-back
+
+Both witness tests stay RED. Do not relax `window > cohort` to
+`window >= cohort`; that masks the collapse rather than fixing it.
+Closure depends on whether Cluster A's y-prefix substitution lands
+and whether `surprise_gauge` / bayesian-sidecar share the same
+prefix.
+
+---
+
 ## Investigation Discipline
 
-Outstanding work: Cluster D only.
+Outstanding work: Cluster D, Cluster E, Cluster F, Cluster G, Cluster H.
 
 1. **Cluster D** — `--diag` probe of
    `_build_observed_span_evidence_surface` at low τ against raw DB

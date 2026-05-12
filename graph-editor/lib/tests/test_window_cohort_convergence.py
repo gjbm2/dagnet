@@ -122,12 +122,21 @@ def _run_analyse(graph: str, dsl: str) -> dict[str, Any]:
 
 
 def _mature_midpoint(payload: dict[str, Any]) -> Optional[float]:
-    """Average of the last 5 non-null midpoints in result.data, or None."""
+    """Average of the last 5 non-null `rate_blended` values in result.data, or None.
+
+    `rate_blended` is the unified augmented-E-line surface: empirical mature
+    rate where coverage allows, conditioned model curve where it doesn't.
+    Single curve across epochs A/B/C, populated wherever any cohort is
+    applicable at τ. Composition parity is a structural property of the
+    model, so this surface is the right one — composes correctly under
+    abundant evidence (where it tracks Σy/Σx) and under zero evidence
+    (where it tracks the conditioned model curve).
+    """
     rows = (payload.get("result") or {}).get("data") or []
-    midpoints = [float(r["midpoint"]) for r in rows if r.get("midpoint") is not None]
-    if len(midpoints) < 5:
+    values = [float(r["rate_blended"]) for r in rows if r.get("rate_blended") is not None]
+    if len(values) < 5:
         return None
-    tail = midpoints[-5:]
+    tail = values[-5:]
     return sum(tail) / len(tail)
 
 

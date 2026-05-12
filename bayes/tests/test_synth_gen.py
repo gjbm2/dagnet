@@ -28,6 +28,7 @@ from bayes.synth_gen import (
     _build_synth_dsl,
     _build_verify_checks,
     _extract_dimension_from_slice_key,
+    _find_synth_param_id_collisions,
     _rehash_snapshot_rows,
     save_synth_meta,
     write_parameter_files,
@@ -1430,6 +1431,74 @@ class TestVerifySynthDataContextHashes:
     These tests use the no-DB path (meta-only) to test the freshness
     logic without requiring Postgres.
     """
+
+    def test_stale_when_generated_param_id_collides(self, tmp_path, monkeypatch):
+        """Two truth files must not generate the same parameter YAML id."""
+        import json as _json
+        import hashlib
+
+        truth_dir = tmp_path / "truth"
+        truth_dir.mkdir()
+        monkeypatch.setattr("bayes.synth_gen._resolve_truth_dir", lambda: str(truth_dir))
+        monkeypatch.setattr("bayes.synth_gen._load_db_connection", lambda: None)
+
+        graphs_dir = tmp_path / "graphs"
+        graphs_dir.mkdir()
+        collision_truth = """
+graph:
+  name: synth-collision-a
+  raw_ids: true
+edges:
+  shared-edge:
+    from: a
+    to: b
+    p: 0.5
+"""
+        (graphs_dir / "synth-collision-a.truth.yaml").write_text(collision_truth)
+        (graphs_dir / "synth-collision-b.truth.yaml").write_text(
+            collision_truth.replace("synth-collision-a", "synth-collision-b")
+        )
+
+        truth_sha = hashlib.sha256(
+            (graphs_dir / "synth-collision-a.truth.yaml").read_bytes()
+        ).hexdigest()
+        meta = {
+            "schema_version": 2,
+            "truth_sha256": truth_sha,
+            "row_count": 500,
+            "edge_hashes": {
+                "shared-edge": {"window_hash": "W123", "cohort_hash": "C456"}
+            },
+        }
+        (graphs_dir / "synth-collision-a.synth-meta.json").write_text(_json.dumps(meta))
+
+        result = verify_synth_data("synth-collision-a", str(tmp_path))
+        assert result["status"] == "stale"
+        assert any("Synthetic parameter id collision: shared-edge" in r for r in result["reasons"])
+
+    def test_non_raw_truth_files_are_namespaced(self, tmp_path, monkeypatch):
+        """The duplicate guard mirrors graph_from_truth prefixing."""
+        truth_dir = tmp_path / "truth"
+        truth_dir.mkdir()
+        monkeypatch.setattr("bayes.synth_gen._resolve_truth_dir", lambda: str(truth_dir))
+
+        graphs_dir = tmp_path / "graphs"
+        graphs_dir.mkdir()
+        base_truth = """
+graph:
+  name: synth-alpha
+edges:
+  a-to-b:
+    from: a
+    to: b
+    p: 0.5
+"""
+        (graphs_dir / "synth-alpha.truth.yaml").write_text(base_truth)
+        (graphs_dir / "synth-beta.truth.yaml").write_text(
+            base_truth.replace("synth-alpha", "synth-beta")
+        )
+
+        assert _find_synth_param_id_collisions(str(tmp_path)) == {}
 
     def test_fresh_when_meta_has_rows_and_truth_unchanged(self, tmp_path, monkeypatch):
         """Meta says rows > 0 and truth unchanged → 'fresh'."""

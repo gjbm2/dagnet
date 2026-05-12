@@ -63,6 +63,12 @@ class ForecastingSettings:
     fit_left_censor_days: float = 0
     """Left-censor fitting evidence to the most recent N days. 0 = no censor."""
 
+    snapshot_observation_t95_multiplier: float = 2.0
+    """Multiplier for edge-local t95 when deciding snapshot observation refresh horizon."""
+
+    snapshot_observation_path_t95_multiplier: float = 1.5
+    """Multiplier for path_t95 when deciding snapshot observation refresh horizon."""
+
     # ── Bayesian fit_history retention ─────────────────────────
 
     bayes_fit_history_interval_days: float = 0

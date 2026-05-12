@@ -1,0 +1,106 @@
+{
+  "captured_at": "2026-05-11T13:29:29",
+  "git_sha": "a491f5f6e0d8e10f0dec21f4fc80915c2bba27be",
+  "label": "smoke-test",
+  "queries": [
+    {
+      "dsl": "from(synth-lat4-b).to(synth-lat4-d).cohort(29-Jan-26:29-Apr-26)",
+      "elapsed_s": 8.16,
+      "graph": "synth-lat4",
+      "label": "cohort_AneqX_lat4_bd",
+      "regime": "cohort_AneqX_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(synth-lat4-flat-b).to(synth-lat4-flat-d).cohort(12-Mar-26:14-Mar-26).asat(10-May-26)",
+      "elapsed_s": 30.07,
+      "graph": "synth-lat4-flat",
+      "label": "cohort_AneqX_lat4flat_bd",
+      "regime": "cohort_AneqX_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(cf-fix-no-lag-b).to(cf-fix-no-lag-d).cohort(29-Jan-26:29-Apr-26)",
+      "elapsed_s": 3.77,
+      "graph": "cf-fix-linear-no-lag",
+      "label": "cohort_AneqX_nolag_bd",
+      "regime": "cohort_AneqX_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(cf-fix-deep-e).to(cf-fix-deep-g).cohort(31-Oct-25:29-Apr-26)",
+      "elapsed_s": 24.55,
+      "graph": "cf-fix-deep-mixed",
+      "label": "cohort_AneqX_deep_eg",
+      "regime": "cohort_AneqX_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(cf-fix-deep-d).to(cf-fix-deep-f).cohort(31-Oct-25:29-Apr-26)",
+      "elapsed_s": 80.45,
+      "graph": "cf-fix-deep-mixed",
+      "label": "cohort_AneqX_deep_df",
+      "regime": "cohort_AneqX_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(wrp-a).to(wrp-c).cohort(wrp-a,1-Mar-26:14-Mar-26).asat(10-Apr-26)",
+      "elapsed_s": 6.66,
+      "graph": "synth-window-rate-prop",
+      "label": "cohort_AeqX_wrp_ac",
+      "regime": "cohort_AeqX_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(wrp-a).to(wrp-c).window(1-Mar-26:14-Mar-26).asat(10-Apr-26)",
+      "elapsed_s": 6.87,
+      "graph": "synth-window-rate-prop",
+      "label": "window_wrp_ac",
+      "regime": "window_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(synth-lat4-b).to(synth-lat4-d).window(29-Jan-26:29-Apr-26)",
+      "elapsed_s": 3.39,
+      "graph": "synth-lat4",
+      "label": "window_lat4_bd",
+      "regime": "window_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(cf-fix-no-lag-b).to(cf-fix-no-lag-d).window(29-Jan-26:29-Apr-26)",
+      "elapsed_s": 2.84,
+      "graph": "cf-fix-linear-no-lag",
+      "label": "window_nolag_bd",
+      "regime": "window_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(cf-fix-deep-e).to(cf-fix-deep-g).window(31-Oct-25:29-Apr-26)",
+      "elapsed_s": 5.12,
+      "graph": "cf-fix-deep-mixed",
+      "label": "window_deep_eg",
+      "regime": "window_multihop",
+      "row_count": 0,
+      "rows": []
+    },
+    {
+      "dsl": "from(synth-lat4-flat-b).to(synth-lat4-flat-d).window(12-Mar-26:14-Mar-26).asat(10-May-26)",
+      "elapsed_s": 9.26,
+      "graph": "synth-lat4-flat",
+      "label": "window_lat4flat_bd",
+      "regime": "window_multihop",
+      "row_count": 0,
+      "rows": []
+    }
+  ]
+}

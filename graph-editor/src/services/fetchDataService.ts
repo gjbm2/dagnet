@@ -2381,7 +2381,7 @@ export async function runStage2EnhancementsAndInboundN(
           // applyConditionedForecastToGraph.
           // `skipBackendCalls` (doc 73e §8.3 Stage 6) is the wider gate
           // behind the CLI `--no-be` flag — it implies skipConditionedForecast.
-          // `?nobecf` is the browser equivalent for FE topo-pass testing.
+          // `?nobecf` is the browser equivalent for FE-only query testing.
           // All three reach the same short-circuit path here so the CF
           // pipeline step is marked 'skipped' identically and no fetch
           // reaches the BE.

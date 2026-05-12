@@ -913,3 +913,116 @@ def test_conditioned_primitive_uses_keyed_prior_draw_family_mode():
     )
     assert prim.draw_family_mode == DrawFamilyMode.KEYED_PRIOR
     assert prim.is_draw_coherent is True
+
+
+# ─── Phase 6b: degenerate-prior-Beta warning ────────────────────────────
+
+
+def _primitive_scope_for_unconditioned():
+    """Minimal PrimitiveScope for `make_unconditioned_primitive` calls in
+    the Phase 6b tests. Reuses the same evidence-scope shape as the
+    conditioned-primitive tests."""
+    ev_scope = _evidence_scope()
+    return make_primitive_scope_from_evidence_scope(
+        evidence_scope=ev_scope,
+        model_source_preference='best_available',
+        resolved_source_identity='analytic',
+    )
+
+
+def test_make_unconditioned_primitive_emits_degenerate_prior_warning_when_alpha_beta_floored():
+    """asat-bayes-vars-fix plan §Phase 6b. When the resolver hands an
+    effectively-zero (α, β) to `make_unconditioned_primitive`, the
+    1e-12 floor silently produces a degenerate Beta(1e-12, 1e-12) whose
+    draws are bimodal. The defence-in-depth warning must fire so the
+    failure mode is observable instead of silently producing
+    chart_curve = subject_cdf rather than p × CDF.
+
+    Pre-fix this triggered when asat tier-1 wholesale-replaced file rows
+    with one snapshot row, breaking momentMatchAnalyticBeta and leaving
+    the graph edge with no Beta block. The same mathematical condition
+    is reproduced here directly via ResolvedModelParams.
+    """
+    from runner.primitive_conditioning import make_unconditioned_primitive
+    from runner.primitives import PrimitiveScope
+
+    transition = TransitionIdentity('U', 'V', 'e-degenerate-prior')
+    scope = _primitive_scope_for_unconditioned()
+    rm = _resolved_model(
+        alpha=0.0, beta=0.0, n_effective=None,
+        mu=0.0, sigma=0.0, onset=0.0,  # NON_LATENT — exercises that return path
+    )
+    prim = make_unconditioned_primitive(
+        transition=transition,
+        primitive_scope=scope,
+        resolved_model=rm,
+        scenario_seed=42,
+        dispersion_basis='predictive',
+    )
+    # The legacy "status=unconditioned_overlay" note must remain so
+    # diagnostic consumers don't break.
+    assert any('status=unconditioned_overlay' in n for n in prim.notes)
+    # The new Phase 6b warning must be present too.
+    warning = next(
+        (n for n in prim.notes if 'WARNING degenerate_prior_beta' in n),
+        None,
+    )
+    assert warning is not None, (
+        f'expected degenerate_prior_beta warning in notes; got {prim.notes!r}'
+    )
+    # Source label and floored values surfaced in the warning text.
+    assert 'source=analytic' in warning
+    assert 'alpha=' in warning
+    assert 'beta=' in warning
+
+
+def test_make_unconditioned_primitive_does_not_warn_on_well_defined_prior():
+    """Sanity counterpart to the previous test: a well-defined Beta(40,
+    120) prior must NOT produce the degenerate warning. Catches a
+    regression where the threshold is mis-tuned (e.g. 1e+6 instead of
+    1e-6) and the warning fires for every primitive."""
+    from runner.primitive_conditioning import make_unconditioned_primitive
+
+    transition = TransitionIdentity('U', 'V', 'e-well-defined-prior')
+    scope = _primitive_scope_for_unconditioned()
+    rm = _resolved_model(alpha=40.0, beta=120.0, n_effective=None)
+    prim = make_unconditioned_primitive(
+        transition=transition,
+        primitive_scope=scope,
+        resolved_model=rm,
+        scenario_seed=42,
+        dispersion_basis='epistemic',
+    )
+    assert not any(
+        'WARNING degenerate_prior_beta' in n for n in prim.notes
+    ), (
+        f'unexpected degenerate_prior_beta warning on Beta(40, 120); '
+        f'notes={prim.notes!r}'
+    )
+
+
+def test_make_unconditioned_primitive_warning_fires_for_latent_path_too():
+    """The warning must surface on the latent timing-family return path
+    (line 1625) not just the non-latent path (line 1535). Both paths
+    construct the primitive with the same `notes` filter; this test
+    pins parity between them."""
+    from runner.primitive_conditioning import make_unconditioned_primitive
+
+    transition = TransitionIdentity('U', 'V', 'e-latent-degenerate')
+    scope = _primitive_scope_for_unconditioned()
+    rm = _resolved_model(
+        alpha=0.0, beta=0.0, n_effective=None,
+        mu=2.5, sigma=0.5, onset=3.0,  # sigma > 0 ⇒ LATENT path
+    )
+    prim = make_unconditioned_primitive(
+        transition=transition,
+        primitive_scope=scope,
+        resolved_model=rm,
+        scenario_seed=42,
+        dispersion_basis='epistemic',
+    )
+    assert any(
+        'WARNING degenerate_prior_beta' in n for n in prim.notes
+    ), f'latent path missed degenerate warning; notes={prim.notes!r}'
+    # And the legacy latent note must still be present.
+    assert any('timing_family=latent' in n for n in prim.notes)

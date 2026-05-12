@@ -10,6 +10,7 @@ Verifies that:
 import pytest
 from lib.runner.graph_builder import (
     build_networkx_graph,
+    apply_visibility_mode,
     _extract_evidence,
     _extract_forecast,
     _extract_latency,
@@ -122,10 +123,15 @@ class TestGraphBuilderLAGFields:
         }
         
         G = build_networkx_graph(graph_data)
-        
+        # The simpler runners always project visibility mode before walking
+        # the graph; under the 'f+e' default this restores the blended p.mean
+        # onto edge['p']. The converter alone leaves edge['p'] holding the
+        # carrier-baseline value (resolver-routed for model-bearing reads).
+        apply_visibility_mode(G, 'f+e')
+
         # Check edge attributes
         edge = G.edges['node-1', 'node-2']
-        
+
         assert edge['p'] == 0.72  # blended mean
         
         # Forecast data

@@ -289,6 +289,76 @@ class TestSidecarWriter:
             )
 
 
+# ─── Worker fitted_at emission ────────────────────────────────────────
+
+class TestWorkerFittedAt:
+    """The worker MUST stamp a non-empty `fitted_at` on every result it
+    returns to the harness. Single source of truth: each entrypoint
+    (`_fit_graph_placeholder`, `_fit_graph_compiler`) computes
+    `fitted_at` once at fit start and threads it through both the
+    webhook body and every `_build_result(...)` call.
+
+    Pre-fix, the no-webhook harness path dropped fitted_at on the floor
+    (worker omitted the field; webhook code computed it inline).
+    Sidecars therefore carried `fitted_at: ""`, which `wrapPatchIfRaw`
+    silently defaulted to NOW. Past-asat queries strict-dropped the
+    bayesian projection because NOW > any past asat. These tests pin
+    the worker contract that prevents a regression of that defect.
+    """
+
+    def test_build_result_echoes_fitted_at_verbatim(self):
+        """`_build_result` is a thin sink: the `fitted_at` it returns
+        must be exactly what the caller passes in. Catches a regression
+        where the function silently overwrites with `datetime.utcnow()`,
+        which would defeat the single-source-of-truth wiring."""
+        from bayes.worker import _build_result
+        import time
+        sentinel = "2025-12-25T10:11:12Z"
+        result = _build_result(
+            None, [], {}, time.time() - 0.001,
+            [], [], {}, None, sentinel,
+        )
+        assert result.get("fitted_at") == sentinel, (
+            f"expected verbatim echo {sentinel!r}, got {result.get('fitted_at')!r}"
+        )
+
+    def test_build_result_carries_fitted_at_on_error_path(self):
+        """The error branch must also propagate fitted_at — otherwise
+        sidecars produced from a partial-failure run would lose the
+        timestamp and re-trigger the wrapPatchIfRaw silent-default
+        defect."""
+        from bayes.worker import _build_result
+        import time
+        sentinel = "2025-12-25T10:11:12Z"
+        result = _build_result(
+            "synthetic test error", ["log line"], {}, time.time() - 0.001,
+            [], [], {}, None, sentinel,
+        )
+        assert result.get("status") == "failed"
+        assert result.get("fitted_at") == sentinel
+
+    def test_placeholder_entrypoint_emits_iso_fitted_at(self):
+        """`_fit_graph_placeholder` must compute fitted_at once at fit
+        start and put a non-empty ISO-8601 value on the returned result.
+        The placeholder mode runs without MCMC so this is a fast,
+        deterministic regression catch for the entrypoint wiring."""
+        from bayes.worker import _fit_graph_placeholder
+        from datetime import datetime
+        # Empty payload — the placeholder skips DB and goes straight
+        # through the webhook construction (which we don't want to
+        # actually post). Payload missing 'webhook_url' makes the
+        # placeholder skip the post but still build the result.
+        payload = {"_job_id": "test-fitted-at", "edges": []}
+        result = _fit_graph_placeholder(payload)
+        fa = result.get("fitted_at")
+        assert isinstance(fa, str) and fa, (
+            f"placeholder entrypoint must emit non-empty fitted_at, got {fa!r}"
+        )
+        # Must parse as ISO-8601 with trailing Z.
+        parsed = datetime.strptime(fa, "%Y-%m-%dT%H:%M:%SZ")
+        assert parsed is not None
+
+
 # ─── CLI flag routing ─────────────────────────────────────────────────
 
 class TestCliFlag:

@@ -1,0 +1,54 @@
+# Clean fixture for selected-evidence observation-support coverage.
+#
+# The generated latency is an instant step: all converters complete by τ=0,
+# then cumulative (x, y) values plateau while nightly retrievals continue.
+# Coverage should therefore remain 1 while retrievals continue, even though
+# the values no longer change.
+
+graph:
+  name: synth-coverage-plateau
+  anchor: a
+  raw_ids: true
+
+nodes:
+  a:
+    label: A
+    event_id: synth-coverage-plateau-a-event
+    is_start: true
+  b:
+    label: B
+    event_id: synth-coverage-plateau-b-event
+    absorbing: true
+    outcome_type: success
+
+edges:
+  a-to-b:
+    from: a
+    to: b
+    p: 0.55
+    # Model approximation fields remain lognormal-shaped for downstream
+    # consumers, but synth_gen uses the explicit stepped DGP below.
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+    latency_shape: stepped
+    latency_steps:
+      - day: 0.0
+        prob: 1.0
+
+simulation:
+  mean_daily_traffic: 2500
+  n_days: 90
+  base_date: "2025-11-01"
+  kappa_sim_default: 200.0
+  kappa_step_default: 0.0
+  failure_rate: 0.0
+  frame_drop_rate: 0.0
+  toggle_rate: 0.0
+  initial_absent_pct: 0.0
+  snapshot_start_offset: 0
+  traffic_cv: 0.0
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 42
+  expected_sample_seconds: 900

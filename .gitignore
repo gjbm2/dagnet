@@ -64,6 +64,10 @@ debug/
 # Scratch / temporary working files (may contain private repo names in logs)
 tmp/
 
+# Per-test backdated bayes-vars sidecars (idempotent test cache,
+# written by conftest._ensure_bayes_sidecar_for_asat).
+bayes/fixtures/.test-cache/
+
 # Playwright artefacts
 graph-editor/test-results/
 graph-editor/playwright-report/

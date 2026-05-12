@@ -865,7 +865,11 @@ def _evaluate_cohort(
         return (None, None, {'skipped': True, 'reason': 'no_mass',
                              'N_i': float(N_i), 'a_pop': float(a_pop)})
 
-    a_idx = min(a_i, T - 1)
+    # Lower-bound clamp: `frontier_age = -1` is a valid sentinel
+    # ("no observations recorded") that propagates from
+    # build_cohort_evidence_from_frames's empty-frames synthesis, but
+    # `a_idx` is used as an array index and must be >= 0.
+    a_idx = min(max(a_i, 0), T - 1)
 
     # Per-cohort drift (v2 lines 833-835)
     delta_i = loop_rng.normal(0.0, drift_sds, size=(S, 4))

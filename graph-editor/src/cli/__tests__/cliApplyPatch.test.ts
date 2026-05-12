@@ -402,13 +402,19 @@ describe('wrapPatchIfRaw', () => {
   });
 
   it('supplies defaults when raw result is missing optional fields', () => {
-    const raw = { webhook_payload_edges: [] };
+    const raw = { webhook_payload_edges: [], fitted_at: '2026-04-22T10:00:00Z' };
     const wrapped = wrapPatchIfRaw(raw, 'graph-x');
     expect(wrapped.job_id).toBe('cli-enrich');
     expect(wrapped.model_version).toBe(1);
     expect(wrapped.quality).toEqual({ max_rhat: null, min_ess: null, converged_pct: 0 });
     expect(wrapped.skipped).toEqual([]);
-    expect(wrapped.fitted_at).toBeTruthy();
+    expect(wrapped.fitted_at).toBe('2026-04-22T10:00:00Z');
+  });
+
+  it('throws when raw result has neither fitted_at nor generated_at', () => {
+    expect(() => wrapPatchIfRaw({ webhook_payload_edges: [] }, 'graph-x')).toThrow(
+      /no fitted_at and no generated_at/
+    );
   });
 });
 

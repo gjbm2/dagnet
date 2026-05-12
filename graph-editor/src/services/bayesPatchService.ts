@@ -69,7 +69,7 @@ export function wrapPatchIfRaw(patchData: any, graphId: string): BayesPatchFile 
       job_id: patchData.job_id || patchData._job_id || 'cli-enrich',
       graph_id: graphId,
       graph_file_path: `${graphId}.yaml`,
-      fitted_at: patchData.fitted_at || new Date().toISOString(),
+      fitted_at: resolvePatchFittedAt(patchData),
       fingerprint: patchData.fingerprint || '',
       model_version: patchData.model_version ?? 1,
       quality: patchData.quality || { max_rhat: null, min_ess: null, converged_pct: 0 },
@@ -78,6 +78,40 @@ export function wrapPatchIfRaw(patchData: any, graphId: string): BayesPatchFile 
     };
   }
   return { ...patchData, graph_id: graphId };
+}
+
+const SIDECAR_GENERATED_AT_RE = /^(\d{1,2})-([A-Za-z]{3})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/;
+const MONTH_INDEX: Record<string, number> = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+};
+
+function parseSidecarGeneratedAt(raw: string): string | null {
+  const m = SIDECAR_GENERATED_AT_RE.exec(raw.trim());
+  if (!m) return null;
+  const [, dStr, monStr, yyStr, hh, mm, ss] = m;
+  const month = MONTH_INDEX[monStr.charAt(0).toUpperCase() + monStr.slice(1, 3).toLowerCase()];
+  if (month === undefined) return null;
+  const yy = Number(yyStr);
+  const year = yy < 70 ? 2000 + yy : 1900 + yy;
+  const d = new Date(Date.UTC(year, month, Number(dStr), Number(hh), Number(mm), Number(ss)));
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+}
+
+function resolvePatchFittedAt(patchData: any): string {
+  const fittedAt = typeof patchData.fitted_at === 'string' ? patchData.fitted_at.trim() : '';
+  if (fittedAt) return fittedAt;
+  const generatedAt = typeof patchData.generated_at === 'string' ? patchData.generated_at.trim() : '';
+  if (generatedAt) {
+    const iso = parseSidecarGeneratedAt(generatedAt);
+    if (iso) return iso;
+    const fallback = new Date(generatedAt);
+    if (Number.isFinite(fallback.getTime())) return fallback.toISOString();
+  }
+  throw new Error(
+    'bayes-vars sidecar carries no fitted_at and no generated_at — ' +
+    'refusing to apply (would default to now and silently miss past-asat queries)'
+  );
 }
 
 // --- Direct fetch + apply + cascade (happy path: browser is open) ---

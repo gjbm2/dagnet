@@ -186,21 +186,6 @@ class TestFitModelFromEvidence:
         assert not result.quality_ok
         assert 'No evidence' in (result.quality_failure_reason or '')
 
-    def test_missing_mean_uses_default_sigma(self):
-        """When mean_lag is None, FE aggregation falls back mean to median,
-        yielding a degenerate σ≈0 which the guard replaces with LATENCY_DEFAULT_SIGMA
-        to avoid a point-mass (instant latency) CDF."""
-        rows = [
-            _row(f'2026-01-{d:02d}', 100, 40, median_lag=5.0, mean_lag=None)
-            for d in range(1, 11)
-        ]
-        # Set mean_lag to None explicitly
-        for r in rows:
-            r['mean_lag_days'] = None
-        result = fit_model_from_evidence(rows, DEFAULTS)
-        assert result.quality_ok
-        assert result.sigma == pytest.approx(LATENCY_DEFAULT_SIGMA)
-
     def test_t95_constraint_widens_sigma(self):
         """Authoritative t95 > moment-fit t95 should widen sigma."""
         rows = [

@@ -48,14 +48,14 @@ from result_cache import (
 # Connection Pool (module-level, survives warm starts)
 # =============================================================================
 
-_pool: Optional[psycopg2.pool.SimpleConnectionPool] = None
+_pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 _pool_lock = threading.Lock()
 
 _POOL_MIN_CONN = 1
-_POOL_MAX_CONN = 2
+_POOL_MAX_CONN = 16
 
 
-def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     """Lazily create (or recreate) the module-level connection pool."""
     global _pool
     if _pool is not None and not _pool.closed:
@@ -67,8 +67,9 @@ def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
         conn_string = os.environ.get('DB_CONNECTION')
         if not conn_string:
             raise ValueError("DB_CONNECTION environment variable not set")
-        _pool = psycopg2.pool.SimpleConnectionPool(
-            _POOL_MIN_CONN, _POOL_MAX_CONN, conn_string
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            _POOL_MIN_CONN, _POOL_MAX_CONN, conn_string,
+            connect_timeout=10,
         )
         return _pool
 

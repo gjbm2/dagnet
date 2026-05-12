@@ -1499,10 +1499,35 @@ def make_unconditioned_primitive(
         scenario_seed=scenario_seed,
     )
 
-    prior_alpha = max(float(resolved_model.alpha or 0.0), 1e-12)
-    prior_beta = max(float(resolved_model.beta or 0.0), 1e-12)
+    raw_alpha = float(resolved_model.alpha or 0.0)
+    raw_beta = float(resolved_model.beta or 0.0)
+    prior_alpha = max(raw_alpha, 1e-12)
+    prior_beta = max(raw_beta, 1e-12)
     pred_alpha = float(resolved_model.alpha_pred or 0.0)
     pred_beta = float(resolved_model.beta_pred or 0.0)
+
+    # Phase 6b defence-in-depth (asat-bayes-vars-fix plan): if the
+    # resolver returned an effectively-zero (α, β), the 1e-12 floor
+    # above silently produces a degenerate Beta(1e-12, 1e-12). Drawing
+    # from that returns bimodal {≈0, ≈1} particles — the median is 0.5
+    # regardless of the underlying truth. Pre-Phase-3, this happened
+    # whenever asat tier-1 wholesale-replaced file rows with one or
+    # two snapshot rows: `momentMatchAnalyticBeta` returned `{}`, the
+    # graph edge had no Beta block, the resolver returned (0, 0), and
+    # the chart's model curve tracked subject_cdf instead of p × CDF.
+    # The 1e-6 sum threshold has 5 orders of magnitude margin against
+    # any legitimate prior (uninformative Beta(1,1) sums to 2). The
+    # warning is observational — the math (the floor) is preserved.
+    degenerate_prior_note: Optional[str] = None
+    if raw_alpha + raw_beta < 1e-6:
+        degenerate_prior_note = (
+            f'WARNING degenerate_prior_beta '
+            f'source={resolved_model.source or "?"} '
+            f'alpha={raw_alpha:.3e} beta={raw_beta:.3e} '
+            f'(floored to Beta(1e-12, 1e-12); draws are bimodal — '
+            f'check asat tier-1 file-row truncation and analytic Beta '
+            f'projection upstream)'
+        )
 
     if dispersion_basis == 'predictive':
         sample_alpha = pred_alpha if pred_alpha > 0 else prior_alpha
@@ -1559,10 +1584,13 @@ def make_unconditioned_primitive(
             draw_family_key=draw_family_key,
             prior_source=prior_source,
             skipped_evidence_summary={},
-            notes=(
-                f'status=unconditioned_overlay '
-                f'dispersion_basis={dispersion_basis} '
-                f'timing_family=non_latent',
+            notes=tuple(
+                n for n in (
+                    f'status=unconditioned_overlay '
+                    f'dispersion_basis={dispersion_basis} '
+                    f'timing_family=non_latent',
+                    degenerate_prior_note,
+                ) if n is not None
             ),
         )
 
@@ -1649,10 +1677,13 @@ def make_unconditioned_primitive(
         draw_family_key=draw_family_key,
         prior_source=prior_source,
         skipped_evidence_summary={},
-        notes=(
-            f'status=unconditioned_overlay '
-            f'dispersion_basis={dispersion_basis} '
-            f'timing_family=latent',
+        notes=tuple(
+            n for n in (
+                f'status=unconditioned_overlay '
+                f'dispersion_basis={dispersion_basis} '
+                f'timing_family=latent',
+                degenerate_prior_note,
+            ) if n is not None
         ),
     )
 

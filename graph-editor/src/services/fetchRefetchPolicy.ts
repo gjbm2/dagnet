@@ -10,7 +10,11 @@
  */
 
 import { parseDate, normalizeDate } from './windowAggregationService';
-import { LATENCY_REFETCH_COOLDOWN_MINUTES } from '../constants/latency';
+import {
+  LATENCY_REFETCH_COOLDOWN_MINUTES,
+  SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+  SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+} from '../constants/latency';
 import type { DateRange } from '../types';
 import type { ParameterValue } from '../types/parameterData';
 
@@ -60,6 +64,11 @@ export interface LatencyConfig {
   promoted_path_t95?: number;
 }
 
+export interface ObservationHorizonMultipliers {
+  t95?: number;
+  pathT95?: number;
+}
+
 export interface RefetchPolicyInput {
   /** Existing slice from parameter file (if any) */
   existingSlice?: ParameterValue;
@@ -75,6 +84,9 @@ export interface RefetchPolicyInput {
   
   /** Reference date for maturity calculations (defaults to today) */
   referenceDate?: Date;
+
+  /** Multipliers that turn modelling maturity horizons into observation refresh horizons. */
+  observationHorizonMultipliers?: ObservationHorizonMultipliers;
 }
 
 // =============================================================================
@@ -102,6 +114,7 @@ export function shouldRefetch(input: RefetchPolicyInput): RefetchDecision {
     requestedWindow,
     isCohortQuery,
     referenceDate = new Date(),
+    observationHorizonMultipliers,
   } = input;
 
   // Phase 2: latency_parameter is canonical enablement flag
@@ -120,8 +133,8 @@ export function shouldRefetch(input: RefetchPolicyInput): RefetchDecision {
   // If t95 is missing, Phase 2 relies on default injection and uses a conservative fallback.
   // ═══════════════════════════════════════════════════════════════════════════
   const effectiveT95Days = isCohortQuery
-    ? computeEffectiveCohortMaturity(latencyConfig)
-    : computeEffectiveMaturity(latencyConfig);
+    ? computeEffectiveCohortMaturity(latencyConfig, observationHorizonMultipliers)
+    : computeEffectiveMaturity(latencyConfig, observationHorizonMultipliers);
 
   // COHORT MODE: Check if any cohorts are still immature
   if (isCohortQuery) {
@@ -141,18 +154,34 @@ export function shouldRefetch(input: RefetchPolicyInput): RefetchDecision {
  * @param latencyConfig Latency configuration from edge
  * @returns Effective maturity in days
  */
-export function computeEffectiveMaturity(latencyConfig?: LatencyConfig): number {
+function normaliseMultiplier(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+export function computeEffectiveMaturity(
+  latencyConfig?: LatencyConfig,
+  observationHorizonMultipliers?: ObservationHorizonMultipliers,
+): number {
+  const multiplier = observationHorizonMultipliers
+    ? normaliseMultiplier(
+      observationHorizonMultipliers.t95,
+      SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+    )
+    : 1.0;
   const t95 = latencyConfig?.t95;
   
   // If t95 is available and positive, use it as the effective maturity
   // t95 represents the 95th percentile lag time, which is a better indicator
   // of when cohorts are "mature"
   if (t95 !== undefined && t95 > 0) {
-    // Round up to ensure we're conservative (don't declare mature too early)
-    const effectiveMaturity = Math.ceil(t95);
+    // Round up to ensure we're conservative (don't declare observed too early)
+    const effectiveMaturity = Math.ceil(t95 * multiplier);
     
     console.log('[fetchRefetchPolicy] Using t95 for effective maturity:', {
       t95,
+      observationMultiplier: multiplier,
       effectiveMaturity,
     });
     
@@ -161,7 +190,7 @@ export function computeEffectiveMaturity(latencyConfig?: LatencyConfig): number 
   
   // If t95 is missing, the Phase 2 invariant is that default injection has not yet
   // occurred or data is incomplete. Be conservative.
-  return 30;
+  return Math.ceil(30 * multiplier);
 }
 
 /**
@@ -170,19 +199,29 @@ export function computeEffectiveMaturity(latencyConfig?: LatencyConfig): number 
  * Cohort maturity is governed by cumulative lag from the anchor, so we prefer
  * path_t95 where available, and fall back to edge-local t95.
  */
-export function computeEffectiveCohortMaturity(latencyConfig?: LatencyConfig): number {
+export function computeEffectiveCohortMaturity(
+  latencyConfig?: LatencyConfig,
+  observationHorizonMultipliers?: ObservationHorizonMultipliers,
+): number {
   const pathT95 = latencyConfig?.path_t95;
   if (pathT95 !== undefined && pathT95 > 0) {
-    const effectiveMaturity = Math.ceil(pathT95);
+    const multiplier = observationHorizonMultipliers
+      ? normaliseMultiplier(
+        observationHorizonMultipliers.pathT95,
+        SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+      )
+      : 1.0;
+    const effectiveMaturity = Math.ceil(pathT95 * multiplier);
     console.log('[fetchRefetchPolicy] Using path_t95 for cohort effective maturity:', {
       pathT95,
+      observationMultiplier: multiplier,
       effectiveMaturity,
     });
     return effectiveMaturity;
   }
 
   // Fallback to edge-local t95 (legacy behaviour)
-  return computeEffectiveMaturity(latencyConfig);
+  return computeEffectiveMaturity(latencyConfig, observationHorizonMultipliers);
 }
 
 // =============================================================================

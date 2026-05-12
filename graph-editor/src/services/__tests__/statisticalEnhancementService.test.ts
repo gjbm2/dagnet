@@ -1502,9 +1502,13 @@ describe('enhanceGraphLatencies', () => {
     const result = enhanceGraphLatencies(graph, paramLookup, now, mockHelpers, undefined, undefined, undefined, 'window');
     const startToA = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
 
-    // In window mode, ayFit is not computed — path_mu/path_sigma should be undefined
-    expect(startToA?.latency.path_mu).toBeUndefined();
-    expect(startToA?.latency.path_sigma).toBeUndefined();
+    // First edge from anchor self-seeds path params from its own fit (mode-independent
+    // fallback (d) in the path cascade). The "path" for an anchor-rooted edge is the
+    // edge itself, in both cohort and window mode.
+    expect(startToA?.latency.path_mu).toBeDefined();
+    expect(startToA?.latency.path_sigma).toBeDefined();
+    expect(Number.isFinite(startToA!.latency.path_mu!)).toBe(true);
+    expect(Number.isFinite(startToA!.latency.path_sigma!)).toBe(true);
   });
 
   it('should compute lower completeness for downstream edges', () => {

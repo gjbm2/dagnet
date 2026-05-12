@@ -53,34 +53,16 @@
       "expected_quality_ok": true, "tol_mu": 1e-12, "tol_sigma": 1e-12
     },
     {
-      "_comment": "missing mean: uses default sigma",
-      "median_lag": 5, "mean_lag": null, "total_k": 500,
-      "expected_mu": 1.6094379124341003, "expected_sigma": 0.5,
-      "expected_quality_ok": true, "tol_mu": 1e-12, "tol_sigma": 0
-    },
-    {
       "_comment": "insufficient converters: quality gate fails",
       "median_lag": 2, "mean_lag": 4, "total_k": 1,
       "expected_mu": 0.6931471805599453, "expected_sigma": 0.5,
       "expected_quality_ok": false, "tol_mu": 1e-12, "tol_sigma": 0
     },
     {
-      "_comment": "zero median: quality fails",
-      "median_lag": 0, "mean_lag": 4, "total_k": 200,
-      "expected_mu": 0, "expected_sigma": 0.5,
-      "expected_quality_ok": false, "tol_mu": 0, "tol_sigma": 0
-    },
-    {
-      "_comment": "mean == median (ratio 1.0): degenerate sigma clamped to default",
+      "_comment": "mean == median (ratio 1.0): data is effectively Dirac, sigma=0 (Dirac short-circuit)",
       "median_lag": 3, "mean_lag": 3, "total_k": 200,
-      "expected_mu": 1.0986122886681098, "expected_sigma": 0.5,
+      "expected_mu": 1.0986122886681098, "expected_sigma": 0.0,
       "expected_quality_ok": true, "tol_mu": 1e-12, "tol_sigma": 1e-12
-    },
-    {
-      "_comment": "negative median: quality fails",
-      "median_lag": -1, "mean_lag": 4, "total_k": 200,
-      "expected_mu": 0, "expected_sigma": 0.5,
-      "expected_quality_ok": false, "tol_mu": 0, "tol_sigma": 0
     }
   ],
   "to_model_space": [

@@ -36,6 +36,7 @@ import {
   shouldRefetch,
   computeEffectiveCohortMaturity,
   type LatencyConfig,
+  type ObservationHorizonMultipliers,
   type RefetchDecision,
 } from './fetchRefetchPolicy';
 import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
@@ -108,6 +109,9 @@ export interface FetchPlanBuilderInput {
   
   /** Optional: bust cache (treat all as missing) */
   bustCache?: boolean;
+
+  /** Forecast settings that control snapshot observation refresh horizons. */
+  observationHorizonMultipliers?: ObservationHorizonMultipliers;
 
   /**
    * Optional: per-item execution-grade query signatures, keyed by FetchPlan `itemKey`.
@@ -184,6 +188,7 @@ export function buildFetchPlan(input: FetchPlanBuilderInput): FetchPlanBuilderRe
     connectionChecker,
     bustCache = false,
     querySignatures,
+    observationHorizonMultipliers,
   } = input;
   
   const referenceDate = new Date(referenceNow);
@@ -209,6 +214,7 @@ export function buildFetchPlan(input: FetchPlanBuilderInput): FetchPlanBuilderRe
       graph,
       bustCache,
       querySignatures,
+      observationHorizonMultipliers,
     });
     
     planItems.push(result.item);
@@ -281,6 +287,7 @@ interface BuildPlanItemContext {
   graph: Graph;
   bustCache: boolean;
   querySignatures?: Record<string, string>;
+  observationHorizonMultipliers?: ObservationHorizonMultipliers;
 }
 
 interface BuildPlanItemResult {
@@ -512,6 +519,7 @@ function buildParameterPlanItem(
     requestedWindow: window,
     isCohortQuery,
     referenceDate,
+    observationHorizonMultipliers: ctx.observationHorizonMultipliers,
   });
   
   // Compute missing dates using calculateIncrementalFetch
@@ -590,7 +598,8 @@ function buildParameterPlanItem(
     referenceDate,
     missingDates,
     staleDates,
-    notes
+    notes,
+    ctx.observationHorizonMultipliers,
   );
 
   // Completeness rule for daily aggregates:
@@ -720,7 +729,8 @@ function computeStaleDates(
   referenceDate: Date,
   missingDates: Set<string>,
   staleDates: Set<string>,
-  notes: string[]
+  notes: string[],
+  observationHorizonMultipliers?: ObservationHorizonMultipliers,
 ): void {
   switch (decision.type) {
     case 'use_cache':
@@ -750,7 +760,10 @@ function computeStaleDates(
     case 'replace_slice':
       // Cohort mode: stale dates are dates within maturity horizon
       // Per design: S = { d : d in requestedRange and (now - d) < effective_t95 }
-      const effectiveT95 = computeEffectiveCohortMaturity(latencyConfig);
+      const effectiveT95 = computeEffectiveCohortMaturity(
+        latencyConfig,
+        observationHorizonMultipliers,
+      );
       const maturityCutoffMs = referenceDate.getTime() - (effectiveT95 * 24 * 60 * 60 * 1000);
       
       for (const d of generateDatesInRange(requestedWindow.start, requestedWindow.end)) {
@@ -861,6 +874,8 @@ export async function buildFetchPlanProduction(
   window: DateRange,
   options?: { bustCache?: boolean; referenceNow?: string; querySignatures?: Record<string, string>; skipSignatureComputation?: boolean }
 ): Promise<FetchPlanBuilderResult> {
+  const { forecastingSettingsService } = await import('./forecastingSettingsService');
+  const forecasting = await forecastingSettingsService.getForecastingModelSettings();
   // Compute signatures if checking enabled and caller didn't provide them
   // (unless explicitly skipped for observability-only paths)
   let querySignatures = options?.querySignatures;
@@ -902,6 +917,10 @@ export async function buildFetchPlanProduction(
     connectionChecker: checker,
     bustCache: options?.bustCache,
     querySignatures,
+    observationHorizonMultipliers: {
+      t95: forecasting.SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+      pathT95: forecasting.SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+    },
   });
 }
 

@@ -189,14 +189,12 @@ class TestFitLagDistribution:
             f"quality_ok: expected {case['expected_quality_ok']}, got {fit.empirical_quality_ok}"
 
     def test_nan_median(self):
-        fit = fit_lag_distribution(float('nan'), 4.0, 200)
-        assert not fit.empirical_quality_ok
-        assert math.isfinite(fit.mu)
-        assert math.isfinite(fit.sigma)
+        with pytest.raises(ValueError, match="non-finite"):
+            fit_lag_distribution(float('nan'), 4.0, 200)
 
     def test_inf_median(self):
-        fit = fit_lag_distribution(float('inf'), 4.0, 200)
-        assert not fit.empirical_quality_ok
+        with pytest.raises(ValueError, match="non-finite"):
+            fit_lag_distribution(float('inf'), 4.0, 200)
 
 
 # ─────────────────────────────────────────────────────────────

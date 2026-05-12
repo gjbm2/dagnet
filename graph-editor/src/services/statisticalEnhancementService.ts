@@ -53,6 +53,8 @@ import {
   BAYES_TUNE,
   BAYES_CHAINS,
   BAYES_TARGET_ACCEPT,
+  SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+  SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
 } from '../constants/latency';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
@@ -2037,6 +2039,8 @@ export function enhanceGraphLatencies(
     BAYES_TUNE: forecasting?.BAYES_TUNE ?? BAYES_TUNE,
     BAYES_CHAINS: forecasting?.BAYES_CHAINS ?? BAYES_CHAINS,
     BAYES_TARGET_ACCEPT: forecasting?.BAYES_TARGET_ACCEPT ?? BAYES_TARGET_ACCEPT,
+    SNAPSHOT_OBSERVATION_T95_MULTIPLIER: forecasting?.SNAPSHOT_OBSERVATION_T95_MULTIPLIER ?? SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+    SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER: forecasting?.SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER ?? SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
   };
 
   const weightedQuantile = (
@@ -2993,16 +2997,42 @@ export function enhanceGraphLatencies(
         pathSigma = nodePathSigma.get(nodeId);
         if (pathMu !== undefined) pathMuSource = 'passthrough';
       }
-      // Fallback (d): first edge from anchor — path IS the edge itself (cohort mode only).
-      // Restricted to latency edges: a non-latency first edge from the anchor
-      // has no edge timing to seed the path with (A→Y = A→X = identity at the
-      // anchor). It correctly leaves pathMu/pathSigma undefined here so a
-      // downstream latency edge can seed the path via its own fit.
-      if (pathMu === undefined && latencyEnabled && !isWindowMode && latencyStats.fit.mu !== undefined) {
+      // Fallback (d): first edge from anchor — path IS the edge itself.
+      // Mode-independent: in cohort mode this seeds the path for the first
+      // latency edge in the cascade; in window mode the same logic applies
+      // (the "path" for a window-anchored edge is just the edge itself).
+      // Restricted to latency edges: a non-latency first edge has no edge
+      // timing to seed the path with (A→Y = A→X = identity at the anchor).
+      // It correctly leaves pathMu/pathSigma undefined here so a downstream
+      // latency edge can seed the path via its own fit.
+      if (pathMu === undefined && latencyEnabled && latencyStats.fit.mu !== undefined) {
         pathMu = latencyStats.completeness_cdf.mu;
         pathSigma = latencyStats.completeness_cdf.sigma;
         pathMuSource = 'self_seed';
       }
+
+      // ── Diagnostic: cascade decision per edge (TEMP — investigating path_mu drop-out) ──
+      console.log('[PATH_CASCADE]', {
+        edgeId,
+        edgeFromTo: `${nodeId}→${normalizeNodeRef(edge.to)}`,
+        latencyEnabled,
+        isWindowMode,
+        upstreamNodePathMu: nodePathMu.get(nodeId),
+        upstreamNodePathSigma: nodePathSigma.get(nodeId),
+        edgeFitMu: latencyStats.fit.mu,
+        edgeFitSigma: latencyStats.fit.sigma,
+        completenessCdfMu: latencyStats.completeness_cdf.mu,
+        completenessCdfSigma: latencyStats.completeness_cdf.sigma,
+        completenessAuthoritativeT95Days,
+        anchorMomentsAvailable: cohortsForPathEstimate.some(
+          (c: any) =>
+            (typeof c.anchor_median_lag_days === 'number' && Number.isFinite(c.anchor_median_lag_days) && c.anchor_median_lag_days > 0) ||
+            (typeof c.anchor_mean_lag_days === 'number' && Number.isFinite(c.anchor_mean_lag_days) && c.anchor_mean_lag_days > 0)
+        ),
+        result_pathMu: pathMu,
+        result_pathSigma: pathSigma,
+        result_pathMuSource: pathMuSource,
+      });
 
       // ── Path-cascade candidate breakdown ──
       //
@@ -3737,6 +3767,9 @@ export function enhanceGraphLatencies(
         t95: edgeLAGValues.latency.t95,
         completeness: edgeLAGValues.latency.completeness,
         blendedMean: edgeLAGValues.blendedMean,
+        path_mu: edgeLAGValues.latency.path_mu,
+        path_sigma: edgeLAGValues.latency.path_sigma,
+        path_t95: edgeLAGValues.latency.path_t95,
       });
 
       // Emit per-edge diagnostic as a debug child of the FE_TOPO_ENHANCE op.

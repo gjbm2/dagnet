@@ -65,6 +65,18 @@ def generate_graph_artefacts(
             return short
         return f"{prefix}-{short}"
 
+    def _event_id(short: str) -> str:
+        # Always namespace event_ids by the graph name so fixture variants
+        # that share topology (e.g. synth-mirror-4step + -slow + -wide all
+        # use raw m4-* node IDs) produce distinct event SHAs and therefore
+        # distinct downstream `core_hash` families. Without this, snapshot
+        # reads — which fan out by core_hash family across param_id buckets
+        # — cross-contaminate sibling fixtures' query results.
+        base = _node_id(short)
+        if base.startswith(name):
+            return f"{base}-event"
+        return f"{name}-{base}-event"
+
     graphs_dir = os.path.join(data_repo, "graphs")
 
     # --- Generate UUIDs ---
@@ -138,7 +150,7 @@ def generate_graph_artefacts(
         }
 
         if not is_absorbing:
-            event_id = f"{full_id}-event"
+            event_id = _event_id(nid)
             node["event_id"] = event_id
 
         if is_start:
@@ -150,7 +162,7 @@ def generate_graph_artefacts(
             node["outcome_type_overridden"] = True
             # Absorbing nodes with events (measurable outcomes)
             if ncfg.get("has_event", True) and is_absorbing:
-                node["event_id"] = f"{full_id}-event"
+                node["event_id"] = _event_id(nid)
 
         graph_nodes.append(node)
 
@@ -192,7 +204,7 @@ def generate_graph_artefacts(
     # --- Build edges ---
     graph_edges: list[dict] = []
     anchor_node_id = _node_id(start_node) if start_node else ""
-    anchor_event_id = f"{anchor_node_id}-event" if anchor_node_id else ""
+    anchor_event_id = _event_id(start_node) if start_node else ""
 
     for eid, ecfg in edges_cfg.items():
         full_eid = _edge_id(eid)

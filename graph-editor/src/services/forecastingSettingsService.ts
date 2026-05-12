@@ -26,6 +26,8 @@ import {
   BAYES_TUNE,
   BAYES_CHAINS,
   BAYES_TARGET_ACCEPT,
+  SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+  SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
 } from '../constants/latency';
 
 export type ForecastingModelSettings = {
@@ -55,6 +57,8 @@ export type ForecastingModelSettings = {
   BAYES_TUNE: number;
   BAYES_CHAINS: number;
   BAYES_TARGET_ACCEPT: number;
+  SNAPSHOT_OBSERVATION_T95_MULTIPLIER: number;
+  SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER: number;
 };
 
 function numOr<T extends number>(value: unknown, fallback: T): number {
@@ -92,6 +96,8 @@ class ForecastingSettingsService {
         BAYES_WARM_START_RHAT_MAX, BAYES_WARM_START_ESS_MIN,
         BAYES_HDI_PROB, BAYES_DRAWS, BAYES_TUNE, BAYES_CHAINS,
         BAYES_TARGET_ACCEPT,
+        SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+        SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
       };
     }
     try {
@@ -124,6 +130,14 @@ class ForecastingSettingsService {
         BAYES_TUNE: numOr(forecasting.BAYES_TUNE, BAYES_TUNE),
         BAYES_CHAINS: numOr(forecasting.BAYES_CHAINS, BAYES_CHAINS),
         BAYES_TARGET_ACCEPT: numOr(forecasting.BAYES_TARGET_ACCEPT, BAYES_TARGET_ACCEPT),
+        SNAPSHOT_OBSERVATION_T95_MULTIPLIER: numOr(
+          forecasting.SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+          SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+        ),
+        SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER: numOr(
+          forecasting.SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+          SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+        ),
       };
     } catch {
       return {
@@ -140,6 +154,8 @@ class ForecastingSettingsService {
         BAYES_WARM_START_RHAT_MAX, BAYES_WARM_START_ESS_MIN,
         BAYES_HDI_PROB, BAYES_DRAWS, BAYES_TUNE, BAYES_CHAINS,
         BAYES_TARGET_ACCEPT,
+        SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+        SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
       };
     }
   }

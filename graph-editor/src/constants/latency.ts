@@ -310,6 +310,26 @@ export const COHORT_HORIZON_MIN_DAYS = 7;
 export const COHORT_HORIZON_BUFFER_DAYS = 2;
 
 /**
+ * Multiplier applied to edge-local t95 when deciding how long to keep
+ * refreshing snapshot observations for window-mode latency edges.
+ *
+ * t95 remains the modelling/completeness horizon. This multiplier defines
+ * the empirical observation horizon: keep fetching beyond t95 so late-tail
+ * conversions and model misspecification remain observable in cohort
+ * maturity evidence coverage.
+ */
+export const SNAPSHOT_OBSERVATION_T95_MULTIPLIER = 2.0;
+
+/**
+ * Multiplier applied to path_t95 for cohort-mode observation refresh.
+ *
+ * Lower than the edge-local multiplier because requiring every successive
+ * edge in a path to be in its far tail is less likely than a single edge
+ * landing in its tail.
+ */
+export const SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER = 1.5;
+
+/**
  * DEFAULT_T95_DAYS
  * 
  * Default t95 (95th percentile lag) value when no computed or user-supplied t95 is available.
@@ -490,6 +510,8 @@ export interface ForecastingSettings {
   blend_completeness_power: number;
   // Evidence scope
   fit_left_censor_days: number;
+  snapshot_observation_t95_multiplier: number;
+  snapshot_observation_path_t95_multiplier: number;
   // Bayesian fit_history retention (doc 27)
   bayes_fit_history_interval_days: number;
   bayes_fit_history_max_days: number;
@@ -556,6 +578,8 @@ export function buildForecastingSettings(): ForecastingSettings {
     forecast_blend_lambda: FORECAST_BLEND_LAMBDA,
     blend_completeness_power: LATENCY_BLEND_COMPLETENESS_POWER,
     fit_left_censor_days: LATENCY_FE_FIT_LEFT_CENSOR_DAYS,
+    snapshot_observation_t95_multiplier: SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
+    snapshot_observation_path_t95_multiplier: SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
     bayes_fit_history_interval_days: BAYES_FIT_HISTORY_INTERVAL_DAYS,
     bayes_fit_history_max_days: BAYES_FIT_HISTORY_MAX_DAYS,
     bayes_log_kappa_mu: BAYES_LOG_KAPPA_MU,

@@ -1,0 +1,78 @@
+# Purpose-built fixture for multi-hop window evidence semantics.
+#
+# The graph is A -> B -> C. Window evidence for A -> C is not directly
+# observed as one Cohort because the B -> C window rows are rooted at local
+# B-arrival days. Correct chart evidence therefore must propagate selected
+# A-window mass through observed local rates:
+#
+#   synthetic_C = selected_N_A * rate(A->B) * rate(B->C)
+#
+# The fixture uses traffic growth plus deterministic stepped latencies so the
+# local B-window denominator differs materially from the synthetic selected
+# B mass. A raw terminal-count shortcut is therefore visibly wrong.
+
+graph:
+  name: synth-window-rate-prop
+  anchor: wrp-a
+  raw_ids: true
+
+nodes:
+  wrp-a:
+    label: A
+    event_id: synth-window-rate-prop-a-event
+    is_start: true
+  wrp-b:
+    label: B
+    event_id: synth-window-rate-prop-b-event
+  wrp-c:
+    label: C
+    event_id: synth-window-rate-prop-c-event
+    absorbing: true
+    outcome_type: success
+
+edges:
+  wrp-a-to-b:
+    from: wrp-a
+    to: wrp-b
+    p: 0.25
+    # Model approximation fields stay narrow-lognormal-shaped for normal
+    # graph consumers; synth_gen uses the explicit stepped DGP below.
+    onset: 0.0
+    mu: 1.609
+    sigma: 0.05
+    latency_shape: stepped
+    latency_steps:
+      - day: 5.0
+        prob: 1.0
+  wrp-b-to-c:
+    from: wrp-b
+    to: wrp-c
+    p: 0.30
+    onset: 0.0
+    mu: 0.693
+    sigma: 0.05
+    latency_shape: stepped
+    latency_steps:
+      - day: 2.0
+        prob: 1.0
+
+simulation:
+  mean_daily_traffic: 10000
+  n_days: 120
+  base_date: "2025-12-12"
+  kappa_sim_default: 1000000000.0
+  kappa_step_default: 0.0
+  failure_rate: 0.0
+  frame_drop_rate: 0.0
+  toggle_rate: 0.0
+  initial_absent_pct: 0.0
+  snapshot_start_offset: 0
+  traffic_cv: 0.0
+  drift_sigma: 0.0
+  drift_rate: 0.0
+  drift_p_to: null
+  # Strong deterministic growth makes local B-window rows a different
+  # population size from the synthetic selected B mass implied by A->B.
+  growth_rate_mom: 1.0
+  seed: 4242
+  expected_sample_seconds: 900

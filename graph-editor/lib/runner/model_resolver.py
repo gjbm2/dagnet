@@ -41,6 +41,7 @@ class ResolvedLatency:
     sigma_sd: float = 0.0
     onset_sd: float = 0.0
     onset_mu_corr: float = 0.0
+    latency_parameter: Optional[bool] = None
 
     @property
     def mu_sd_predictive(self) -> float:
@@ -322,7 +323,8 @@ def resolve_model_params(
     # produces a phantom delay in cohort-mode rate trajectories
     # (see test_single_hop_non_latent_upstream_collapses_to_window).
     # Force a clean Dirac when the edge declares `latency_parameter: false`.
-    if latency_block.get('latency_parameter') is False:
+    latency_parameter_enabled = latency_block.get('latency_parameter') is not False
+    if not latency_parameter_enabled:
         edge_mu = 0.0
         edge_sigma = 0.0
         edge_onset = 0.0
@@ -343,6 +345,7 @@ def resolve_model_params(
         sigma_sd=float(edge_sigma_sd),
         onset_sd=float(edge_onset_sd),
         onset_mu_corr=float(edge_onset_mu_corr),
+        latency_parameter=latency_parameter_enabled,
     )
 
     # ── Path-level latency (cohort mode) ───────────────────────────
@@ -403,6 +406,7 @@ def resolve_model_params(
                 sigma_sd=float(path_sigma_sd),
                 onset_sd=float(path_onset_sd),
                 onset_mu_corr=float(path_onset_mu_corr),
+                latency_parameter=True,
             )
 
     # ── Probability ────────────────────────────────────────────────

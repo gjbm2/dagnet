@@ -33,6 +33,7 @@ import {
 } from './posteriorSliceResolution';
 import { parseConstraints } from '../lib/queryDSL';
 import { applyPromotion, upsertModelVars } from './modelVarsResolution';
+import { sessionLogService } from './sessionLogService';
 
 export type ParameterFileResolver = (paramId: string) => unknown | null | undefined;
 
@@ -252,6 +253,7 @@ function contextProbabilityBlock(
   effectiveDsl: string,
   asatDate: string | null,
   options: ContextEdgesOptions,
+  paramId?: string,
 ): void {
   if (!pBlock || typeof pBlock !== 'object') return;
 
@@ -279,6 +281,22 @@ function contextProbabilityBlock(
   if (!activePosterior) {
     // asat() in effect, but no fit on or before the asat date — drop
     // strictly per doc 27 §5.2 asat semantics.
+    //
+    // Defence-in-depth: surface the strict-drop in the session log so
+    // a future regression where asat silently wipes a fit (e.g. by
+    // wrapPatchIfRaw defaulting fitted_at to NOW) is visible without
+    // having to instrument the chart pipeline. The strict-drop itself
+    // is by design; the session-log entry is informational only —
+    // tells operators why the chart fell back to analytic.
+    if (asatDate) {
+      const fittedAtSeen = fileposterior.fitted_at || '(none)';
+      sessionLogService.warning(
+        'data-fetch',
+        'BAYES_SLICE_STRICT_DROP_AT_ASAT',
+        `Bayesian projection dropped at asat() — fit too recent`,
+        `paramId=${paramId ?? '(unknown)'} fitted_at=${fittedAtSeen} asat=${asatDate}`,
+      );
+    }
     dropBayesianModelVar(pBlock);
     if (options.engorgeFitHistory) {
       pBlock._posteriorSlices = undefined;
@@ -362,7 +380,7 @@ export function contextGraphForEffectiveDsl(
     const baseParamId: string | undefined = edge?.p?.id;
     if (baseParamId) {
       const pf = resolveParameterFile(String(baseParamId));
-      contextProbabilityBlock(edge.p, pf, effectiveDsl, asatDate, options);
+      contextProbabilityBlock(edge.p, pf, effectiveDsl, asatDate, options, String(baseParamId));
       if (edge.p) applyPromotion(edge.p, graphPref);
     }
 
@@ -371,7 +389,7 @@ export function contextGraphForEffectiveDsl(
       const condParamId: string | undefined = cond?.p?.id;
       if (!condParamId) continue;
       const condPf = resolveParameterFile(String(condParamId));
-      contextProbabilityBlock(cond.p, condPf, effectiveDsl, asatDate, options);
+      contextProbabilityBlock(cond.p, condPf, effectiveDsl, asatDate, options, String(condParamId));
       if (cond.p) applyPromotion(cond.p, graphPref);
     }
   }

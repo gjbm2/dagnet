@@ -265,6 +265,10 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
     report = report_progress or _noop_progress
     log: list[str] = []
     t0 = time.time()
+    # Single source of truth for fitted_at — threaded through both the
+    # webhook body (line 372 below) and `_build_result` (line 405) so
+    # the harness sidecar and the webhook-delivered patch always agree.
+    fitted_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     error = None
     webhook_response = None
 
@@ -369,7 +373,7 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
                 "branch": payload.get("branch", ""),
                 "graph_file_path": payload.get("graph_file_path", ""),
                 "fingerprint": f"placeholder-{int(time.time())}",
-                "fitted_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "fitted_at": fitted_at,
                 "quality": {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0},
                 "edges": edges,
                 "skipped": [],
@@ -402,7 +406,14 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
         _log(log,f"ERROR: {error}")
         _log(log,traceback.format_exc())
 
-    return _build_result(error, log, {}, t0, edges if not error else [], [], {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0}, webhook_response)
+    return _build_result(
+        error, log, {}, t0,
+        edges if not error else [],
+        [],
+        {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0},
+        webhook_response,
+        fitted_at,
+    )
 
 
 def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
@@ -415,6 +426,11 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     log: list[str] = []
     timings: dict[str, int] = {}
     t0 = time.time()
+    # Single source of truth for fitted_at — threaded through both the
+    # webhook body (line ~1547) and every `_build_result(...)` call
+    # below, so the harness sidecar and the webhook-delivered patch
+    # always agree on the timestamp.
+    fitted_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     error = None
     webhook_response = None
     result_edges: list[dict] = []
@@ -604,7 +620,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             report("complete", 100, "Phase 2 from dump complete")
             return _build_result(
                 None, log, timings, t0, result_edges, result_skipped,
-                quality_dict, webhook_response,
+                quality_dict, webhook_response, fitted_at,
                 binding_receipt=binding_receipt,
             )
 
@@ -831,7 +847,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 None if binding_receipt.edges_failed == 0 else
                     f"binding receipt preflight: {binding_receipt.edges_failed} edges failed",
                 log, timings, t0, result_edges, result_skipped,
-                quality_dict, webhook_response,
+                quality_dict, webhook_response, fitted_at,
                 binding_receipt=binding_receipt,
             )
 
@@ -842,7 +858,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             report("complete", 100)
             return _build_result(
                 error, log, timings, t0, result_edges, result_skipped,
-                quality_dict, webhook_response,
+                quality_dict, webhook_response, fitted_at,
                 binding_receipt=binding_receipt,
             )
 
@@ -856,7 +872,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             report("complete", 100, "Evidence dump complete")
             return _build_result(
                 None, log, timings, t0, result_edges, result_skipped,
-                quality_dict, webhook_response,
+                quality_dict, webhook_response, fitted_at,
                 binding_receipt=binding_receipt,
             )
 
@@ -866,7 +882,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             report("complete", 100)
             return _build_result(
                 error, log, timings, t0, result_edges, result_skipped,
-                quality_dict, webhook_response,
+                quality_dict, webhook_response, fitted_at,
                 binding_receipt=binding_receipt,
             )
 
@@ -934,7 +950,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             report("complete", 100, "Model inspection complete")
             return _build_result(
                 None, log, timings, t0, result_edges, result_skipped,
-                quality_dict, webhook_response,
+                quality_dict, webhook_response, fitted_at,
                 binding_receipt=binding_receipt,
             )
 
@@ -1544,7 +1560,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 "branch": payload.get("branch", ""),
                 "graph_file_path": payload.get("graph_file_path", ""),
                 "fingerprint": topology.fingerprint,
-                "fitted_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "fitted_at": fitted_at,
                 "quality": quality_dict,
                 "edges": result_edges,
                 "skipped": result_skipped,
@@ -1590,7 +1606,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
     return _build_result(
         error, log, timings, t0, result_edges, result_skipped,
-        quality_dict, webhook_response,
+        quality_dict, webhook_response, fitted_at,
         binding_receipt=binding_receipt,
     )
 
@@ -2352,8 +2368,19 @@ def _build_unified_slices(
 
 def _build_result(
     error, log, timings, t0, edges, skipped, quality, webhook_response,
+    fitted_at,
     binding_receipt=None,
 ) -> dict:
+    """Construct the worker result dict. `fitted_at` is computed once at
+    fit start by the caller and threaded through both this function and
+    the webhook payload — single source of truth so the harness-cached
+    sidecar and the webhook-delivered patch agree on the timestamp.
+
+    A non-empty fitted_at is required for `resolveAsatPosterior` to
+    honour asat() as a posterior frontier; previously the no-webhook
+    harness path returned an empty fitted_at, which `wrapPatchIfRaw`
+    silently defaulted to NOW, breaking past-asat queries.
+    """
     duration_ms = int((time.time() - t0) * 1000)
     timings["total_ms"] = duration_ms
     result = {
@@ -2368,6 +2395,7 @@ def _build_result(
         "log": log,
         "webhook_payload_edges": edges,  # for warm-start / harness re-run
         "webhook_response": webhook_response,
+        "fitted_at": fitted_at,
         "error": error,
     }
     if binding_receipt is not None:
