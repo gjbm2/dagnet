@@ -243,31 +243,77 @@ class RepositoryOperationsService {
     branch: string,
     options?: { overwriteGraphs?: boolean }
   ): Promise<{ success: boolean; conflictsResolved: number; conflicts?: any[] }> {
-    // Pre-pass for headless callers (e.g. ?retrieveall): clear `sha` on every
-    // graph-type IDB record in this workspace so `pullLatest` treats them as
-    // new files and routes through the clean-overwrite branch, skipping the
-    // 3-way merge entirely. This is the guarantee `pullLatestRemoteWins`'s
-    // name implies but the merge-then-resolve-conflicts path does not provide
-    // (silent stale-base merges keep local values without raising a conflict).
+    // Pre-pass for headless callers (e.g. ?retrieveall): HARD-DELETE every
+    // graph IDB record in this workspace and purge the FileRegistry in-memory
+    // cache so the pull MUST rehydrate every graph from remote with zero
+    // chance of stale local state surviving. Graphs are config — local IDB
+    // state is never authoritative for them, and any drift becomes a
+    // committed regression the next time daily automation runs (e.g. the
+    // dailyFetch=false reversion cycle observed on li-cohort-segmentation-v2
+    // across May-26).
+    //
+    // The previous sha-clear-only pre-pass was insufficient: it left
+    // `data`/`originalData`/`isDirty` intact, so workspaceService.pullLatest
+    // still consulted `localFileState` for gate checks, and stale duplicate
+    // or orphan IDB records (legacy fileId variants) could survive entirely.
+    // Deleting outright removes the data the pull can read, forcing the
+    // clean-update path at workspaceService.ts:2088 to write fresh remote
+    // payload unconditionally.
     if (options?.overwriteGraphs) {
       const graphFiles = await db.files
         .where('source.repository').equals(repository)
         .and(f => f.source?.branch === branch && f.type === 'graph')
         .toArray();
-      let cleared = 0;
+
+      const deletedFileIds: string[] = [];
       for (const f of graphFiles) {
-        if (f.sha) {
-          f.sha = undefined;
-          await db.files.put(f);
-          cleared++;
+        try {
+          await db.files.delete(f.fileId);
+          deletedFileIds.push(f.fileId);
+        } catch (err) {
+          console.warn(`[overwriteGraphs] Failed to delete IDB record ${f.fileId}:`, err);
         }
       }
-      sessionLogService.info(
+
+      // Purge the FileRegistry in-memory cache for every deleted record AND
+      // any remaining graph-type entry. Listener callbacks are NOT fired —
+      // this is a structural reset before a pull, not a user-driven delete.
+      const reg = fileRegistry as any;
+      const prefix = `${repository}-${branch}-`;
+      const idsToScrub = new Set<string>();
+      for (const fileId of deletedFileIds) {
+        idsToScrub.add(fileId);
+        if (fileId.startsWith(prefix)) {
+          idsToScrub.add(fileId.substring(prefix.length));
+        }
+      }
+      // Defence: also scrub any in-memory graph entries that weren't in IDB
+      // (e.g. transient writes mid-flight, or entries written by an older
+      // session that left no IDB record).
+      if (reg.files instanceof Map) {
+        for (const [id, fileState] of reg.files.entries()) {
+          if (fileState?.type === 'graph') idsToScrub.add(id);
+        }
+      }
+      for (const id of idsToScrub) {
+        reg.files?.delete(id);
+        reg.pendingUpdates?.delete(id);
+        reg.updatingFiles?.delete(id);
+        reg.listeners?.delete(id);
+        reg.fileGenerations?.delete(id);
+      }
+
+      // Invalidate dirty-files cache: any previous snapshot may still name
+      // graphs we just deleted, which would cause getCommittableFiles to
+      // return stale ghost entries to the daily-refresh commit step.
+      this.invalidateCommittableFilesCache();
+
+      sessionLogService.warning(
         'git',
-        'GIT_PULL_OVERWRITE_GRAPHS_PREPASS',
-        `Cleared sha on ${cleared} graph file(s) to force remote-wins overwrite`,
+        'GIT_PULL_OVERWRITE_GRAPHS_HARD_RESET',
+        `Hard-reset: deleted ${deletedFileIds.length} graph IDB record(s) and purged FileRegistry to force remote-wins re-hydration`,
         undefined,
-        { repository, branch, cleared, total: graphFiles.length }
+        { repository, branch, deletedFileIds, scrubbedRegistryIds: Array.from(idsToScrub), total: graphFiles.length }
       );
     }
 

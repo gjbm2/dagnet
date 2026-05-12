@@ -538,11 +538,14 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
     // -----------------------------------------------------------------------
     // Upfront pull (remote wins) — ALWAYS, both enumeration and explicit mode.
     //
-    // `overwriteGraphs: true` makes the pull unconditionally take the remote
-    // version of every graph file (bypassing the 3-way merge). This is the
-    // headless guarantee `?retrieveall` requires: gating fields like
-    // `dailyFetch` and `dataInterestsDSL` must reflect remote before
-    // enumeration, regardless of any drift in local `originalData`.
+    // `overwriteGraphs: true` performs a HARD RESET: every graph IDB record
+    // for this workspace is deleted and the FileRegistry's in-memory graph
+    // entries are purged BEFORE the pull, so the pull must re-hydrate every
+    // graph from remote with zero chance of stale local state surviving.
+    // Graphs are config — there is no local-authoritative state for them in
+    // the headless flow, and any drift becomes a regression the next time
+    // daily automation commits (the dailyFetch=false reversion cycle on
+    // li-cohort-segmentation-v2 was the canonical instance of this class).
     // -----------------------------------------------------------------------
     sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_PRE_PULL', 'Pulling latest from Git (remote wins)');
 
