@@ -65,18 +65,23 @@ class TestCarrierReadViaSharedResolver:
         assert abs(_resolve_edge_p(edge) - 0.40) < 1e-9
 
     def test_promoted_source_wins_when_p_mean_disagrees_via_posterior(self):
-        """Posterior-driven promoted source: the resolver computes
-        p_mean from posterior alpha/beta; the carrier must follow that,
-        not the L5 current-answer scalar.
+        """Promoted-source α/β drive p_mean: the carrier must follow the
+        resolved p_mean from the promoted ledger's Beta, not the L5
+        current-answer scalar.
         """
         _reset_warn_dedup()
         edge = {
             'id': 'edge-posterior-disagree',
             'p': {
                 'mean': 0.20,                                # L5 (poisoned by overtype)
-                'posterior': {'alpha': 60, 'beta': 40},      # → p_mean=0.6
                 'forecast': {'mean': 0.20},
                 'latency': {'mu': 2.0, 'sigma': 0.5},
+                'model_vars': [{
+                    'source': 'analytic',
+                    'probability': {'mean': 0.60, 'stdev': 0.05,
+                                    'alpha': 60, 'beta': 40, 'n_effective': 100},
+                    'latency': {'mu': 2.0, 'sigma': 0.5},
+                }],
             },
         }
         assert abs(_resolve_edge_p(edge) - 0.60) < 1e-9

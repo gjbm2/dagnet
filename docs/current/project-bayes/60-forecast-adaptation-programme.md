@@ -794,6 +794,50 @@ explicitly ratified that behaviour change for this workstream.
 - the behaviour change is isolated to the intended rate-conditioning seam
 - earlier parity, authority, and degradation tests remain green
 
+**Pre-WP8 invariant — window model vars only under factorised composition**
+
+The WP3 factorised contract (and doc 47 §"Why window mode is unaffected",
+doc 60 §6 decision 7) says cohort() queries are served by **edge-wise
+window() composition across the full X→end subject span**, with cohort
+semantics applied only on the upstream/path-level side (carrier,
+completeness, maturity). The aggregate prior fed to each per-edge
+primitive must match the primitive's semantic question:
+
+- `model_vars[promoted].probability.{alpha, beta, alpha_pred, beta_pred,
+  n_effective}` is the aggregate posterior on the **edge's local rate**
+  (y/x at the edge), fitted from window-mode evidence with edge-local
+  latency. This is the aggregate prior an edge-wise window primitive is
+  built to consume.
+- `model_vars[promoted].probability.{cohort_alpha, cohort_beta,
+  cohort_alpha_pred, cohort_beta_pred, cohort_n_effective}` is
+  shape-identical per-edge α/β but answers a different aggregate
+  question: the edge's rate as observed under anchor-anchored
+  cohort-mode evidence with a path-level latency model in the
+  likelihood. It is the aggregate prior reserved for a **path-level
+  primitive** — a whole-path object that WP8's late, flagged
+  direct-`cohort()` rate-conditioning path will introduce. The cohort
+  mirror has no legitimate factorised consumer.
+
+While WP3 factorised composition is the live path (i.e. until WP8 lands
+the path-level primitive), the runtime must resolve every per-edge
+primitive on both the subject span and the carrier span against the
+**window** slice of the source ledger. The `cohort_*` mirrors must not
+be read by factorised consumers.
+
+Code-level symptom at time of writing: `cohort_forecast_v3.py` passes
+`temporal_mode='cohort'` to `_build_span_resolutions` for both the
+subject span (≈line 1295, gated on `is_window`) and the carrier span
+(≈line 1313, hardcoded). That routes per-edge primitive resolutions
+through `prob_cohort_alpha/_beta`, `prob_cohort_alpha_pred/_beta_pred`,
+`prob_cohort_n_effective`, and path-level latency in
+`model_resolver.py`. Both call sites should pass `temporal_mode='window'`
+for the per-edge resolutions until path-level primitives exist.
+
+`temporal_mode='cohort'` (and therefore `cohort_*` model vars) becomes
+admissible only once WP8 introduces a primitive that consumes the
+path-fitted posterior as a coherent whole-path quantity. Until then:
+window primitives → window model vars only.
+
 ### WP9 — Remove obsolete branches and align the docs
 
 **Objective**

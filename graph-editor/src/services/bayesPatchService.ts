@@ -19,6 +19,7 @@ import { parseUKDate } from '../lib/dateFormat';
 import { BAYES_FIT_HISTORY_MAX_DAYS, BAYES_FIT_HISTORY_INTERVAL_DAYS } from '../constants/latency';
 import type { FitHistorySlice } from '../types';
 import { normaliseSliceShape } from './posteriorSliceResolution';
+import { applyPathIdentityFallback } from './pathIdentity';
 
 console.log('[bayesPatchService] Module loaded');
 
@@ -439,6 +440,12 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             if (cohortSlice.sigma_sd != null) latencyBlock.path_sigma_sd = cohortSlice.sigma_sd;
             if (cohortSlice.onset_sd != null) latencyBlock.path_onset_sd = cohortSlice.onset_sd;
           }
+          // Identity case: topology guarantees path = edge. Bayes engine
+          // excludes single-latency paths from cohort fitting (see
+          // bayes/compiler/model.py:1103-1109), so fill path_* from
+          // edge-level here to honour the engine's documented "path CDF
+          // = edge CDF" invariant on the source-ledger surface.
+          applyPathIdentityFallback(latencyBlock, graphDoc, graphEdge.id);
         }
 
         // Build the fit_diagnostics sub-blocks — bayesian-only metadata

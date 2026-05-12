@@ -298,6 +298,23 @@ function clearPromotedSurfaces(p: ProbabilityParam): void {
   if (p.latency && (p.latency as any).posterior !== undefined) {
     (p.latency as any).posterior = undefined;
   }
+  // Strip promoted latency point + path-level projections and heuristic
+  // dispersion SDs. Mirrors the unconditional writes in applyPromotion so
+  // a "no entry resolved" branch can't leave stale path_* from a prior
+  // source.
+  if (p.latency) {
+    p.latency.path_mu = undefined;
+    p.latency.path_sigma = undefined;
+    p.latency.promoted_path_t95 = undefined;
+    p.latency.path_onset_delta_days = undefined;
+    p.latency.promoted_mu_sd = undefined;
+    p.latency.promoted_sigma_sd = undefined;
+    p.latency.promoted_onset_sd = undefined;
+    p.latency.promoted_onset_mu_corr = undefined;
+    p.latency.promoted_path_mu_sd = undefined;
+    p.latency.promoted_path_sigma_sd = undefined;
+    p.latency.promoted_path_onset_sd = undefined;
+  }
 }
 
 /**
@@ -362,18 +379,23 @@ export function applyPromotion(
         p.latency.onset_delta_days = result.latency.onset_delta_days;
       }
     }
-    if (result.latency.path_mu !== undefined) p.latency.path_mu = result.latency.path_mu;
-    if (result.latency.path_sigma !== undefined) p.latency.path_sigma = result.latency.path_sigma;
-    if (result.latency.path_t95 !== undefined) p.latency.promoted_path_t95 = result.latency.path_t95;
-    if (result.latency.path_onset_delta_days !== undefined) p.latency.path_onset_delta_days = result.latency.path_onset_delta_days;
-    // Heuristic dispersion — promote SDs alongside point values
-    if (result.latency.mu_sd !== undefined) p.latency.promoted_mu_sd = result.latency.mu_sd;
-    if (result.latency.sigma_sd !== undefined) p.latency.promoted_sigma_sd = result.latency.sigma_sd;
-    if (result.latency.onset_sd !== undefined) p.latency.promoted_onset_sd = result.latency.onset_sd;
-    if (result.latency.onset_mu_corr !== undefined) p.latency.promoted_onset_mu_corr = result.latency.onset_mu_corr;
-    if (result.latency.path_mu_sd !== undefined) p.latency.promoted_path_mu_sd = result.latency.path_mu_sd;
-    if (result.latency.path_sigma_sd !== undefined) p.latency.promoted_path_sigma_sd = result.latency.path_sigma_sd;
-    if (result.latency.path_onset_sd !== undefined) p.latency.promoted_path_onset_sd = result.latency.path_onset_sd;
+    // Path-level latency + heuristic dispersion: write unconditionally
+    // (assigning undefined when the active source has no value) so that a
+    // model_source_preference switch cannot leave stale projections from
+    // the previously-active source. The previous `if (… !== undefined)`
+    // guard leaked FE path_* values when switching to Bayesian on upstream
+    // edges where the bayesian entry carries no path_*.
+    p.latency.path_mu = result.latency.path_mu;
+    p.latency.path_sigma = result.latency.path_sigma;
+    p.latency.promoted_path_t95 = result.latency.path_t95;
+    p.latency.path_onset_delta_days = result.latency.path_onset_delta_days;
+    p.latency.promoted_mu_sd = result.latency.mu_sd;
+    p.latency.promoted_sigma_sd = result.latency.sigma_sd;
+    p.latency.promoted_onset_sd = result.latency.onset_sd;
+    p.latency.promoted_onset_mu_corr = result.latency.onset_mu_corr;
+    p.latency.promoted_path_mu_sd = result.latency.path_mu_sd;
+    p.latency.promoted_path_sigma_sd = result.latency.path_sigma_sd;
+    p.latency.promoted_path_onset_sd = result.latency.path_onset_sd;
   }
 
   // Posterior unification plan §3, Step 2(a)/(b) — write the promoted Beta

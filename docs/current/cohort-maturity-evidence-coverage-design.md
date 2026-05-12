@@ -278,6 +278,26 @@ frame-derived `engine_cohorts.obs_x/obs_y`.
 
 **Status as of 10-May-26**: atom 3 is **not deletion-only housekeeping**. Atom 2 removed the chart row builder's read of `engine_cohorts.obs_x/obs_y`, but the selected-Cohort reducer still needs an observed prefix for each selected cohort: "what X/Y values are already known before the forecast arm takes over?" In the current v3 path the reducer can read that prefix from `SelectedAClockEvidence` when the object exists, but it still has a residual fallback to `engine_cohort.obs_x/obs_y`. Deleting the fields without retiring that fallback would change or break the reducer's numerical input, especially for identity-carrier `window()` cases.
 
+**Suspected atom 2 incompleteness (12-May-26, unverified)**: code-reading suggests `cohort(A=X)` queries may not be going through the unified selected-evidence path in production today, despite atom 2c claiming end-to-end `window()` vs `cohort(A=X)` parity as its closure gate. The hypothesis:
+
+1. `_root_window_carrier_n_by_anchor_day` at [cohort_forecast_v3.py:1797-1800](../../graph-editor/lib/runner/cohort_forecast_v3.py#L1797-L1800) filters candidates for `slice_family == SliceFamily.WINDOW`.
+2. Per `_classify_slice_key` at [evidence_adapters.py:72-75](../../graph-editor/lib/runner/evidence_adapters.py#L72-L75), `cohort(A=X)` rows carry `slice_family=COHORT`.
+3. For `cohort(A=X)` the X-rooted candidates fail the filter; `n_by_anchor` returns empty; `runtime.selected_source_day_mass` and `runtime.selected_x_prefix` are never populated ([cohort_forecast_v3.py:6263](../../graph-editor/lib/runner/cohort_forecast_v3.py#L6263)); the builder refuses with `runtime_did_not_resolve_selected_source_day_mass`.
+4. The reducer's branch-3 fallback ([cohort_forecast_v3.py:4796-4801](../../graph-editor/lib/runner/cohort_forecast_v3.py#L4796-L4801)) silently rescues by reading legacy `engine_cohort.obs_x/obs_y`. The parity assertion in `test_end_to_end_parity_window_vs_cohort_a_equals_x_row_dicts` passes — but via the rescue, not via the unified path.
+
+If true this is AP59 to the letter: the unified path was built, its closure gate appears green, but the legacy fallback is doing the work for the second mode. Invariant 12 ("failures degrade visibly; they do not silently fall back") is violated.
+
+**Verification gap**: the unknown is whether the evidence superset for a `cohort(A=X)` query actually pulls WINDOW-family rows for the X-rooted edge (which would pass the filter and falsify the hypothesis). A single diagnostic run — capturing `runtime.selected_a_clock_evidence_diagnostics.refusal` and per-cohort reducer-branch usage on a real `cohort(A=X)` fixture — would settle it.
+
+**If the hypothesis holds, atom 3 scope expands**:
+
+- Fix `n_by_anchor` derivation for identity carrier so it does not depend on candidate slice_family. Source `N_cohort` directly from `engine_cohort.a_pop` for identity-carrier (the X-cohort base mass is by definition the population at X — invariant 6, no carrier-chain discovery needed). `_root_window_carrier_n_by_anchor_day` remains correct for active `A != X` where the count must come from the A-rooted carrier candidate.
+- Add a pinning test that asserts the builder does NOT refuse for an end-to-end `cohort(A=X)` runtime — catching the AP59 silent rescue.
+- Tighten the existing end-to-end parity test to also assert reducer-driven row fields (`midpoint`, `fan_*`, `forecast_x`, `forecast_y`) are non-None, not just row-dict equality.
+- THEN delete reducer branch 3 and the rest of atom 3's deletion list.
+
+If the hypothesis is falsified, atom 3 reverts to deletion-only.
+
 **Scope**: retire `engine_cohorts.obs_x/obs_y` from the **v3 selected-Cohort chart/reducer path** by making the reducer's observed prefix an explicit `SelectedAClockEvidence`-derived input. Keep the broader `CohortEvidence.obs_x/obs_y` shape available for older non-v3 consumers until those consumers are migrated separately (notably the remaining `compute_forecast_trajectory` callers such as daily-conversions annotation and surprise-gauge-style legacy paths).
 
 **Goal**: zero parallel evidence surfaces inside v3. One selected evidence object supplies both:

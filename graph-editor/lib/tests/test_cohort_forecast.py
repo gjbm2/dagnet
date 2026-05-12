@@ -61,20 +61,23 @@ class TestForecastRate:
 class TestReadEdgeCohortParams:
     """Extract cohort-level Bayes params from graph edge dicts."""
 
-    def test_extracts_from_posterior(self):
+    def test_extracts_from_promoted_source(self):
         edge = {
             'p': {
                 'latency': {
-                    'posterior': {
-                        'path_mu_mean': 2.5,
-                        'path_sigma_mean': 0.5,
-                        'path_onset_delta_days': 3.0,
+                    'path_mu': 2.5,
+                    'path_sigma': 0.5,
+                    'path_onset_delta_days': 3.0,
+                },
+                'model_vars': [{
+                    'source': 'analytic',
+                    'probability': {
+                        'mean': 10.0 / 12.0, 'stdev': 0.05,
+                        'alpha': 10.0, 'beta': 2.0, 'n_effective': 12,
                     },
-                },
-                'posterior': {
-                    'cohort_alpha': 10.0,
-                    'cohort_beta': 2.0,
-                },
+                    'latency': {'mu': 2.5, 'sigma': 0.5,
+                                'onset_delta_days': 3.0},
+                }],
             },
         }
         params = read_edge_cohort_params(edge)
@@ -116,20 +119,6 @@ class TestReadEdgeCohortParams:
     def test_returns_none_without_probability(self):
         edge = {'p': {'latency': {'mu': 2.0, 'sigma': 0.5}}}
         assert read_edge_cohort_params(edge) is None
-
-    def test_prefers_cohort_posterior_over_window(self):
-        edge = {
-            'p': {
-                'latency': {'posterior': {'mu_mean': 2.0, 'sigma_mean': 0.5}},
-                'posterior': {
-                    'alpha': 5.0, 'beta': 5.0,           # window: 0.5
-                    'cohort_alpha': 8.0, 'cohort_beta': 2.0,  # cohort: 0.8
-                },
-            },
-        }
-        params = read_edge_cohort_params(edge)
-        assert params is not None
-        assert abs(params['p'] - 0.8) < 0.001
 
     def test_empty_edge(self):
         assert read_edge_cohort_params({}) is None

@@ -318,12 +318,35 @@ class TestPreparedInputs:
         assert kernel is not None
         assert kernel.span_p == pytest.approx(0.2, abs=0.02)
 
-    def test_runtime_preparation_selects_temporal_family_before_kernel(self):
+    def test_runtime_preparation_uses_window_rate_prior_under_factorised_composition(self):
+        """Under WP3 factorised composition every per-edge primitive
+        consumes the edge-local window rate prior, regardless of the
+        query's `temporal_mode`. The `cohort_*` mirrors on the source
+        ledger are reserved for the path-level primitive that WP8 will
+        introduce; they are not read by the factorised consumer (doc 60
+        decisions 4 & 7, doc 47, doc 66 §4).
+
+        `temporal_mode` is still load-bearing for `n_effective` and
+        latency selection in the resolver — this test pins only the
+        rate prior under the WP3 invariant.
+        """
         from runner.forecast_runtime import build_prepared_span_execution
 
         graph = _make_graph(['x', 'y'], [_make_edge('x', 'y', 0.4, 2.0, 0.6)])
-        graph['edges'][0]['p']['posterior']['cohort_alpha'] = 80.0
-        graph['edges'][0]['p']['posterior']['cohort_beta'] = 20.0
+        # Populate the cohort mirror on the source ledger so the assertion
+        # is "the engine ignored it", not "the engine had nothing to read".
+        graph['edges'][0]['p']['model_vars'] = [{
+            'source': 'analytic',
+            'latency': {'mu': 2.0, 'sigma': 0.6, 'onset_delta_days': 0.0},
+            'probability': {
+                'mean': 0.4, 'stdev': 0.05,
+                'alpha': 8.0, 'beta': 12.0,
+                'alpha_pred': 8.0, 'beta_pred': 12.0,
+                'cohort_alpha': 80.0, 'cohort_beta': 20.0,
+                'cohort_alpha_pred': 80.0, 'cohort_beta_pred': 20.0,
+                'n_effective': 20.0,
+            },
+        }]
 
         window_execution = build_prepared_span_execution(
             graph,
@@ -340,8 +363,10 @@ class TestPreparedInputs:
 
         assert window_execution is not None
         assert cohort_execution is not None
+        # Both modes resolve the edge rate from the window slice — the
+        # cohort mirror on the source ledger is not consulted.
         assert window_execution.edge_params[('x', 'y')][0] == pytest.approx(0.4)
-        assert cohort_execution.edge_params[('x', 'y')][0] == pytest.approx(0.8)
+        assert cohort_execution.edge_params[('x', 'y')][0] == pytest.approx(0.4)
 
 
 class TestPdfConsistency:

@@ -34,6 +34,7 @@ import {
 import { parseConstraints } from '../lib/queryDSL';
 import { applyPromotion, upsertModelVars } from './modelVarsResolution';
 import { sessionLogService } from './sessionLogService';
+import { applyPathIdentityFallback } from './pathIdentity';
 
 export type ParameterFileResolver = (paramId: string) => unknown | null | undefined;
 
@@ -381,6 +382,14 @@ export function contextGraphForEffectiveDsl(
     if (baseParamId) {
       const pf = resolveParameterFile(String(baseParamId));
       contextProbabilityBlock(edge.p, pf, effectiveDsl, asatDate, options, String(baseParamId));
+      // Identity fallback before promotion: if the topology guarantees
+      // path = edge, fill the bayesian entry's path_* from edge-level so
+      // promotion projects them onto the promoted surface. See
+      // pathIdentity.ts for the engine-side invariant this mirrors.
+      const bayesEntry = Array.isArray(edge?.p?.model_vars)
+        ? edge.p.model_vars.find((e: any) => e?.source === 'bayesian')
+        : undefined;
+      if (bayesEntry?.latency) applyPathIdentityFallback(bayesEntry.latency, graph, edge.id);
       if (edge.p) applyPromotion(edge.p, graphPref);
     }
 
@@ -390,6 +399,10 @@ export function contextGraphForEffectiveDsl(
       if (!condParamId) continue;
       const condPf = resolveParameterFile(String(condParamId));
       contextProbabilityBlock(cond.p, condPf, effectiveDsl, asatDate, options, String(condParamId));
+      const condBayesEntry = Array.isArray(cond?.p?.model_vars)
+        ? cond.p.model_vars.find((e: any) => e?.source === 'bayesian')
+        : undefined;
+      if (condBayesEntry?.latency) applyPathIdentityFallback(condBayesEntry.latency, graph, edge.id);
       if (cond.p) applyPromotion(cond.p, graphPref);
     }
   }

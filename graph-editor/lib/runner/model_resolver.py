@@ -410,77 +410,31 @@ def resolve_model_params(
             )
 
     # ── Probability ────────────────────────────────────────────────
-    # In cohort mode, prefer cohort_alpha/cohort_beta — these are the
-    # Posterior unification plan (29-Apr-26) §4 Step 7: read order is now
-    # `model_vars[promoted_source].probability` first, falling back to
-    # `posterior_block` only when the source ledger lookup fails. The
-    # source ledger is the source of truth post-unification; the live
-    # `p.posterior` is the promoted projection (single-writer:
-    # `applyPromotion`), so the two should always agree on freshly-
-    # promoted graphs. Reading the source first makes the resolver
-    # promotion-aware and matches the FE's `applyPromotion` semantics
-    # directly. The posterior fallback survives as a robustness measure
-    # for graphs that arrive un-promoted (older snapshots, share
-    # bundles, CLI graphs that bypass `applyPromotion`).
+    # Aggregate Beta prior from the promoted source's model_vars entry.
     #
-    # Both `bayesian` and `analytic` sources carry the Beta shape on
-    # `probability.{alpha, beta, alpha_pred, beta_pred, cohort_alpha,
-    # cohort_beta, cohort_alpha_pred, cohort_beta_pred, n_effective,
-    # cohort_n_effective, provenance, cohort_provenance}` per the §3.9
-    # mirror contract.
-    alpha = 0.0
-    beta = 0.0
-    p_mean = 0.0
-    analytic_provenance: Optional[str] = None
-
-    # ── Step 1: read from the promoted source's ledger entry ─────────
-    if promoted_source:
-        if temporal_mode == 'cohort':
-            ca = _src.get('prob_cohort_alpha')
-            cb = _src.get('prob_cohort_beta')
-            if (isinstance(ca, (int, float)) and isinstance(cb, (int, float))
-                    and float(ca) > 0 and float(cb) > 0):
-                alpha = float(ca)
-                beta = float(cb)
-                p_mean = alpha / (alpha + beta)
-                if promoted_source == 'analytic':
-                    analytic_provenance = (
-                        _src.get('prob_cohort_provenance')
-                        or 'analytic_cohort_baseline'
-                    )
-        if alpha <= 0 or beta <= 0:
-            wa = _src.get('prob_alpha')
-            wb = _src.get('prob_beta')
-            if (isinstance(wa, (int, float)) and isinstance(wb, (int, float))
-                    and float(wa) > 0 and float(wb) > 0):
-                alpha = float(wa)
-                beta = float(wb)
-                p_mean = alpha / (alpha + beta)
-                if promoted_source == 'analytic':
-                    analytic_provenance = (
-                        _src.get('prob_provenance')
-                        or 'analytic_window_baseline'
-                    )
-
-    # ── Step 2: fall back to posterior_block ─────────────────────────
-    # Robustness for un-promoted graphs (older snapshots, share bundles,
-    # CLI graphs that bypass applyPromotion). On a freshly-promoted graph
-    # the values agree with the source-ledger reads above.
-    if temporal_mode == 'cohort' and (alpha <= 0 or beta <= 0):
-        cohort_alpha = posterior_block.get('cohort_alpha', 0) or 0
-        cohort_beta = posterior_block.get('cohort_beta', 0) or 0
-        if cohort_alpha > 0 and cohort_beta > 0:
-            alpha = float(cohort_alpha)
-            beta = float(cohort_beta)
-            p_mean = alpha / (alpha + beta)
-
-    if alpha <= 0 or beta <= 0:
-        post_alpha = posterior_block.get('alpha', 0) or 0
-        post_beta = posterior_block.get('beta', 0) or 0
-        if post_alpha > 0 and post_beta > 0:
-            alpha = float(post_alpha)
-            beta = float(post_beta)
-            p_mean = alpha / (alpha + beta)
+    # WP3 factorised composition consumes the edge-local window-fit
+    # `(prob_alpha, prob_beta)`. The `prob_cohort_*` mirrors are reserved
+    # for the path-level primitive that WP8 will introduce — they are
+    # not commensurate with edge-wise factorised composition (doc 60
+    # decisions 4 & 7, doc 47, doc 66 §4). `temporal_mode` survives as
+    # a parameter because it is still load-bearing for `n_effective`
+    # selection and latency selection below; for the rate prior under
+    # WP3 it does not bind.
+    #
+    # FE topo materialisation runs on every fetch path
+    # (`feTopoMaterialisationService`), so `model_vars[analytic]` is
+    # always populated and `applyPromotion` always runs. No
+    # posterior-block fallback is wired here — un-promoted graphs
+    # cannot reach the engine in production; if `_src` is empty the
+    # resolved α/β are 0 and consumers render the midline without
+    # dispersion bands.
+    alpha = float(_src.get('prob_alpha') or 0.0)
+    beta = float(_src.get('prob_beta') or 0.0)
+    p_mean = alpha / (alpha + beta) if (alpha > 0 and beta > 0) else 0.0
+    analytic_provenance: Optional[str] = (
+        (_src.get('prob_provenance') or 'analytic_window_baseline')
+        if promoted_source == 'analytic' else None
+    )
 
     if p_mean == 0:
         # Doc 73b §3.9 mirror contract: the analytic source's
@@ -545,65 +499,18 @@ def resolve_model_params(
         if n_effective is not None:
             n_effective = float(n_effective)
 
-    # Predictive alpha/beta: prefer *_pred fields from the active source.
+    # Predictive Beta from the promoted source.
     #
-    # Bayesian source: doc 49 — `_pred` from MCMC posterior, kappa-inflated.
-    # Analytic source: doc 73b §3.9 deferral now closed by the Pearson
-    #   chi-squared overdispersion estimator emitted from FE topo. See
-    #   docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
-    # Falls back to epistemic when no predictive value is available
-    # (legacy fixtures, or sources still operating under the prior deferral).
-    # Read order (Forensic audit 30-Apr-26 R2):
-    #   1. model_vars[promoted_source].probability.{alpha_pred, beta_pred,
-    #      cohort_alpha_pred, cohort_beta_pred} — for both bayesian and
-    #      analytic. Both source families carry the predictive Beta on
-    #      `model_vars[*].probability` per the §3.9 mirror contract
-    #      (bayesian via bayesPatchService:362-376, analytic via
-    #      buildAnalyticProbabilityBlock when stdev_pred is supplied).
-    #
-    #      Previous code (a) read posterior_block first — inconsistent with
-    #      the latency / n_effective branches above, both already model_vars-
-    #      first post the 30-Apr-26 unification — and (b) only consulted the
-    #      source ledger for `promoted_source == 'analytic'`, so bayesian
-    #      predictive Beta on `model_vars[bayesian]` was never consulted.
-    #      This block aligns the predictive read with the rest of the
-    #      resolver.
-    #
-    #   2. posterior_block fallback — robustness for un-promoted graphs
-    #      (older snapshots, share bundles, CLI graphs that bypass
-    #      applyPromotion). On a freshly-promoted graph the values agree
-    #      with the source-ledger reads above.
-    alpha_pred = alpha
-    beta_pred = beta
-    # Step 1: source ledger for the promoted source (bayesian OR analytic).
-    if promoted_source:
-        if temporal_mode == 'cohort':
-            _ca_p = _src.get('prob_cohort_alpha_pred')
-            _cb_p = _src.get('prob_cohort_beta_pred')
-            if (isinstance(_ca_p, (int, float)) and isinstance(_cb_p, (int, float))
-                    and float(_ca_p) > 0 and float(_cb_p) > 0):
-                alpha_pred = float(_ca_p)
-                beta_pred = float(_cb_p)
-        if alpha_pred == alpha and beta_pred == beta:
-            _wa_p = _src.get('prob_alpha_pred')
-            _wb_p = _src.get('prob_beta_pred')
-            if (isinstance(_wa_p, (int, float)) and isinstance(_wb_p, (int, float))
-                    and float(_wa_p) > 0 and float(_wb_p) > 0):
-                alpha_pred = float(_wa_p)
-                beta_pred = float(_wb_p)
-    # Step 2: posterior_block fallback (un-promoted graphs).
-    if temporal_mode == 'cohort' and alpha_pred == alpha and beta_pred == beta:
-        _cp_a = posterior_block.get('cohort_alpha_pred', 0) or 0
-        _cp_b = posterior_block.get('cohort_beta_pred', 0) or 0
-        if _cp_a > 0 and _cp_b > 0:
-            alpha_pred = float(_cp_a)
-            beta_pred = float(_cp_b)
-    if alpha_pred == alpha and beta_pred == beta:
-        _wp_a = posterior_block.get('alpha_pred', 0) or 0
-        _wp_b = posterior_block.get('beta_pred', 0) or 0
-        if _wp_a > 0 and _wp_b > 0:
-            alpha_pred = float(_wp_a)
-            beta_pred = float(_wp_b)
+    # WP3 factorised composition consumes the edge-local predictive pair
+    # `(prob_alpha_pred, prob_beta_pred)`; the `prob_cohort_*_pred`
+    # mirrors are reserved for the path-level primitive (WP8). Both
+    # source families populate the predictive pair on the promoted
+    # entry — bayesian via κ-inflation in `bayesPatchService.applyPatch`,
+    # analytic via Pearson χ² in `buildAnalyticProbabilityBlock`.
+    # Absence at this point is a build-side defect to be fixed upstream;
+    # the engine does not coerce predictive to epistemic.
+    alpha_pred = float(_src.get('prob_alpha_pred') or 0.0)
+    beta_pred = float(_src.get('prob_beta_pred') or 0.0)
 
     # p_sd from alpha/beta or from model_vars
     p_sd = 0.0

@@ -7,6 +7,7 @@ import { merge3Way, mergeJson3Way } from './mergeService';
 import { sessionLogService } from './sessionLogService';
 import { operationRegistryService } from './operationRegistryService';
 import { normaliseSliceShape } from './posteriorSliceResolution';
+import { applyPathIdentityFallback } from './pathIdentity';
 
 /**
  * Parse YAML leniently — tolerates duplicate map keys.
@@ -316,6 +317,11 @@ function _migrateBayesianPosteriorToSourceLedgerInPlace(data: any, filePath: str
         if (oldLatPost.path_onset_sd != null) lat.path_onset_sd = oldLatPost.path_onset_sd;
       }
       bayesEntry.latency = lat;
+      // Identity fallback: legacy graphs without path_* on the bayesian
+      // posterior get path_* = edge_* when the topology guarantees it
+      // (see pathIdentity.ts). Keeps the on-load migration aligned with
+      // the fresh-fit and DSL re-projection writers.
+      applyPathIdentityFallback(bayesEntry.latency, data, edge.id);
     }
 
     // fit_diagnostics — the bayesian-only metadata that previously

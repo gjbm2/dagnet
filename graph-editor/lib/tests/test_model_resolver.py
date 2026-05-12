@@ -406,11 +406,15 @@ class TestResolverNonBayes:
             'p': {
                 'forecast': {'mean': 0.4},
                 'latency': {'mu': 3.0, 'sigma': 0.6},
-                'posterior': {'alpha': 12, 'beta': 18},
                 'model_vars': [{
                     'source': 'analytic',
                     'latency': {'mu': 3.0, 'sigma': 0.6, 'onset_delta_days': 0.0},
-                    'probability': {'mean': 0.4, 'stdev': 0.05},
+                    'probability': {
+                        'mean': 0.4, 'stdev': 0.05,
+                        'alpha': 12, 'beta': 18,
+                        'alpha_pred': 12, 'beta_pred': 18,
+                        'n_effective': 30,
+                    },
                 }],
             }
         }
@@ -423,13 +427,20 @@ class TestResolverNonBayes:
         # Dispersions: analytic entry has none → zero SDs
         assert result.edge_latency.mu_sd == 0.0
         assert result.edge_latency.sigma_sd == 0.0
-        # Probability from posterior alpha/beta
+        # Probability from the promoted source's ledger entry.
         assert result.alpha == 12
         assert result.beta == 18
         assert abs(result.p_mean - 12 / 30) < 1e-6
 
     def test_analytic_only_cohort_mode(self):
-        """Cohort mode with analytic-only: path latency from flat fields."""
+        """Cohort mode with analytic-only: path latency from flat fields.
+
+        Per WP3 factorised composition, the rate prior is always the
+        edge-local window-fit `(prob_alpha, prob_beta)` regardless of
+        `temporal_mode`; the `prob_cohort_*` mirrors are reserved for
+        the path-level primitive that WP8 will introduce. `temporal_mode`
+        still binds for path latency and `n_effective` selection below.
+        """
         from runner.model_resolver import resolve_model_params
 
         edge = {
@@ -440,66 +451,33 @@ class TestResolverNonBayes:
                     'path_mu': 3.2, 'path_sigma': 0.7,
                     'path_onset_delta_days': 1.0,
                 },
-                'posterior': {
-                    'alpha': 10, 'beta': 20,
-                    'cohort_alpha': 8, 'cohort_beta': 25,
-                },
                 'model_vars': [{
                     'source': 'analytic',
                     'latency': {'mu': 2.5, 'sigma': 0.5},
-                    'probability': {'mean': 0.3},
+                    'probability': {
+                        'mean': 0.3, 'stdev': 0.05,
+                        'alpha': 10, 'beta': 20,
+                        'alpha_pred': 10, 'beta_pred': 20,
+                        # cohort_* mirrors present but no longer consulted
+                        'cohort_alpha': 8, 'cohort_beta': 25,
+                        'cohort_alpha_pred': 8, 'cohort_beta_pred': 25,
+                        'n_effective': 30,
+                    },
                 }],
             }
         }
         result = resolve_model_params(edge, scope='path', temporal_mode='cohort')
         assert result is not None
         assert result.source == 'analytic'
-        # Path latency from flat fields
+        # Path latency from flat fields.
         assert result.path_latency is not None
         assert abs(result.path_latency.mu - 3.2) < 1e-6
         assert abs(result.path_latency.sigma - 0.7) < 1e-6
         assert result.latency is result.path_latency
-        # Cohort mode uses cohort-mode posterior (cohort_alpha/cohort_beta):
-        # same edge rate (y/x), but estimated from anchor-anchored
-        # evidence with path latency. "path" in the name refers to the
-        # latency model used during fitting, not a compound path product.
-        assert abs(result.alpha - 8) < 1e-6
-        assert abs(result.beta - 25) < 1e-6
-
-    def test_no_model_vars_flat_fields_only(self):
-        """Edge with no model_vars at all — resolver falls back to flat
-        latency and posterior fields. This is the pre-Bayes edge shape.
-        """
-        from runner.model_resolver import resolve_model_params
-
-        edge = {
-            'p': {
-                'forecast': {'mean': 0.35},
-                'latency': {
-                    'mu': 2.8, 'sigma': 0.55, 'onset_delta_days': 0.5,
-                    'promoted_t95': 14.0,
-                    'promoted_mu_sd': 0.15, 'promoted_sigma_sd': 0.08,
-                },
-                'posterior': {'alpha': 15, 'beta': 28},
-                # No model_vars key at all
-            }
-        }
-        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
-        assert result is not None
-        assert result.source == '', 'No source when no model_vars'
-        # Latency from flat fields
-        assert abs(result.edge_latency.mu - 2.8) < 1e-6
-        assert abs(result.edge_latency.sigma - 0.55) < 1e-6
-        assert result.edge_latency.sigma > 0, 'sigma > 0 for engine'
-        assert abs(result.edge_latency.onset_delta_days - 0.5) < 1e-6
-        assert abs(result.edge_latency.t95 - 14.0) < 1e-6
-        # Dispersions from promoted_ fields
-        assert abs(result.edge_latency.mu_sd - 0.15) < 1e-6
-        assert abs(result.edge_latency.sigma_sd - 0.08) < 1e-6
-        # Probability from posterior
-        assert result.alpha == 15
-        assert result.beta == 28
-        assert abs(result.p_mean - 15 / 43) < 1e-6
+        # Rate prior is always the edge-local window-fit under WP3
+        # factorised composition; the cohort mirror is ignored.
+        assert abs(result.alpha - 10) < 1e-6
+        assert abs(result.beta - 20) < 1e-6
 
     def test_no_model_vars_posterior_latency(self):
         """Edge with lat_posterior fields (fitted by topo pass) but no
@@ -1037,6 +1015,9 @@ class TestBayesVarsSidecarSourceMass:
                         'probability': {
                             'alpha': window_slice['alpha'],
                             'beta': window_slice['beta'],
+                            'alpha_pred': window_slice['alpha_pred'],
+                            'beta_pred': window_slice['beta_pred'],
+                            'n_effective': window_slice['n_effective'],
                             'mean': window_slice['alpha'] / (window_slice['alpha'] + window_slice['beta']),
                         },
                         'latency': {

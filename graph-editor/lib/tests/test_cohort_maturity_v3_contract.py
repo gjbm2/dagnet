@@ -90,7 +90,6 @@ def _build_single_edge_graph(
                     'onset_sd': onset_sd,
                     'onset_mu_corr': onset_mu_corr,
                 },
-                'posterior': {'alpha': alpha, 'beta': beta},
                 'model_vars': [{
                     'source': 'analytic',
                     'latency': {
@@ -99,7 +98,12 @@ def _build_single_edge_graph(
                         'mu_sd': mu_sd, 'sigma_sd': sigma_sd,
                         'onset_sd': onset_sd,
                     },
-                    'probability': {'mean': p_mean},
+                    'probability': {
+                        'mean': p_mean, 'stdev': p_sd,
+                        'alpha': alpha, 'beta': beta,
+                        'alpha_pred': alpha, 'beta_pred': beta,
+                        'n_effective': alpha + beta,
+                    },
                 }],
             },
         }],
@@ -147,12 +151,6 @@ def _build_two_edge_latency_graph(
                         'onset_sd': 0.40,
                         'onset_mu_corr': -0.40,
                     },
-                    'posterior': {
-                        'alpha': upstream_alpha,
-                        'beta': upstream_beta,
-                        'cohort_alpha': upstream_alpha,
-                        'cohort_beta': upstream_beta,
-                    },
                     'model_vars': [{
                         'source': 'analytic',
                         'latency': {
@@ -163,7 +161,12 @@ def _build_two_edge_latency_graph(
                             'sigma_sd': 0.04,
                             'onset_sd': 0.40,
                         },
-                        'probability': {'mean': upstream_p},
+                        'probability': {
+                            'mean': upstream_p, 'stdev': 0.05,
+                            'alpha': upstream_alpha, 'beta': upstream_beta,
+                            'alpha_pred': upstream_alpha, 'beta_pred': upstream_beta,
+                            'n_effective': upstream_alpha + upstream_beta,
+                        },
                     }],
                 },
             },
@@ -186,12 +189,6 @@ def _build_two_edge_latency_graph(
                         'onset_sd': 0.40,
                         'onset_mu_corr': -0.40,
                     },
-                    'posterior': {
-                        'alpha': target_alpha,
-                        'beta': target_beta,
-                        'cohort_alpha': target_alpha,
-                        'cohort_beta': target_beta,
-                    },
                     'model_vars': [{
                         'source': 'analytic',
                         'latency': {
@@ -202,7 +199,12 @@ def _build_two_edge_latency_graph(
                             'sigma_sd': 0.04,
                             'onset_sd': 0.40,
                         },
-                        'probability': {'mean': target_p},
+                        'probability': {
+                            'mean': target_p, 'stdev': 0.05,
+                            'alpha': target_alpha, 'beta': target_beta,
+                            'alpha_pred': target_alpha, 'beta_pred': target_beta,
+                            'n_effective': target_alpha + target_beta,
+                        },
                     }],
                 },
             },
