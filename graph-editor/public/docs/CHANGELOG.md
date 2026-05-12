@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.1b
+**Released:** 12-May-26
+
+Further minor CF fixes
+
+---
+
 ## Version 2.1.0b
 **Released:** 12-May-26
 
