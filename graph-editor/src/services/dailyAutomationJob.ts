@@ -541,7 +541,7 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
     sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_PRE_PULL', 'Pulling latest from Git (remote wins)');
 
     try {
-      const prePullResult = await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal);
+      const prePullResult = await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal, { overwriteGraphs: true });
       if ((prePullResult.conflictsResolved ?? 0) > 0) {
         sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_PRE_PULL_CONFLICTS',
           `Pre-pull resolved ${prePullResult.conflictsResolved} conflict(s) by accepting remote`);
