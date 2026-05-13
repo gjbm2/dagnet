@@ -303,16 +303,24 @@ export function projectLatencyPosterior(
   const windowSlice = rawWindow ? (normaliseSliceShape(rawWindow) as SlicePosteriorEntry) : undefined;
   const cohortSlice = rawCohort ? (normaliseSliceShape(rawCohort) as SlicePosteriorEntry) : undefined;
 
-  // Edge-level latency from window() slice
+  // Edge-level latency from window() slice. The model output must include
+  // μ, σ, and onset for the lognormal latency surface to be meaningful.
+  // No fallback to 0; absence means the model has not produced a usable
+  // latency posterior and downstream consumers should surface that.
   const edgeSlice = windowSlice;
-  if (!edgeSlice?.mu_mean) return undefined;
+  if (!edgeSlice
+      || edgeSlice.mu_mean == null
+      || edgeSlice.sigma_mean == null
+      || edgeSlice.onset_mean == null) {
+    return undefined;
+  }
 
   const activeMode = detectTemporalMode(effectiveDsl);
   const activeSlice = activeMode === 'cohort' ? (cohortSlice ?? edgeSlice) : edgeSlice;
 
   return {
     distribution: 'lognormal',
-    onset_delta_days: edgeSlice.onset_mean ?? 0,
+    onset_delta_days: edgeSlice.onset_mean,
     mu_mean: edgeSlice.mu_mean,
     mu_sd: edgeSlice.mu_sd,                   // epistemic (doc 61)
     ...(edgeSlice.mu_sd_pred != null ? { mu_sd_pred: edgeSlice.mu_sd_pred } : {}),

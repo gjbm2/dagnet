@@ -263,34 +263,43 @@ function BayesianFooter({ entry, theme, onResetPriors, onDeleteHistory }: {
 // ── Spark chart adapter — maps ModelVarsEntry to ModelRateChart props ──
 //
 // All values come from entry.{probability, latency}. No external props.
-// The chart's x-axis horizon is taken from entry.latency.{t95, path_t95},
-// not from any promoted/edge.p.* surface. Bands are derived from the
-// entry's own epistemic dispersions.
+// Path-curve probability is the cohort Beta moment (cohort_alpha/cohort_beta).
+// No fallback from window mean — window probability and path probability are
+// different model variables.
 
 function ModelRateChartFromEntry({ entry }: { entry: ModelVarsEntry }) {
   const lat = entry.latency;
-  if (!lat || lat.mu == null || lat.sigma == null) return null;
+  if (!lat) return null;
 
-  const probStdev = entry.probability.stdev;
+  const prob = entry.probability;
+  const probStdev = prob.stdev;
   const hasProbStdev = typeof probStdev === 'number' && probStdev > 0;
+
+  const cohortA = prob.cohort_alpha;
+  const cohortB = prob.cohort_beta;
+  const hasCohortBeta = cohortA != null && cohortB != null && cohortA > 0 && cohortB > 0;
+  const cohortMean = hasCohortBeta ? cohortA! / (cohortA! + cohortB!) : null;
+  const cohortSd = hasCohortBeta
+    ? Math.sqrt((cohortA! * cohortB!) / ((cohortA! + cohortB!) ** 2 * (cohortA! + cohortB! + 1)))
+    : null;
 
   return (
     <ModelRateChart
-      edgeP={entry.probability.mean}
-      edgeMu={lat.mu}
-      edgeSigma={lat.sigma}
-      edgeOnset={lat.onset_delta_days ?? 0}
+      edgeP={prob.mean}
+      edgeMu={lat.mu ?? null}
+      edgeSigma={lat.sigma ?? null}
+      edgeOnset={lat.onset_delta_days ?? null}
       edgePSd={hasProbStdev ? probStdev : null}
       edgeMuSd={lat.mu_sd ?? null}
       edgeSigmaSd={lat.sigma_sd ?? null}
       edgeOnsetSd={lat.onset_sd ?? null}
       edgeOnsetMuCorr={lat.onset_mu_corr ?? null}
-      edgeT95={lat.t95}
-      pathP={lat.path_mu != null ? entry.probability.mean : null}
+      edgeT95={lat.t95 ?? null}
+      pathP={cohortMean}
       pathMu={lat.path_mu ?? null}
       pathSigma={lat.path_sigma ?? null}
       pathOnset={lat.path_onset_delta_days ?? null}
-      pathPSd={lat.path_mu != null && hasProbStdev ? probStdev : null}
+      pathPSd={cohortSd}
       pathMuSd={lat.path_mu_sd ?? null}
       pathSigmaSd={lat.path_sigma_sd ?? null}
       pathOnsetSd={lat.path_onset_sd ?? null}

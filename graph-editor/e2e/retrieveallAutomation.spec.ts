@@ -23,6 +23,16 @@ const SEEDED_SHA = 'abc123deadbeef';
 // Track which graph names are seeded so the GitHub tree stub can include them.
 let seededGraphNames: string[] = [];
 
+// Track seeded graphs keyed by blob SHA so the /git/blobs/:sha stub can
+// rehydrate them. `?retrieveall` now hard-deletes every graph IDB record
+// before pulling (see repositoryOperationsService.pullLatestRemoteWins),
+// so the blob fetch is the only path that can write the graph back to IDB.
+let seededGraphsBySha: Record<string, { name: string; dailyFetch: boolean }> = {};
+
+function graphBlobSha(name: string): string {
+  return `blob-${name}`;
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -81,13 +91,14 @@ async function installStubs(page: any) {
     // GET /repos/:owner/:repo/git/trees/:sha — return tree with seeded graph files.
     // The pull compares remote tree vs local SHAs. If a file is missing from the
     // tree, the pull treats it as "deleted remotely" and removes it from IDB.
-    // So we MUST include our seeded graphs here.
+    // Each graph gets a distinct blob SHA so the blob stub below can return
+    // graph-specific content (e.g. the right `dailyFetch` flag per graph).
     if (url.includes('/git/trees/')) {
       const treeEntries = seededGraphNames.map(name => ({
         path: `graphs/${name}.json`,
         mode: '100644',
         type: 'blob',
-        sha: SEEDED_SHA, // Same SHA as local → no fetch needed
+        sha: graphBlobSha(name),
         size: 100,
       }));
       return route.fulfill({
@@ -95,6 +106,30 @@ async function installStubs(page: any) {
         contentType: 'application/json',
         body: JSON.stringify({ sha: SEEDED_SHA, tree: treeEntries, truncated: false }),
       });
+    }
+
+    // GET /repos/:owner/:repo/git/blobs/:sha — return base64-encoded graph payload.
+    // ?retrieveall hard-deletes every graph IDB record before pulling, so the
+    // blob fetch is the only source the pull has to rehydrate graphs.
+    if (url.includes('/git/blobs/')) {
+      const sha = url.split('/git/blobs/')[1].split(/[?#]/)[0];
+      const meta = seededGraphsBySha[sha];
+      if (meta) {
+        const data = {
+          nodes: [{ id: 'start', type: 'start', position: { x: 0, y: 0 }, data: {} }],
+          edges: [],
+          policies: { startNodeId: 'start' },
+          metadata: { created: '1-Jan-25', modified: '1-Jan-25' },
+          dailyFetch: meta.dailyFetch,
+        };
+        const json = JSON.stringify(data);
+        const base64 = Buffer.from(json, 'utf-8').toString('base64');
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ sha, content: base64, encoding: 'base64', size: json.length }),
+        });
+      }
     }
 
     // GET /repos/:owner/:repo/git/commits/:sha — single commit (used by getRepositoryTree).
@@ -141,7 +176,19 @@ async function seedAllState(page: any, graphs: Array<{ name: string; dailyFetch?
   // Track for GitHub tree stub.
   seededGraphNames = graphs.map(g => g.name);
 
-  await page.evaluate(async ({ repo, branch, sha, graphs }: any) => {
+  // Track for the blob stub. Each graph needs a unique SHA so the blob fetch
+  // can return graph-specific content after the ?retrieveall hard-reset.
+  seededGraphsBySha = {};
+  for (const g of graphs) {
+    seededGraphsBySha[graphBlobSha(g.name)] = { name: g.name, dailyFetch: g.dailyFetch ?? false };
+  }
+
+  const blobShaByName: Record<string, string> = {};
+  for (const g of graphs) {
+    blobShaByName[g.name] = graphBlobSha(g.name);
+  }
+
+  await page.evaluate(async ({ repo, branch, sha, graphs, blobShaByName }: any) => {
     const w = window as any;
     const db = w.db;
     if (!db) throw new Error('window.db missing');
@@ -188,6 +235,11 @@ async function seedAllState(page: any, graphs: Array<{ name: string; dailyFetch?
         dailyFetch: g.dailyFetch ?? false,
       };
 
+      // Seed with the same blob SHA the tree stub will advertise. The
+      // ?retrieveall hard-reset deletes these records before the pull anyway,
+      // but using the matching SHA keeps the seed coherent for other paths
+      // that might compare against it.
+      const blobSha = blobShaByName[g.name];
       for (const fId of [`graph-${g.name}`, `${repo}-${branch}-graph-${g.name}`]) {
         await db.files.put({
           fileId: fId,
@@ -196,7 +248,7 @@ async function seedAllState(page: any, graphs: Array<{ name: string; dailyFetch?
           data: graphData,
           originalData: graphData,
           isDirty: false,
-          sha: sha, // Must match the tree stub SHA so pull sees "no change"
+          sha: blobSha,
           source: { repository: repo, branch, path: `graphs/${g.name}.json` },
           lastModified: Date.now(),
           lastSynced: Date.now(),
@@ -229,7 +281,7 @@ async function seedAllState(page: any, graphs: Array<{ name: string; dailyFetch?
       },
       updatedAt: Date.now(),
     });
-  }, { repo: REPO, branch: BRANCH, sha: SEEDED_SHA, graphs });
+  }, { repo: REPO, branch: BRANCH, sha: SEEDED_SHA, graphs, blobShaByName });
 }
 
 async function waitForDb(page: any) {

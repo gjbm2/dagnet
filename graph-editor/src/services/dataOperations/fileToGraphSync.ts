@@ -2061,7 +2061,8 @@ export async function getParameterFromFile(options: {
         }
 
         upsertModelVars(nextGraph.edges[edgeIndex].p, analyticEntry);
-        applyPromotion(nextGraph.edges[edgeIndex].p, nextGraph.model_source_preference);
+        // applyPromotion is consolidated below after the bayes projection
+        // step so the single promotion sees the full union of model_vars.
       } else if (analyticLatencyFromFile && nextGraph.edges[edgeIndex].p) {
         // Latency-only update — mutate the existing analytic entry's
         // `latency` in place without touching probability. If no
@@ -2090,19 +2091,62 @@ export async function getParameterFromFile(options: {
         if (idx >= 0) {
           p.model_vars[idx] = { ...p.model_vars[idx], latency: mergedLatency };
           // Posterior unification plan §4 Step 0: any model_vars mutation
-          // must end with promotion so promoted scalars (and post-Step-2
-          // p.posterior / p.latency.posterior) reflect the new state. The
-          // probability-and-latency branch above already promotes; this
-          // latency-only branch was an asymmetry that left p.forecast.*
-          // and the promoted_* latency scalars stale on a parameter-file
-          // edit affecting only dispersion fields.
-          applyPromotion(p, nextGraph.model_source_preference);
+          // must end with promotion. Consolidated into the single
+          // applyPromotion below (after the bayes projection step).
         }
         // Note: when no analytic entry exists yet, we deliberately do
         // NOT create one from latency alone — without a probability
         // the entry would be promoted as the analytic source with
         // mean=undefined, breaking p.forecast.mean. Wait for the
         // first fresh fetch to seed the entry.
+      }
+
+      // ─── MODEL_VARS — bayesian source ledger entry ─────────────────────
+      // Single file→graph writer of `model_vars[bayesian]`. Reads
+      // `parameter.posterior.slices` and projects the slice matching the
+      // active DSL (`targetSlice`) onto the edge's `p.model_vars` array.
+      // Mirrors the analytic build above so every fetch produces a
+      // consistent projection of file-mastered state.
+      //
+      // Idempotent: when the parameter file has no `posterior` block, or
+      // when no slice matches the DSL, `contextProbabilityBlock` drops the
+      // bayesian entry — same behaviour as a missing analytic source.
+      // Replaces the previous bespoke trigger in `useDSLReaggregation`
+      // (LIVE-EDGE CONTEXTING effect) and the `dagnet:bayesPosteriorsUpdated`
+      // event listener: both were workarounds for this step being absent
+      // from the established file→graph pathway.
+      if (nextGraph.edges[edgeIndex]?.p && paramId) {
+        const paramFileForBayes = fileRegistry.getFile(`parameter-${paramId}`)?.data;
+        if (paramFileForBayes) {
+          const { contextProbabilityBlock } = await import('../posteriorSliceContexting');
+          // Re-parse asat from targetSlice — the earlier asat-reconstruction
+          // block scopes its own `parsed` locally and we want the bayes
+          // projection to run regardless of which evidence branch fired.
+          let bayesAsatDate: string | null = null;
+          if (targetSlice) {
+            const parsedForBayes = parseConstraints(targetSlice);
+            if (parsedForBayes.asat) {
+              bayesAsatDate = resolveRelativeDate(parsedForBayes.asat);
+            }
+          }
+          contextProbabilityBlock(
+            nextGraph.edges[edgeIndex].p,
+            paramFileForBayes,
+            targetSlice || '',
+            bayesAsatDate,
+            { engorgeFitHistory: false },
+            paramId,
+          );
+        }
+      }
+
+      // ─── Unified promotion ─────────────────────────────────────────────
+      // Single applyPromotion after both analytic and bayes model_vars
+      // updates so promoted scalars (p.forecast, p.posterior,
+      // p.latency.posterior) reflect the full union of sources.
+      if (nextGraph.edges[edgeIndex]?.p) {
+        const { applyPromotion } = await import('../modelVarsResolution');
+        applyPromotion(nextGraph.edges[edgeIndex].p, nextGraph.model_source_preference);
       }
 
       console.log('[DataOperationsService] AFTER applyChanges:', {

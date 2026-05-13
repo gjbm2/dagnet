@@ -253,6 +253,76 @@ describe('contextGraphForEffectiveDsl — in-schema contexting', () => {
     );
     expect(graph.edges[0].p._posteriorSlices).toBeUndefined();
   });
+
+  it('strict no-fallback: context-bearing DSL with no matching slice drops bayesian', () => {
+    // Per posteriorSliceResolution.ts:158-188, when the DSL specifies a
+    // context dimension (`context(channel:google)`) but the file's posterior
+    // only has bare-aggregate slices (`window()` / `cohort()`), the resolver
+    // returns undefined — it does NOT silently fall back to the aggregate.
+    // The marginal aggregate is a different population from the asked-for
+    // conditional, and substituting it would present the wrong posterior
+    // as authoritative.
+    //
+    // This is the canonical "bayes disappears on a context-bearing scenario"
+    // path. Coverage of it pins that the strict semantics survive future
+    // refactors. The bare aggregate is present in the file — the test fails
+    // if a future change reintroduces cross-context fallback.
+    const graph = makeGraphWithEdge('p-1');
+    // Seed an existing bayesian projection on the edge so we can assert it
+    // gets actively cleared, not just absent.
+    graph.edges[0].p.posterior = { distribution: 'beta', alpha: 7, beta: 13 } as any;
+    graph.edges[0].p.model_vars = [
+      {
+        source: 'bayesian',
+        source_at: '1-Mar-26',
+        probability: { alpha: 7, beta: 13 },
+        quality: { gate_passed: true, rhat: 1.001, ess: 1000, divergences: 0 },
+        fit_diagnostics: { probability: { fitted_at: '1-Mar-26' } },
+      },
+    ];
+
+    contextGraphForEffectiveDsl(
+      graph,
+      resolverFor('p-1', { posterior: makePosterior() }), // file has only window() + cohort() aggregates
+      'context(channel:google).window()',
+    );
+
+    expect(graph.edges[0].p.posterior).toBeUndefined();
+    const bayes = graph.edges[0].p.model_vars?.find((mv: any) => mv?.source === 'bayesian');
+    expect(bayes).toBeUndefined();
+  });
+
+  it('strict no-fallback preserves a non-bayesian source-ledger entry on drop', () => {
+    // Companion to the above: dropping bayesian must NOT cascade to other
+    // source-ledger entries. Only `model_vars[bayesian]` is removed; the
+    // analytic entry, if present, survives intact.
+    const graph = makeGraphWithEdge('p-1');
+    graph.edges[0].p.model_vars = [
+      {
+        source: 'analytic',
+        source_at: '1-Feb-26',
+        probability: { mean: 0.42, stdev: 0.05 },
+        quality: { gate_passed: true },
+      },
+      {
+        source: 'bayesian',
+        source_at: '1-Mar-26',
+        probability: { alpha: 7, beta: 13 },
+        quality: { gate_passed: true, rhat: 1.001, ess: 1000, divergences: 0 },
+        fit_diagnostics: { probability: { fitted_at: '1-Mar-26' } },
+      },
+    ];
+
+    contextGraphForEffectiveDsl(
+      graph,
+      resolverFor('p-1', { posterior: makePosterior() }),
+      'context(channel:google).window()',
+    );
+
+    const sources = (graph.edges[0].p.model_vars ?? []).map((mv: any) => mv?.source);
+    expect(sources).toContain('analytic');
+    expect(sources).not.toContain('bayesian');
+  });
 });
 
 describe('contextLiveGraphForCurrentDsl — convenience wrapper', () => {

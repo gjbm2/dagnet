@@ -27,10 +27,65 @@ import {
 } from '../services/fetchDataService';
 import { operationRegistryService } from '../services/operationRegistryService';
 import { useFetchData } from './useFetchData';
-import { contextLiveGraphForCurrentDsl } from '../services/posteriorSliceContexting';
 import { fileRegistry } from '../contexts/TabContext';
 import type { Graph } from '../types';
 import toast from 'react-hot-toast';
+
+/**
+ * Drift detection: returns descriptors for any edge whose
+ * `model_vars[bayesian].fit_diagnostics.probability` lags the parameter
+ * file's `posterior.{fitted_at, fingerprint}`. Drift signals (any one is
+ * sufficient):
+ *   • file has a fit but the edge has no bayesian source ledger entry
+ *   • file's fitted_at is newer than the edge's
+ *   • fingerprints differ
+ *
+ * `resolveParameterFile` returns the parameter file's `data` for a given
+ * paramId, or undefined/null when the file is not registered. Parameterised
+ * (rather than calling `fileRegistry` directly) so the function is testable
+ * as a pure unit.
+ *
+ * When `filterParamId` is given, only edges referencing that paramId are
+ * inspected (used by the post-write subscription path so a single file
+ * change doesn't trigger a graph-wide re-fetch).
+ *
+ * Returns descriptors only; the caller builds FetchItems via
+ * createFetchItem(type, objectId, targetId, { paramSlot }).
+ */
+export function collectDriftedBayesEdges(
+  graph: Graph | null,
+  resolveParameterFile: (paramId: string) => any,
+  filterParamId?: string,
+): Array<{ paramId: string; edgeId: string }> {
+  if (!graph?.edges) return [];
+  const out: Array<{ paramId: string; edgeId: string }> = [];
+  for (const edge of graph.edges as any[]) {
+    const paramId: string | undefined = edge?.p?.id;
+    if (!paramId) continue;
+    if (filterParamId && paramId !== filterParamId) continue;
+
+    const file = resolveParameterFile(paramId);
+    const fileFitted: string | undefined = file?.posterior?.fitted_at;
+    if (!fileFitted) continue; // file has no bayes — nothing to drift against
+
+    const edgeBayes = Array.isArray(edge?.p?.model_vars)
+      ? edge.p.model_vars.find((mv: any) => mv?.source === 'bayesian')
+      : undefined;
+    const edgeFitted: string | undefined = edgeBayes?.fit_diagnostics?.probability?.fitted_at;
+    const edgeFingerprint: string | undefined = edgeBayes?.fit_diagnostics?.probability?.fingerprint;
+    const fileFingerprint: string | undefined = file?.posterior?.fingerprint;
+
+    const drifted =
+      !edgeFitted
+      || edgeFitted < fileFitted
+      || (fileFingerprint != null && edgeFingerprint !== fileFingerprint);
+
+    if (drifted) {
+      out.push({ paramId, edgeId: edge.uuid || edge.id });
+    }
+  }
+  return out;
+}
 
 export type { PlannerResult };
 
@@ -67,7 +122,6 @@ export function useDSLReaggregation({
   const lastAnalysedDSLRef = useRef<string | null>(null);
   const lastAutoAggregatedDSLRef = useRef<string | null>(null);
   const lastAggregatedDSLRef = useRef<string | null>(null);
-  const lastContextedDSLRef = useRef<string | null>(null);
   const isAggregatingRef = useRef(false);
   const isInitialMountRef = useRef(true);
   const graphRef = useRef(graph);
@@ -88,80 +142,14 @@ export function useDSLReaggregation({
     currentDSL: () => graphStoreApi.getState().currentDSL || '',
   });
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // LIVE-EDGE CONTEXTING — refresh `p.posterior.*` and `p.latency.posterior.*`
-  // (and the conditional_p mirrors) on `currentDSL` change.
-  //
-  // Doc 73b §3.2a / Stage 4(e). After Stage 4(b) removes the persistent
-  // `_posteriorSlices` stash, the live edge no longer carries the
-  // multi-context slice library — so on every `currentDSL` change the
-  // matching slice must be re-projected from the parameter file. Without
-  // this step, canvas displays that read the promoted/projected posterior
-  // (the `'f'` mode chart, ModelRateChart, edge labels) would silently
-  // stale on DSL change once Stage 4(c) removes CF's compensating
-  // `forecast.mean = p_mean` write.
-  //
-  // Pure orchestration around the shared slice helper — match rules and
-  // fallbacks live in `posteriorSliceResolution.ts`.
-  // ═══════════════════════════════════════════════════════════════════════════
+  // currentDSL is read once per render so the planner effect's dep array
+  // can react to DSL changes. The bayes projection that used to live here
+  // (LIVE-EDGE CONTEXTING + POSTERIOR-LANDED listener) has moved into
+  // `getParameterFromFile` so every file→graph fetch produces a complete
+  // projection — analytic AND bayesian — in one place. DSL change runs
+  // the planner-driven fetch below; fresh-fit lands invoke the same fetch
+  // via `bayesPatchService.applyPatchAndCascade` Tier 2.
   const currentDSL = graphStoreApi.getState().currentDSL;
-  useEffect(() => {
-    if (isAggregatingRef.current) return;
-    if (isTemporaryFile) return;
-    if (!graph) return;
-
-    const authoritativeDSL = graphStoreApi.getState().currentDSL || '';
-    if (!authoritativeDSL) return;
-
-    if (lastContextedDSLRef.current === authoritativeDSL) return;
-    lastContextedDSLRef.current = authoritativeDSL;
-
-    // Mutate a clone so React reconciliation sees a new reference (anti-pattern 3).
-    const cloned = structuredClone(graph) as Graph;
-    contextLiveGraphForCurrentDsl(
-      cloned,
-      (paramId: string) => fileRegistry.getFile(`parameter-${paramId}`)?.data,
-      authoritativeDSL,
-    );
-    setGraph(cloned);
-  }, [graph, currentDSL, isTemporaryFile, graphStoreApi, setGraph]);
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // POSTERIOR-LANDED RE-CONTEXT
-  //
-  // applyPatch / UpdateManager mappings both pick the bare `window()` slice
-  // when projecting onto live edges — neither knows the active DSL. The
-  // LIVE-EDGE CONTEXTING effect above is the single DSL-aware projection
-  // path, but it is gated on `currentDSL` actually changing. After a fresh
-  // fit lands, the DSL is unchanged so that effect skips, and the edges
-  // hold the bare aggregate even when the user is on a context-qualified
-  // or cohort() DSL. Stage 4(b) (removal of `_posteriorSlices`) plus
-  // contexted Bayes outputs together created this hole.
-  //
-  // This listener fires when applyPatchAndCascade signals new posteriors,
-  // invalidates the gating ref, and re-projects against the active DSL.
-  // ═══════════════════════════════════════════════════════════════════════════
-  useEffect(() => {
-    const handler = () => {
-      if (isAggregatingRef.current) return;
-      if (isTemporaryFile) return;
-      const liveGraph = graphRef.current;
-      if (!liveGraph) return;
-      const authoritativeDSL = graphStoreApi.getState().currentDSL || '';
-      if (!authoritativeDSL) return;
-      const cloned = structuredClone(liveGraph) as Graph;
-      contextLiveGraphForCurrentDsl(
-        cloned,
-        (paramId: string) => fileRegistry.getFile(`parameter-${paramId}`)?.data,
-        authoritativeDSL,
-      );
-      lastContextedDSLRef.current = authoritativeDSL;
-      setGraph(cloned);
-    };
-    window.addEventListener('dagnet:bayesPosteriorsUpdated', handler);
-    return () => window.removeEventListener('dagnet:bayesPosteriorsUpdated', handler);
-  }, [isTemporaryFile, graphStoreApi, setGraph]);
-
 
   useEffect(() => {
     if (isAggregatingRef.current) return;
@@ -281,6 +269,88 @@ export function useDSLReaggregation({
         setIsAggregating(false);
       });
   }, [plannerResult, graphStoreApi, setGraph, fetchItems]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BAYES DRIFT DETECTION (α: graph-load, β: post-merge)
+  //
+  // Two ways for a graph edge's bayesian projection to fall behind its
+  // parameter file's posterior:
+  //
+  //   α. On graph load, the saved `model_vars[bayesian]` is older than the
+  //      file's `posterior.fitted_at` — e.g. a fit ran in a previous session
+  //      but the cascade didn't reach this edge for whatever reason (race,
+  //      no-tab fit, scope mismatch). Trust-saved-state is otherwise the
+  //      design — see auto-aggregation's `initial_load` skip — but bayes
+  //      specifically can be detected as stale by fingerprint comparison.
+  //
+  //   β. After a clean pull (3-way merge succeeds without conflicts), the
+  //      parameter file's data is updated in FileRegistry but the graph
+  //      edge isn't automatically refreshed (workspaceService.pullLatest
+  //      returns without a cascade by design; only usePullAll triggers one,
+  //      and only post-conflict-resolution). Subscribing to per-file
+  //      notifications closes that gap — conflicted pulls don't fire
+  //      because they don't modify file data (pull semantics).
+  //
+  // Both reuse the established fetchItems → getParameterFromFile path,
+  // which now projects bayes correctly. No new UI machinery; toast feedback
+  // is the standard "✓ Updated from {paramId}.yaml".
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!graph || isTemporaryFile) return;
+
+    const resolveParameterFile = (paramId: string) =>
+      fileRegistry.getFile(`parameter-${paramId}`)?.data;
+
+    const runDriftCheck = (filterParamId?: string) => {
+      if (isAggregatingRef.current) return;
+      const liveGraph = graphRef.current;
+      if (!liveGraph) return;
+
+      const drifted = collectDriftedBayesEdges(liveGraph, resolveParameterFile, filterParamId);
+      if (drifted.length === 0) return;
+
+      const items = drifted.map(d =>
+        createFetchItem('parameter', d.paramId, d.edgeId, { paramSlot: 'p' })
+      );
+
+      isAggregatingRef.current = true;
+      setIsAggregating(true);
+      fetchItems(items, { mode: 'from-file' })
+        .then(() => {
+          const updated = graphRef.current;
+          if (updated) setGraph(updated);
+        })
+        .finally(() => {
+          isAggregatingRef.current = false;
+          setIsAggregating(false);
+        });
+    };
+
+    // β: subscribe to each unique paramId so a successful merge (which
+    // updates the file's data via fileRegistry.updateFile → notifyListeners)
+    // triggers a per-edge drift check. Conflicted pulls don't modify file
+    // data and therefore don't fire this path.
+    const paramIds = new Set<string>();
+    for (const edge of graph.edges || []) {
+      const pid = (edge as any)?.p?.id;
+      if (pid) paramIds.add(pid);
+    }
+    const unsubs: Array<() => void> = [];
+    for (const paramId of paramIds) {
+      unsubs.push(
+        fileRegistry.subscribe(`parameter-${paramId}`, () => runDriftCheck(paramId))
+      );
+    }
+
+    // α: initial check at mount. Files already in FileRegistry are
+    // inspected synchronously; files that hydrate after the subscriptions
+    // are set up will trigger the β path on arrival.
+    runDriftCheck();
+
+    return () => {
+      for (const unsub of unsubs) unsub();
+    };
+  }, [graph, isTemporaryFile, fetchItems, setGraph]);
 
   return {
     plannerResult,

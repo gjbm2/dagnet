@@ -160,7 +160,10 @@ class TestRealStalls:
             t += 0.5
         assert fired_at is not None
         assert fired_at >= 29.0, f"Fired too early at {fired_at}s"
-        assert fired_at <= 40.0, f"Fired too late at {fired_at}s"
+        # Upper bound accounts for rate_window_s=15 averaging: rate takes the
+        # full window to settle to the new crawl pace, so detection arrives
+        # ~grace_s + rate_window_s after the rate drops.
+        assert fired_at <= 50.0, f"Fired too late at {fired_at}s"
 
     def test_correct_chain_identified(self):
         """Two chains, only one crawls. Correct chain reported."""
@@ -218,16 +221,26 @@ class TestEdgeCases:
 
 
 class TestWarmupAndSlowChains:
-    """Chains that are slow from the start — detected after warmup_s."""
+    """Chains that never establish peak ≥ crawl_floor — not detected.
 
-    def test_slow_from_start_detected_after_warmup(self):
-        """Chain at 0.5 draws/s from the start → stall after warmup + grace."""
+    Per the 22-Apr-26 tuning (see ChainStallDetector docstring), the
+    `peak < crawl_floor` entry escape was removed because it oscillated
+    against the hysteresis exit on slow-but-healthy models. Entry now
+    requires the chain to have proven `peak ≥ crawl_floor`; chains that
+    never sample above floor are guarded only by `warmup_s`.
+    """
+
+    def test_slow_from_start_not_detected_when_peak_never_crosses_floor(self):
+        """Chain at 0.5 draws/s from start → never exceeds crawl_floor=3.0,
+        so entry condition (peak ≥ crawl_floor) is never satisfied. The
+        chain is not flagged even after warmup + grace would have allowed
+        it under the pre-22-Apr-26 contract.
+        """
         d = ChainStallDetector(grace_s=30, warmup_s=60)
         result = _feed(d, 0, [
             (120.0, 0.5, 0.5),  # 2 min at 0.5 draws/s
         ])
-        assert result is not None
-        assert result["rate"] < 3.0
+        assert result is None
 
     def test_slow_from_start_not_detected_during_warmup(self):
         """During warmup_s, even very slow chains are not flagged."""
@@ -237,22 +250,19 @@ class TestWarmupAndSlowChains:
         ])
         assert result is None
 
-    def test_multiple_slow_chains_detected(self):
-        """Two slow chains, one fast — slow ones detected after warmup."""
-        d = ChainStallDetector(grace_s=30, warmup_s=60)
-        t = 0.0
-        result = None
-        for step in range(400):  # 200 seconds
-            t += 0.5
-            d.update(0, int(50.0 * t), t)   # fast
-            d.update(1, int(0.5 * t), t)     # slow
-            d.update(2, int(0.6 * t), t)     # slow
-            if result is None:
-                r1 = d.update(1, int(0.5 * t), t)
-                r2 = d.update(2, int(0.6 * t), t)
-                result = r1 or r2
-        # After warmup (60s) + grace (30s), slow chains should be caught
+    def test_chain_that_recovers_above_floor_then_crawls_is_detected(self):
+        """Replacement for the retired multi-slow-chain test. A chain that
+        first sampled above crawl_floor (so peak ≥ floor) and then crawls
+        IS detected — the contract still holds for any chain that has
+        proven it can sample above floor.
+        """
+        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, warmup_s=10)
+        result = _feed(d, 0, [
+            (30.0, 50.0, 0.5),  # establish peak well above floor
+            (60.0, 0.5, 0.5),    # then crawl
+        ])
         assert result is not None
+        assert result["rate"] < 3.0
 
     def test_chain_that_warms_up_late_not_false_positive(self):
         """Chain slow for 50s then accelerates → no stall."""

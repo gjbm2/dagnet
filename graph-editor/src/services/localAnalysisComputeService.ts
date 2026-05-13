@@ -573,8 +573,8 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
       probability: probView,
       latency: latView,
       paramId: edge.p?.id || null,
-      t95: promotedLat?.promoted_t95 ?? promotedLat?.t95,
-      path_t95: promotedLat?.promoted_path_t95 ?? promotedLat?.path_t95,
+      t95: promotedLat?.promoted_t95,
+      path_t95: promotedLat?.promoted_path_t95,
     };
   }
 
@@ -604,24 +604,34 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
 
 function buildLatencyCdfMeta(edge: GraphEdge): Record<string, any> | null {
   const lat = edge.p?.latency as any;
-  if (!lat) return null;
+  const post = lat?.posterior;
+  if (!post) return null;
 
   const result: Record<string, any> = {};
 
-  // Edge-level CDF params (from analytic LAG pass or Bayesian posterior)
-  const edgeMu = lat.posterior?.mu_mean ?? lat.mu;
-  const edgeSigma = lat.posterior?.sigma_mean ?? lat.sigma;
-  const edgeOnset = lat.posterior?.onset_delta_days ?? lat.promoted_onset_delta_days ?? lat.onset_delta_days ?? 0;
-  if (typeof edgeMu === 'number' && typeof edgeSigma === 'number' && edgeSigma > 0) {
-    result.edge = { mu: edgeMu, sigma: edgeSigma, onset: edgeOnset, t95: lat.promoted_t95 ?? lat.t95 };
+  // Read only from the promoted lognormal posterior. No fallback to the L5
+  // scalars (lat.mu / lat.sigma / lat.onset_delta_days) or user-input t95 —
+  // promotion staleness must be visible, not papered over.
+  if (typeof post.mu_mean === 'number'
+      && typeof post.sigma_mean === 'number' && post.sigma_mean > 0
+      && typeof post.onset_delta_days === 'number') {
+    result.edge = {
+      mu: post.mu_mean,
+      sigma: post.sigma_mean,
+      onset: post.onset_delta_days,
+      t95: lat.promoted_t95,
+    };
   }
 
-  // Path-level CDF params (from Bayesian posterior path_* fields, or analytic path_mu/path_sigma)
-  const pathMu = lat.posterior?.path_mu_mean ?? lat.path_mu;
-  const pathSigma = lat.posterior?.path_sigma_mean ?? lat.path_sigma;
-  const pathOnset = lat.posterior?.path_onset_delta_days ?? lat.path_onset_delta_days ?? edgeOnset;
-  if (typeof pathMu === 'number' && typeof pathSigma === 'number' && pathSigma > 0) {
-    result.path = { mu: pathMu, sigma: pathSigma, onset: pathOnset, t95: lat.promoted_path_t95 ?? lat.path_t95 };
+  if (typeof post.path_mu_mean === 'number'
+      && typeof post.path_sigma_mean === 'number' && post.path_sigma_mean > 0
+      && typeof post.path_onset_delta_days === 'number') {
+    result.path = {
+      mu: post.path_mu_mean,
+      sigma: post.path_sigma_mean,
+      onset: post.path_onset_delta_days,
+      t95: lat.promoted_path_t95,
+    };
   }
 
   return Object.keys(result).length > 0 ? result : null;

@@ -310,6 +310,21 @@ if [[ "$RUN_TESTS" == true ]]; then
       exit 1
     fi
     print_green "✓ Bayes compiler tests passed"
+
+    # Modal-image import-surface check. The local venv layers
+    # graph-editor/requirements-local.txt over bayes/requirements.txt, so a
+    # missing dep on the Modal worker side (e.g. networkx, pydantic) is
+    # invisible to pytest. This script builds an isolated venv from
+    # bayes/requirements.txt alone and exercises the worker's import chain
+    # with PYTHONPATH set the way bayes/app.py sets it on Modal.
+    print_yellow "  Verifying Modal worker image import surface..."
+    if ! ./scripts/check-modal-image-imports.sh; then
+      echo ""
+      print_red "✗ Bayes worker imports do not resolve under bayes/requirements.txt alone."
+      print_red "  The Modal worker image would fail on first fit_graph call."
+      print_red "Release aborted."
+      exit 1
+    fi
   fi
   echo ""
   

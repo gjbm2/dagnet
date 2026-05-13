@@ -1514,10 +1514,12 @@ edges:
         truth_sha = hashlib.sha256(truth_file.read_bytes()).hexdigest()
 
         meta = {
-            "schema_version": 2,
+            "schema_version": 3,
             "truth_sha256": truth_sha,
             "graph_sha256": "",
             "event_hashes": {},
+            "context_file_hashes": {},
+            "empty_slices": [],
             "default_connection": "",
             "enriched": False,
             "enriched_at": None,

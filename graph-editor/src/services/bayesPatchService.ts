@@ -415,26 +415,33 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
         // model_vars[analytic].latency. Promotion (Step 2) renames
         // mu→mu_mean, sigma→sigma_mean for the p.latency.posterior surface.
         let latencyBlock: any | undefined;
-        if (windowSlice.mu_mean != null) {
+        // Latency outputs are model determinations — μ, σ, and onset must
+        // all come from the engine. No fallback to the user-input
+        // `graphEdge.p.latency.onset_delta_days` (that's an INPUT
+        // constraint, not an OUTPUT) and no `?? 0`. If any of the three
+        // is absent, the model has not produced a usable latency surface
+        // and we surface that by emitting no latency block.
+        if (windowSlice.mu_mean != null
+            && windowSlice.sigma_mean != null
+            && windowSlice.onset_mean != null) {
           latencyBlock = {
             mu: windowSlice.mu_mean,
-            sigma: windowSlice.sigma_mean!,
-            t95: Math.exp(windowSlice.mu_mean + 1.645 * windowSlice.sigma_mean!) + (windowSlice.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0),
-            onset_delta_days: windowSlice.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0,
+            sigma: windowSlice.sigma_mean,
+            t95: Math.exp(windowSlice.mu_mean + 1.645 * windowSlice.sigma_mean) + windowSlice.onset_mean,
+            onset_delta_days: windowSlice.onset_mean,
           };
-          // Dispersions from posterior (required for MC fan bands and
-          // completeness_sd). Doc 61 naming: bare mu_sd is epistemic,
-          // mu_sd_pred is predictive.
           if (windowSlice.mu_sd != null) latencyBlock.mu_sd = windowSlice.mu_sd;
           if (windowSlice.mu_sd_pred != null) latencyBlock.mu_sd_pred = windowSlice.mu_sd_pred;
           if (windowSlice.sigma_sd != null) latencyBlock.sigma_sd = windowSlice.sigma_sd;
           if (windowSlice.onset_sd != null) latencyBlock.onset_sd = windowSlice.onset_sd;
           if (windowSlice.onset_mu_corr != null) latencyBlock.onset_mu_corr = windowSlice.onset_mu_corr;
-          if (cohortSlice?.mu_mean != null) {
+          if (cohortSlice?.mu_mean != null
+              && cohortSlice.sigma_mean != null
+              && cohortSlice.onset_mean != null) {
             latencyBlock.path_mu = cohortSlice.mu_mean;
             latencyBlock.path_sigma = cohortSlice.sigma_mean;
-            latencyBlock.path_t95 = Math.exp(cohortSlice.mu_mean + 1.645 * (cohortSlice.sigma_mean ?? 0)) + (cohortSlice.onset_mean ?? 0);
-            latencyBlock.path_onset_delta_days = cohortSlice.onset_mean ?? 0;
+            latencyBlock.path_t95 = Math.exp(cohortSlice.mu_mean + 1.645 * cohortSlice.sigma_mean) + cohortSlice.onset_mean;
+            latencyBlock.path_onset_delta_days = cohortSlice.onset_mean;
             if (cohortSlice.mu_sd != null) latencyBlock.path_mu_sd = cohortSlice.mu_sd;
             if (cohortSlice.mu_sd_pred != null) latencyBlock.path_mu_sd_pred = cohortSlice.mu_sd_pred;
             if (cohortSlice.sigma_sd != null) latencyBlock.path_sigma_sd = cohortSlice.sigma_sd;
@@ -740,21 +747,11 @@ async function _applyPatchAndCascadeInner(
   sessionLogService.success('bayes', 'BAYES_CASCADE_COMPLETE',
     `Cascaded ${cascaded} params from files to graph`);
 
-  // Signal the live-edge re-context path that fresh posteriors have landed.
-  // applyPatch and UpdateManager both pick the bare `window()` slice when
-  // they project onto edges — neither knows the active DSL. Without this
-  // event, edges keep the bare-aggregate projection until the user happens
-  // to change DSL, at which point the gated effect in useDSLReaggregation
-  // fires. After Stage 4(b) removed `_posteriorSlices` AND Bayes started
-  // emitting per-context slices, this implicit "DSL change re-projects"
-  // path no longer covers the post-fit case. The hook listener uses the
-  // active DSL to project the matching slice from the freshly-written
-  // parameter file.
-  try {
-    window.dispatchEvent(new CustomEvent('dagnet:bayesPosteriorsUpdated', {
-      detail: { graphId, edgesUpdated },
-    }));
-  } catch { /* non-DOM environment (CLI / tests) — listeners are FE-only */ }
+  // No custom event needed: the Tier-2 `getParameterFromFile` loop above
+  // is the DSL-aware projection step. Each per-edge call reads the
+  // freshly-written `posterior.slices` and projects the slice matching
+  // the active DSL onto `model_vars[bayesian]` directly — the same path
+  // any other fetch uses.
 
   return { edgesUpdated };
 }

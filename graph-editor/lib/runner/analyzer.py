@@ -34,7 +34,7 @@ from .runners import (
     run_graph_overview,
     get_runner,
 )
-from lib.query_dsl import parse_query, ParsedQuery
+from query_dsl import parse_query, ParsedQuery
 
 
 def analyze(request: AnalysisRequest) -> AnalysisResponse:

@@ -2679,6 +2679,135 @@ class _SubjectChainEvidenceBuckets:
     topology_edges: Tuple[Tuple[str, str, str], ...]
 
 
+def _build_zero_edge_observed_surface(
+    *,
+    primitives: Sequence[ConditionedTransitionPrimitive],
+    node: str,
+    role: str,
+    anchor_days: Sequence[str],
+    max_tau: int,
+) -> Tuple[
+    Optional[ObservedSpanEvidenceSurface],
+    Optional['_SubjectChainEvidenceBuckets'],
+]:
+    """Chain-of-length-0 degeneracy of the observed span surface.
+
+    When ``root_node == end_node`` (the identity-carrier case for the
+    carrier role: ``window()`` or ``cohort(A=X)``), the chain has no
+    edges. The count "at the single node" is read directly from
+    `n_weighted` on the primitive whose `source_node == node` — i.e.
+    the count entering the node, as recorded by any outgoing edge's
+    source-side count.
+
+    Why `n_weighted` (not `k_weighted`): in the active path the surface
+    accumulates `k_weighted` on each edge — the count converting at
+    that edge's destination — and composes via topology max-flow to
+    answer "how many reached X through the chain". For chain length 0
+    there is no chain to walk; the count at the node is its `n` (the
+    source-side count). Flow conservation makes these readings
+    equivalent in well-formed data, but they read different fields.
+    See [CF_ROW_PIPELINE.md §1 known structural debt] for the open
+    architectural question on whether these two readings should be
+    unified under a single formula.
+
+    Returns ``(surface, None)`` matching the active path's signature.
+    No `_SubjectChainEvidenceBuckets` are produced; the buckets are a
+    per-edge accumulator and there are no edges. Downstream consumers
+    that want rate caches on identity-carrier mode must read the
+    primitive's row metadata directly.
+
+    Per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` invariant
+    6: "identity carrier is data, not a route". This handler is the
+    runtime expression of that invariant for the observed-surface
+    layer.
+    """
+    if not primitives:
+        return None, None
+    target: Optional[ConditionedTransitionPrimitive] = None
+    for primitive in primitives:
+        src = str(getattr(primitive.transition, 'source_node', '') or '')
+        if src == str(node):
+            target = primitive
+            break
+    if target is None:
+        return None, None
+    anchor_set = {str(a)[:10] for a in anchor_days if str(a)[:10]}
+    if not anchor_set:
+        return None, None
+
+    cells: Dict[str, Dict[int, ObservedSpanEvidenceCell]] = defaultdict(dict)
+    rows = _primitive_weighted_rows(target)
+    for row in rows:
+        observed_d = _row_observed_date(row)
+        snapshot_d = _row_snapshot_date(row)
+        if observed_d is None or snapshot_d is None:
+            continue
+        tau = (snapshot_d - observed_d).days
+        if tau < 0 or tau > int(max_tau):
+            continue
+        n_w = float(getattr(row, 'n_weighted', 0.0) or 0.0)
+        shares = dict(getattr(row, 'root_day_shares', {}) or {})
+        # Identity-carrier fallback: when `root_day_shares` is absent
+        # (e.g. a degraded arrival map under a test fixture), the row
+        # places onto its own `observed_date`. The arrival map for the
+        # X-rooted primitive in identity-carrier mode is X-identity, so
+        # `observed_date` is the row's selected anchor day by
+        # construction.
+        observed_iso = observed_d.isoformat()
+        if not shares and observed_iso in anchor_set:
+            shares = {observed_iso: 1.0}
+        for anchor_key, share in shares.items():
+            anchor_str = str(anchor_key)[:10]
+            if anchor_str not in anchor_set:
+                continue
+            share_f = float(share or 0.0)
+            if share_f <= 0:
+                continue
+            existing = cells[anchor_str].get(int(tau))
+            new_count = (
+                (existing.observed_count if existing else 0.0)
+                + n_w * share_f
+            )
+            new_share = (
+                (existing.landing_coverage if existing else 0.0)
+                + share_f
+            )
+            cells[anchor_str][int(tau)] = ObservedSpanEvidenceCell(
+                anchor_day=anchor_str,
+                tau=int(tau),
+                observed_count=float(new_count),
+                edge_capacities={},
+                landing_coverage=float(min(1.0, new_share)),
+                provenance={
+                    'source': 'zero_edge_degeneracy_n_weighted',
+                    'role': role,
+                    'node': str(node),
+                    'rooted_edge_id': str(
+                        getattr(target.transition, 'edge_id', '')
+                    ),
+                },
+            )
+    if not any(cells.values()):
+        return None, None
+    return (
+        ObservedSpanEvidenceSurface(
+            role=role,
+            root_node=str(node),
+            end_node=str(node),
+            cells_by_anchor_day={k: dict(v) for k, v in cells.items()},
+            edge_ids=(),
+            provenance={
+                'source': 'zero_edge_degeneracy',
+                'role': role,
+                'rooted_edge_id': str(
+                    getattr(target.transition, 'edge_id', '')
+                ),
+            },
+        ),
+        None,
+    )
+
+
 def _build_observed_span_evidence_surface(
     *,
     runtime: ResolvedCFRuntime,
@@ -2716,6 +2845,23 @@ def _build_observed_span_evidence_surface(
     """
     if not primitives:
         return None, None
+
+    # Zero-edge degeneracy: when root_node == end_node the chain has no
+    # edges (the identity-carrier case for the carrier role). The count
+    # "at the single node" is read directly from n_weighted on the
+    # primitive whose source_node == root_node, not via the chain
+    # max-flow over k_weighted that the multi-edge path uses.
+    # See `_build_zero_edge_observed_surface` for the reasoning and the
+    # n-vs-k distinction; the design contract is in
+    # `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` invariant 6.
+    if str(root_node) == str(end_node):
+        return _build_zero_edge_observed_surface(
+            primitives=primitives,
+            node=str(root_node),
+            role=role,
+            anchor_days=anchor_days,
+            max_tau=max_tau,
+        )
 
     topology_edges = _role_topology_edges(
         graph=getattr(runtime, 'graph', None),
@@ -3989,112 +4135,6 @@ def _cell_source_provenance(
     }
 
 
-def _synthesize_identity_carrier_observed_surface(
-    *,
-    subject_primitives: Sequence[ConditionedTransitionPrimitive],
-    denominator_node: str,
-    anchor_days: Sequence[str],
-    max_tau: int,
-) -> Optional[ObservedSpanEvidenceSurface]:
-    """Chain-of-length-0 degeneracy of the carrier observed surface.
-
-    When ``population_root == denominator_node`` (the identity-carrier
-    case: ``window()`` or ``cohort(A=X)``) the carrier chain is empty
-    and the carrier surface is sourced from the X-rooted subject
-    primitive's row metadata: each row's
-    ``(observed_date, retrieved_at, n_weighted)`` becomes a carrier
-    cell at ``(anchor=root_day, τ=retrieved_at-observed_date,
-    observed_count=n_weighted × share)``. The X-day → A-day backmap is
-    identity because A == X. This is invariant 6 in
-    `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`: identity
-    carrier is data, not a route — and AP58: the new case is a
-    degeneracy of the same sub-object, not a parallel pipeline.
-    """
-    if not subject_primitives:
-        return None
-    x_rooted: Optional[ConditionedTransitionPrimitive] = None
-    for primitive in subject_primitives:
-        src = str(getattr(primitive.transition, 'source_node', '') or '')
-        if src == str(denominator_node):
-            x_rooted = primitive
-            break
-    if x_rooted is None:
-        return None
-    anchor_set = {str(a)[:10] for a in anchor_days if str(a)[:10]}
-    if not anchor_set:
-        return None
-    cells: Dict[str, Dict[int, ObservedSpanEvidenceCell]] = defaultdict(dict)
-    rows = _primitive_weighted_rows(x_rooted)
-    for row in rows:
-        observed = str(getattr(row, 'observed_date', '') or '')[:10]
-        retrieved_raw = getattr(row, 'retrieved_at', None)
-        retrieved = (
-            str(retrieved_raw)[:10] if retrieved_raw is not None
-            and str(retrieved_raw).strip() else ''
-        )
-        if not observed or not retrieved:
-            continue
-        try:
-            obs_d = _date.fromisoformat(observed)
-            ret_d = _date.fromisoformat(retrieved)
-        except (TypeError, ValueError):
-            continue
-        tau = (ret_d - obs_d).days
-        if tau < 0 or tau > int(max_tau):
-            continue
-        n_w = float(getattr(row, 'n_weighted', 0.0) or 0.0)
-        shares = dict(getattr(row, 'root_day_shares', {}) or {})
-        # Identity backmap: when no root_day_shares are populated, the
-        # row places onto its own observed_date (anchor == observed_date
-        # in identity-carrier mode by definition).
-        if not shares and observed in anchor_set:
-            shares = {observed: 1.0}
-        for anchor_key, share in shares.items():
-            anchor_str = str(anchor_key)[:10]
-            if anchor_str not in anchor_set:
-                continue
-            share_f = float(share or 0.0)
-            if share_f <= 0.0:
-                continue
-            existing = cells[anchor_str].get(int(tau))
-            new_count = (
-                (existing.observed_count if existing else 0.0)
-                + n_w * share_f
-            )
-            new_share = (
-                (existing.landing_coverage if existing else 0.0)
-                + share_f
-            )
-            cells[anchor_str][int(tau)] = ObservedSpanEvidenceCell(
-                anchor_day=anchor_str,
-                tau=int(tau),
-                observed_count=float(new_count),
-                edge_capacities={},
-                landing_coverage=float(min(1.0, new_share)),
-                provenance={
-                    'source': 'identity_carrier_x_rooted_subject_primitive',
-                    'x_rooted_edge_id': str(
-                        getattr(x_rooted.transition, 'edge_id', '')
-                    ),
-                },
-            )
-    if not any(cells.values()):
-        return None
-    return ObservedSpanEvidenceSurface(
-        role='carrier_a_to_x',
-        root_node=str(denominator_node),
-        end_node=str(denominator_node),
-        cells_by_anchor_day={k: dict(v) for k, v in cells.items()},
-        edge_ids=(),
-        provenance={
-            'source': 'identity_carrier_synthesis',
-            'x_rooted_edge_id': str(
-                getattr(x_rooted.transition, 'edge_id', '')
-            ),
-        },
-    )
-
-
 def _build_selected_a_clock_evidence_from_runtime(
     runtime: ResolvedCFRuntime,
     *,
@@ -4121,13 +4161,16 @@ def _build_selected_a_clock_evidence_from_runtime(
     is no longer consulted for cell amplitude.
 
     Mode-agnostic: serves active cohort `A != X`, `cohort(A=X)`, and
-    `window()` uniformly. The identity-carrier degeneracy
-    (`population_root == denominator_node`) builds the carrier surface
-    via `_synthesize_identity_carrier_observed_surface` — the
-    chain-of-length-0 case of carrier composition. Per the
+    `window()` uniformly via a single call to
+    `_build_observed_span_evidence_surface`. The identity-carrier
+    degeneracy (`population_root == denominator_node`) is handled
+    inside that function as the zero-edge chain case: a single
+    `_build_zero_edge_observed_surface` invocation that reads
+    `n_weighted` off the X-rooted subject primitive (the algebraic
+    degeneracy of chain max-flow when the chain has no edges). Per
     `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` invariant 6
-    ("identity carrier is data, not a route") and atom 2 sub-stage 2a
-    of `cohort-maturity-evidence-coverage-design.md`.
+    ("identity carrier is data, not a route") and AP58 (no parallel
+    pipelines).
     """
     def _record_diag(reason: str, **extra: Any) -> None:
         try:
@@ -4212,29 +4255,27 @@ def _build_selected_a_clock_evidence_from_runtime(
             anchor_days=anchor_days,
         )
     )
-    if is_identity_carrier:
-        # Chain-of-length-0 degeneracy: carrier observed surface is
-        # sourced from the X-rooted subject primitive's row metadata,
-        # not from a separate carrier composition (there is no carrier
-        # chain to compose). See `_synthesize_identity_carrier_observed_surface`.
-        carrier_surface = _synthesize_identity_carrier_observed_surface(
-            subject_primitives=subject_primitives,
-            denominator_node=str(denom_node),
-            anchor_days=anchor_days,
-            max_tau=max_tau,
-        )
-        _carrier_buckets = None
-    else:
-        carrier_surface, _carrier_buckets = _build_observed_span_evidence_surface(
-            runtime=runtime,
-            role='carrier_a_to_x',
-            root_node=str(pop_root),
-            end_node=str(denom_node),
-            primitives=carrier_primitives,
-            anchor_days=anchor_days,
-            max_tau=max_tau,
-            emit_diagnostics=emit_diagnostics,
-        )
+    # Unified observed-surface construction. `_build_observed_span_evidence_surface`
+    # dispatches internally to the zero-edge degeneracy when
+    # `root_node == end_node` (identity carrier — read n_weighted off
+    # the subject primitive rooted at X) and to the chain max-flow
+    # path otherwise (active — accumulate k_weighted across edges).
+    # In identity-carrier mode the relevant primitive list is
+    # `subject_primitives` (it contains the X-rooted primitive whose
+    # `n_weighted` is the count at X); in active mode it's
+    # `carrier_primitives`.
+    carrier_surface, _carrier_buckets = _build_observed_span_evidence_surface(
+        runtime=runtime,
+        role='carrier_a_to_x',
+        root_node=str(pop_root),
+        end_node=str(denom_node),
+        primitives=(
+            subject_primitives if is_identity_carrier else carrier_primitives
+        ),
+        anchor_days=anchor_days,
+        max_tau=max_tau,
+        emit_diagnostics=emit_diagnostics,
+    )
     subject_surface = None
     subject_buckets: Optional[_SubjectChainEvidenceBuckets] = None
     if subject_primitives:

@@ -1,7 +1,7 @@
 # 73q Daily Conversions Shared Runtime Cutover Plan
 
-**Status**: Proposal (rewrite) — 7-May-26
-**Supersedes**: the 4-May-26 version of this document, archived at `docs/archive/project-bayes/73q-daily-conversions-shared-runtime-cutover-plan.md`.
+**Status**: Proposal (rewrite) — 7-May-26; test-architecture amendment 13-May-26
+**Supersedes**: the 4-May-26 version of this document, archived at `docs/archive/project-bayes/73q-daily-conversions-shared-runtime-cutover-plan.md`. The 13-May-26 amendment restructures Phase 1 into a four-tier test architecture and adds Phase 1d (retirement of `test_doc56_phase0_behaviours.py`); no other phases are altered.
 **Scope**: Move daily conversions onto the shared CF runtime by adding a second reducer over the same substrate, without implementing 73p hierarchical per-Cohort conditioning, and without trusting the current legacy daily-conversions arithmetic as an oracle.
 
 ## Why this is a rewrite
@@ -117,11 +117,22 @@ The substrate is the same object for both reducers, so a strong cross-reducer in
 
 Each phase is a separable, mergeable chunk. Phases 2 and 3 are mechanically safe (they add capability without changing daily-conversions behaviour). Phase 1 is the calibration step that hardens the contract. Phase 4 is the cutover.
 
-### Phase 1 — Blind invariant tests over the outside-in CLI suite
+### Phase 1 — Test architecture for the cutover
 
-The goal of this phase is a hardened, oracle-free test bed that future phases must satisfy. Tests are extensions of the existing cohort outside-in CLI test suite (`test_cohort_factorised_outside_in.py`), targeting daily-conversions response shapes for the same synthetic graphs that already cover cohort_maturity. Tests must be authored without consulting the current legacy daily-conversions output as ground truth.
+This phase delivers the test architecture 73q ships against. It comprises four tiers organised by what each tier proves and what it costs to run, plus the retirement of `test_doc56_phase0_behaviours.py`, whose current empirical cross-consumer matrix is rendered structurally redundant by the shared-substrate architecture and whose runtime cost (several real-DB pipeline runs per assertion) is disproportionate to the claims it still polices.
 
-#### Phase 1a — Author tests blind
+The four tiers, in increasing wall-cost:
+
+1. **Substrate algebra unit tests** — sub-second; mock substrates assembled from numpy arrays; assert reducer algebra at the (Cohort, particle, τ) tensor level. No DB, no conditioning, no composition.
+2. **Substrate-builder integration tests** — seconds; tiny in-memory fixtures (a handful of edges, anchor days, and snapshots); assert properties of `build_resolved_cf_runtime` and the extracted shared substrate-builder. No DB.
+3. **Cross-consumer projection tests via shared substrate** — seconds; a known substrate injected into the handler shims; assert tau reducer, date reducer, and (after Phase 5a) the scalar projector produce coherent readouts of the same tensor.
+4. **Outside-in semantic acceptance oracle** — slow; the existing `test_cohort_factorised_outside_in.py` extended with daily-conversions cases per Phase 1a; full pipeline, real-DB; the load-bearing canary.
+
+Tier 4 retains the original "blind invariant" framing because it is the semantic acceptance oracle and must clear legacy-gap expected-fails in phase 4. Tiers 1–3 do not require calibration against the legacy daily-conversions arithmetic because they assert structural properties of the new architecture (per-Cohort reducer algebra, substrate-builder determinism, single-substrate cross-consumer reads) rather than numerical outputs the legacy engine produced.
+
+The four tiers do not all land in a single Phase 1 burst. Tier 1 can be written early — before Phases 2 and 3 — because it consumes mock substrates and drives the date reducer's algebra by pinning what it must implement. Tier 2 lands alongside the Phase 2 substrate-accessor work and the Phase 3 substrate-builder extraction. Tier 3 lands alongside Phase 3 and again at Phase 5a (surprise_gauge migration). Tier 4 is the existing Phase 1a/1b work below, authored blind against the contract and calibrated against legacy. The doc-56 retirement (Phase 1d) is the final cleanup pass once tiers 1–3 are in place.
+
+#### Phase 1a — Author outside-in tests blind (Tier 4)
 
 Extend the existing outside-in CLI tests with daily-conversions cases. Tests assert the "Reducer field contract" section above. The contract is the source of truth for what each field means; tests assert the contract's claims, not the legacy implementation's outputs. The required coverage classes are:
 
@@ -141,7 +152,7 @@ Extend the existing outside-in CLI tests with daily-conversions cases. Tests ass
 
 Tests must use synthetic graphs whose semantic answers are derivable independently of the implementation. Where an exact value is not derivable blind, the assertion is a bound, an ordering, a contract-defined relationship, or a single-Cohort cross-reducer equality, never a hard-coded number copied from a current run.
 
-#### Phase 1b — Run blind tests against current main and harden
+#### Phase 1b — Run outside-in tests against current main and harden (Tier 4)
 
 Run the phase 1a tests against the current daily-conversions path on `main` (the legacy trajectory enrichment in `api_handlers.py`). Three outcomes are possible per assertion:
 
@@ -150,6 +161,46 @@ Run the phase 1a tests against the current daily-conversions path on `main` (the
 - **Fail on legacy because the legacy path is wrong.** Mark the test as expected-fail with a written reason, and record the legacy gap in this document's "Known legacy gaps" section (added during phase 1b). The cutover in phase 4 is required to clear that expected-fail.
 
 The phase 1b output is a calibrated invariant suite, a documented list of legacy gaps, and a clear definition of what phase 4 must achieve to be considered correct. No production code changes in phase 1.
+
+#### Phase 1c — Structural fast-tier suite (Tiers 1–3)
+
+Add the three fast structural tiers alongside the outside-in suite. Each tier is its own test file, sibling to `test_cohort_factorised_outside_in.py`. Sequencing within the broader 73q work is natural: Tier 1 lands first and drives Phase 3; Tier 2 lands alongside Phases 2 and 3; Tier 3 lands alongside Phase 3 and again at Phase 5a.
+
+**Tier 1 — substrate algebra unit tests.** These consume mock `ResolvedCFRuntime` objects assembled from numpy arrays. A small helper builds a substrate with a chosen number of Cohorts, particles, and tau slots, populating `X_per_cohort[d, s, τ]` and `Y_per_cohort[d, s, τ]` to whatever shape the test under examination requires; no real conditioning, no real composition, no DB. The tier then exercises the two reducers (and, after Phase 5a, the scalar projector) on those mocked surfaces and asserts the algebra each is contractually required to implement.
+
+The Tier 1 claims are: tau-reducer aggregation rule (the row at τ equals Σ-of-Y over Σ-of-X across selected Cohorts, divided once per particle, then quantiled across particles); date-reducer per-Cohort identity (the row for Cohort d at τ equals the un-summed Y/X ratio for that Cohort, quantiled across particles); single-Cohort cross-reducer equality (with one Cohort the two reducers' band outputs match to floating-point on the same draws); multi-Cohort explicit-aggregation rule (the tau row equals the substrate's own Σ-of-Y over Σ-of-X built from the per-Cohort arrays the date reducer exposes — never a casual weighted-average form); skipped-Cohort emission (a Cohort with zero `a_pop` produces zeros in the per-Cohort arrays and the date reducer emits a row with null projection fields and explicit provenance rather than dropping it); band geometry on per-Cohort draws (`forecast_bands[level][hi] ≥ bands[level][lo]`, monotone nesting across levels); layer-rule application (the constants and rule are imported from `forecast_application` and applied to mock completeness values; the three transitions evidence → forecast → mature are verified across COMPLETENESS_EPSILON and MATURITY_THRESHOLD); projection bounds (`projected_y ≥ y`, `forecast_y ≥ 0`, rate ∈ [0, 1] when X > 0); per-band tau selection (latency-band readouts at evidence-side vs forecast-side split at `eval_age ≥ band_tau`).
+
+Tier 1 is cheap enough to run in every CI invocation and fast enough to TDD against during Phase 3 development.
+
+**Tier 2 — substrate-builder integration tests.** These build a real `ResolvedCFRuntime` from a hand-rolled in-memory graph (no DB) and assert properties of the build itself, not of any reducer. The fixtures are tiny: typically three to four edges, five to ten anchor days, a handful of snapshots constructed in code rather than fetched from the DB. The runtime is built by calling `build_resolved_cf_runtime` directly (or, post-Phase-3, the extracted shared substrate-builder) with synthesised inputs.
+
+The Tier 2 claims are: identity-carrier degeneracy (window mode and cohort(A=X) on the same graph produce structurally equivalent composed surfaces — `composed_carrier is None` in both, and the per-(Cohort, particle, τ) mass arrays the substrate exposes are identical to within the carrier-mode reproducibility tolerance); edge-list reorder invariance (`build_resolved_cf_runtime` returns a structurally identical substrate under permutation of the input edge list — same composed_carrier, same composed_subject, same conditioned_primitive_map keys, same draws); multi-hop subject preservation (a multi-hop subject span produces a `composed_subject` whose draws are the per-edge convolution, not the terminal-edge CDF — the substrate-level guarantee invariant 5 requires); `fe.saturation_tau` plumbing (the value the substrate exposes on its bundle matches the value the date reducer reads, and matches the formula `max(max_tau, ceil(2 × t95))` capped at 400); per-Cohort projection horizon alignment (after Phase 2, the per-Cohort arrays cover `fe.saturation_tau`, not just `fe.max_tau`); latency-band tau accessor consistency (the `runtime.latency_band_taus()` accessor returns the same canonical set both reducers consume — no divergence between the tau-reducer's band tau and the date-reducer's band tau).
+
+Tier 2 catches substrate-build-time defects that Tier 1's mock substrates cannot expose because Tier 1 assumes the substrate is correct.
+
+**Tier 3 — cross-consumer projection tests via shared substrate.** These inject a known substrate (mock or fixture-built) into the handler shims and assert that all consumers — `compute_cohort_maturity_rows_v3`, the new date reducer, and post-5a the surprise_gauge scalar projector — produce coherent reads of the same `(Cohort, particle, τ)` tensor. The structural claim being tested is invariant 1 (one machinery) plus invariant 9 (projection does not re-decide semantics) at integration level: if every consumer routes through the same substrate, they cannot numerically disagree on the same quantity.
+
+The Tier 3 claims are: single-substrate cross-consumer reading (cohort_maturity_v3's row at τ = saturation_tau, daily_conversions's `projected_y` for the single-Cohort case at that τ, and the conditioned-forecast handler's `p_mean` all read from the same per-particle array and agree to floating-point — replaces the doc-56 `cf_p_mean_matches_v3_p_infinity` empirical matrix); scalar projector coherence (post-5a, surprise_gauge's `p` and `completeness` z-score inputs read from the same `runtime.public_moments` and `runtime.unconditioned_overlays['predictive']` the cohort_maturity row builder reads); response-shape invariants (`cf_mode`, `cf_reason`, `promoted_source` are populated identically on all consumers when emitted at all).
+
+Tier 3 lands in two waves: first alongside Phase 3 covering tau reducer and date reducer; second alongside Phase 5a covering the surprise_gauge scalar projector. The bayesian-sidecar variants are covered as additional fixtures within these tests rather than as separate test files.
+
+Phase 1c is complete when the three tiers exist as separate test files (sibling to `test_cohort_factorised_outside_in.py`), each runs in its named cost envelope on CI, and the assertions named above are all in place and green against the architecture as it stands at each tier's landing phase.
+
+#### Phase 1d — Retire `test_doc56_phase0_behaviours.py`
+
+The doc-56 file dates from the v1→v2/v3 cut-over period and was framed as "phase-0 cross-consumer cut-over regression guard". The doc-64 authoring receipt in the file already retires the doc-56 framing in favour of Family C (cross-consumer agreement). 73q completes that retirement by absorbing each remaining claim into the new test architecture and deleting the file.
+
+Each of the seven tests in the file is reassigned explicitly so no semantic claim is silently lost:
+
+- **`test_cf_and_v3_chart_carrier_tier_agree`** — claim is about `model_resolver` carrier-tier selection, not about CF runtime semantics. Moved to a new `test_model_resolver_carrier_tier.py` unit test (millisecond cost, no pipeline). 73q ships the moved test in Phase 1d.
+- **`test_cf_p_mean_matches_v3_p_infinity`** — structurally redundant after 73q. `handle_conditioned_forecast` already routes through `compute_cohort_maturity_rows_v3` and reads p@∞ from the last chart row (per the handler docstring at `api_handlers.py`); the test was empirically confirming an identity that is true by construction. The cross-consumer reading invariant is now policed by Tier 3 cross-consumer projection tests. Deleted with no replacement (the architectural identity it asserted is now witnessed by the shared `compute_cohort_maturity_rows_v3` call site, not by an empirical matrix).
+- **`test_query_scoped_identity_carrier_collapses_public_evidence_basis`** — claim is about identity-carrier degeneracy. Replaced by Tier 2's identity-carrier degeneracy test, which asserts the same property at substrate level rather than at chart-row level (cheaper, sharper). Deleted.
+- **`test_whole_graph_cf_is_invariant_under_edge_reorder`** — claim is about `build_resolved_cf_runtime` determinism under input permutation. Replaced by Tier 2's edge-reorder invariance test, which exercises the substrate builder directly rather than running two full pipelines. Deleted.
+- **`test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split`** — currently xfail-strict pending Phase 5a (per the ledger below). Rewritten in Phase 5a against the runtime-backed surprise_gauge as a Tier 3 cross-consumer test or as a Tier 4 outside-in case. Deleted from the doc-56 file at that point.
+- **`test_chart_and_daily_conversions_do_not_collapse_window_and_cohort`** — the current claim ("both consumers expose a window/cohort split") is a weaker form of what 73q makes available. Replaced by two stronger assertions: Tier 1's single-Cohort cross-reducer equality (cohort_maturity row at τ = saturation_tau equals daily_conversions row for that Cohort to floating-point) and Tier 4's mode invariants (window vs cohort produce demonstrably different per-Cohort projections under the new substrate). Deleted.
+- **`test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split`** — currently xfail-non-strict (stale under WP8 per the existing pytest marker). The structural claim (multi-hop subject preservation, downstream split survival) is covered more directly by Tier 2's multi-hop subject preservation test and Tier 1's mode-invariant assertions. Deleted (no replacement in this file; the bayesian-sidecar code path itself is exercised as a fixture variant within the Tier 3 cross-consumer tests).
+
+Phase 1d is complete when the file is deleted, the moved and replaced tests exist in their new homes and run green, and a static search shows no remaining references to the seven test names anywhere in the codebase or in CI manifests. The runtime cost saved is several minutes of CI per invocation.
 
 ### Phase 2 — Substrate expansion
 
@@ -285,7 +336,7 @@ projections and legacy consumer seams are acknowledged unreliable until the
 shared substrate, date reducer, surprise-gauge migration, and funnel verification
 work above are complete.
 
-- `test_doc56_phase0_behaviours.py::test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split` — revisit during Phase 5a. It must either be rewritten against the runtime-backed `surprise_gauge` contract or retired in favour of the new Phase 5a outside-in tests.
+- `test_doc56_phase0_behaviours.py::test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split` — currently xfail-strict pending Phase 5a; absorbed into the Phase 1d retirement of `test_doc56_phase0_behaviours.py`. Rewritten in Phase 5a against the runtime-backed `surprise_gauge` as a Tier 3 cross-consumer test or as a Tier 4 outside-in case; the doc-56 file is then deleted with its remaining six tests reassigned per the Phase 1d coverage table.
 - `test_funnel_contract.py::TestF4FModeMatchesPathProductOfPromotedMeans::test_f_median_matches_path_product_of_evidence_means` — revisit during Phase 5b. It must either be rewritten against the post-refactor `conversion_funnel` outside-in contract or retired in favour of the Phase 5b tests.
 - `test_selected_cohort_pop_d_distribution.py::test_per_source_day_forward_fill_preserves_monotonicity_under_sparse` and `test_selected_cohort_pop_d_distribution.py::test_m_select_construction_for_multi_hop_downstream_node` — revisit during Phases 2-3. They must be rewritten if their low-level M-select/Y-prefix assertions still express the shared-substrate contract after per-Cohort projection arrays and accessors are introduced; otherwise retire them with the replacement coverage named.
 - `graph-editor/e2e/shareLiveChart.spec.ts::live share (conserve-mass fixture) produces distinct scenario graphs + non-empty inbound-n (regression)` — revisit during Phase 5c (`bridge_view` migration). The assertion checks that the two scenarios on the analyze request differ on `edge.p.mean` for `switch-registered-to-switch-success` when visibility_mode is `'e'` vs `'f'`. That divergence relied on the pre-73q semantic where `p.mean` was overwritten from `p.evidence.mean` or `p.forecast.mean` according to visibility_mode. Under current semantics `p.mean` is the canonical blended value and is invariant across visibility modes; visibility-mode divergence now lives in display-layer projections only (funnel builders already consume it; bridge_view does not yet). When bridge_view is migrated to consume `p.evidence.*` / `p.forecast.*` directly, rewrite the test to assert on a display-level discriminator (e.g. ECharts series values on the bridge chart instance) rather than on the request-graph edge.
@@ -402,7 +453,9 @@ The plan as a whole must preserve these controls:
 
 The atom is complete when:
 
-- the phase 1 invariant suite is calibrated and committed;
+- the phase 1 invariant suite (Tier 4 outside-in) is calibrated and committed;
+- the three fast structural tiers (Tier 1 substrate algebra unit tests; Tier 2 substrate-builder integration tests; Tier 3 cross-consumer projection tests via shared substrate) are in place as separate test files, each running in its named cost envelope on CI, with the assertions listed in Phase 1c all green at each tier's landing phase;
+- `test_doc56_phase0_behaviours.py` is deleted, with each of its seven tests reassigned to its new home per the Phase 1d coverage table or deleted with explicit rationale; a static search shows no remaining references to the seven test names;
 - the substrate exposes per-Cohort draws, per-Cohort completeness, and a latency-band tau accessor;
 - the date reducer exists alongside the tau reducer over a single shared substrate-builder;
 - daily conversions in `api_handlers.py` derives forecast enrichment from the substrate plus date reducer, not from the trajectory engine;

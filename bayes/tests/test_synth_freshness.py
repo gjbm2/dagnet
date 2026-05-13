@@ -120,7 +120,7 @@ def _write_meta(graphs_dir: Path, name: str, meta: dict) -> Path:
 def _build_fresh_layout(tmp_path: Path, name: str = "test-graph", *,
                          window_hash: str = "hash-w",
                          cohort_hash: str = "hash-c"):
-    """Build a complete fresh v2 file layout in tmp_path.
+    """Build a complete fresh v3 file layout in tmp_path.
 
     Returns (graphs_dir, truth_path, graph_path, meta).
     """
@@ -143,10 +143,12 @@ def _build_fresh_layout(tmp_path: Path, name: str = "test-graph", *,
     evt_b_sha = _sha256((events_dir / "evt-b.yaml").read_bytes())
 
     meta = {
-        "schema_version": 2,
+        "schema_version": 3,
         "truth_sha256": truth_sha,
         "graph_sha256": graph_sha,
         "event_hashes": {"evt-a": evt_a_sha, "evt-b": evt_b_sha},
+        "context_file_hashes": {},
+        "empty_slices": [],
         "default_connection": "amplitude",
         "enriched": False,
         "enriched_at": None,
@@ -438,7 +440,7 @@ class TestContextSharingModel:
 class TestMetaSidecarV2:
     """save_synth_meta v2 schema completeness."""
 
-    def test_save_meta_records_all_v2_fields(self, tmp_path):
+    def test_save_meta_records_all_v3_fields(self, tmp_path):
         graphs_dir = tmp_path / "graphs"
         graphs_dir.mkdir()
         truth_path = _write_truth(graphs_dir, "g15")
@@ -460,7 +462,7 @@ class TestMetaSidecarV2:
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
 
-        assert meta["schema_version"] == 2
+        assert meta["schema_version"] == 3
         assert meta["truth_sha256"] == _sha256(truth_path.read_bytes())
         assert meta["graph_sha256"] == _sha256(graph_path.read_bytes())
         assert meta["event_hashes"] == {"evt-a": "abc123"}

@@ -120,23 +120,31 @@ function buildBayesianModelVarFromSlice(
   }
 
   let latencyBlock: any | undefined;
-  if (latProj && latProj.mu_mean != null) {
+  // Mirror bayesPatchService: latency block requires the model to have
+  // determined all three of μ, σ, onset. No fallbacks; if any is absent
+  // the model has not produced a usable latency surface.
+  if (latProj
+      && latProj.mu_mean != null
+      && latProj.sigma_mean != null
+      && latProj.onset_delta_days != null) {
     latencyBlock = {
       mu: latProj.mu_mean,
       sigma: latProj.sigma_mean,
-      t95: Math.exp(latProj.mu_mean + 1.645 * (latProj.sigma_mean ?? 0)) + (latProj.onset_delta_days ?? latProj.onset_mean ?? 0),
-      onset_delta_days: latProj.onset_delta_days ?? latProj.onset_mean ?? 0,
+      t95: Math.exp(latProj.mu_mean + 1.645 * latProj.sigma_mean) + latProj.onset_delta_days,
+      onset_delta_days: latProj.onset_delta_days,
     };
     if (latProj.mu_sd != null) latencyBlock.mu_sd = latProj.mu_sd;
     if (latProj.mu_sd_pred != null) latencyBlock.mu_sd_pred = latProj.mu_sd_pred;
     if (latProj.sigma_sd != null) latencyBlock.sigma_sd = latProj.sigma_sd;
     if (latProj.onset_sd != null) latencyBlock.onset_sd = latProj.onset_sd;
     if (latProj.onset_mu_corr != null) latencyBlock.onset_mu_corr = latProj.onset_mu_corr;
-    if (latProj.path_mu_mean != null) {
+    if (latProj.path_mu_mean != null
+        && latProj.path_sigma_mean != null
+        && latProj.path_onset_delta_days != null) {
       latencyBlock.path_mu = latProj.path_mu_mean;
       latencyBlock.path_sigma = latProj.path_sigma_mean;
-      latencyBlock.path_t95 = Math.exp(latProj.path_mu_mean + 1.645 * (latProj.path_sigma_mean ?? 0)) + (latProj.path_onset_delta_days ?? 0);
-      latencyBlock.path_onset_delta_days = latProj.path_onset_delta_days ?? 0;
+      latencyBlock.path_t95 = Math.exp(latProj.path_mu_mean + 1.645 * latProj.path_sigma_mean) + latProj.path_onset_delta_days;
+      latencyBlock.path_onset_delta_days = latProj.path_onset_delta_days;
       if (latProj.path_mu_sd != null) latencyBlock.path_mu_sd = latProj.path_mu_sd;
       if (latProj.path_mu_sd_pred != null) latencyBlock.path_mu_sd_pred = latProj.path_mu_sd_pred;
       if (latProj.path_sigma_sd != null) latencyBlock.path_sigma_sd = latProj.path_sigma_sd;
@@ -248,7 +256,7 @@ function buildBayesianModelVarFromSlice(
  * via `resolveAsatPosterior` first; if no fit exists on or before the
  * asat date, the projection is cleared (strict, no fallback).
  */
-function contextProbabilityBlock(
+export function contextProbabilityBlock(
   pBlock: any,
   parameterFile: any,
   effectiveDsl: string,

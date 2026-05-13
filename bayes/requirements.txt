@@ -14,3 +14,10 @@ jax[cpu]>=0.4.30  # nutpie jax backend (jax_backend feature flag)
 requests>=2.32
 pyyaml>=6.0
 psycopg2-binary>=2.9
+
+# Pulled in transitively by the bayes→runner import chain
+# (bayes/compiler/evidence.py → runner.evidence_adapters → runner/__init__.py
+# → analyzer.py imports networkx; downstream types use pydantic).
+# Required on the Modal worker image, which only installs from this file.
+networkx>=3.2
+pydantic>=2.0.0

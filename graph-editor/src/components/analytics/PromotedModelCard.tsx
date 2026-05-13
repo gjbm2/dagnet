@@ -128,8 +128,8 @@ export function PromotedModelCard({ probability, latency, t95, pathT95, theme = 
   const Value = ({ children }: { children: string }) => (
     <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>{children}</span>
   );
-  const Row = ({ label, value, term }: { label: string; value: string; term?: string }) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, lineHeight: '17px' }}>
+  const Row = ({ label, value, term, testId }: { label: string; value: string; term?: string; testId?: string }) => (
+    <div data-testid={testId} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, lineHeight: '17px' }}>
       <Label>{term ? <GlossaryTooltip term={term}>{label}</GlossaryTooltip> : label}</Label>
       <Value>{value}</Value>
     </div>
@@ -155,14 +155,14 @@ export function PromotedModelCard({ probability, latency, t95, pathT95, theme = 
 
   const edgeProbRows = hasEdgeP ? (
     <>
-      <Row label="p" term="probability" value={`${fmtPct(edgePMean)} ± ${fmtPct(edgePSd)}`} />
+      <Row testId="pmcard-edge-p" label="p" term="probability" value={`${fmtPct(edgePMean)} ± ${fmtPct(edgePSd)}`} />
       {edgeHdiLo != null && <Row label="HDI" term="hdi" value={`${fmtPct(edgeHdiLo)} — ${fmtPct(edgeHdiHi)}`} />}
     </>
   ) : null;
 
   const pathProbRows = hasPathP ? (
     <>
-      <Row label="p" term="probability" value={`${fmtPct(pathPMean)} ± ${fmtPct(pathPSd)}`} />
+      <Row testId="pmcard-path-p" label="p" term="probability" value={`${fmtPct(pathPMean)} ± ${fmtPct(pathPSd)}`} />
       {pathHdiLo != null && <Row label="HDI" term="hdi" value={`${fmtPct(pathHdiLo)} — ${fmtPct(pathHdiHi)}`} />}
     </>
   ) : null;
@@ -173,10 +173,12 @@ export function PromotedModelCard({ probability, latency, t95, pathT95, theme = 
   // fit_diagnostics. Same gating rationale as the probability HDI above.
   const edgeLatRows = hasEdgeLat ? (
     <>
-      <Row label="onset" term="onset" value={`${fmt(lat!.onset_delta_days ?? lat!.onset_mean, 1)}d${lat!.onset_sd != null ? ` ± ${fmt(lat!.onset_sd, 1)}d` : ''}`} />
+      {lat!.onset_delta_days != null && (
+        <Row testId="pmcard-edge-onset" label="onset" term="onset" value={`${fmt(lat!.onset_delta_days, 1)}d${lat!.onset_sd != null ? ` ± ${fmt(lat!.onset_sd, 1)}d` : ''}`} />
+      )}
       {isBayesian && lat!.onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.onset_hdi_lower, 1)}d — ${fmt(lat!.onset_hdi_upper, 1)}d`} />}
-      <Row label="μ" term="mu" value={`${fmt(lat!.mu_mean, 3)} ± ${fmt(lat!.mu_sd, 3)}`} />
-      <Row label="σ" term="sigma" value={`${fmt(lat!.sigma_mean, 3)} ± ${fmt(lat!.sigma_sd, 3)}`} />
+      <Row testId="pmcard-edge-mu" label="μ" term="mu" value={`${fmt(lat!.mu_mean, 3)} ± ${fmt(lat!.mu_sd, 3)}`} />
+      <Row testId="pmcard-edge-sigma" label="σ" term="sigma" value={`${fmt(lat!.sigma_mean, 3)} ± ${fmt(lat!.sigma_sd, 3)}`} />
       {isBayesian && lat!.hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt(lat!.hdi_t95_lower, 1)}d — ${fmt(lat!.hdi_t95_upper, 1)}d`} />}
       {lat!.onset_mu_corr != null && <Row label="onset↔μ" term="onset-mu-corr" value={fmt(lat!.onset_mu_corr, 3)} />}
     </>
@@ -184,10 +186,10 @@ export function PromotedModelCard({ probability, latency, t95, pathT95, theme = 
 
   const pathLatRows = hasPathLat ? (
     <>
-      <Row label="onset" term="onset" value={`${fmt(lat!.path_onset_delta_days, 1)}d${lat!.path_onset_sd != null ? ` ± ${fmt(lat!.path_onset_sd, 1)}d` : ''}`} />
+      <Row testId="pmcard-path-onset" label="onset" term="onset" value={`${fmt(lat!.path_onset_delta_days, 1)}d${lat!.path_onset_sd != null ? ` ± ${fmt(lat!.path_onset_sd, 1)}d` : ''}`} />
       {isBayesian && lat!.path_onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.path_onset_hdi_lower, 1)}d — ${fmt(lat!.path_onset_hdi_upper, 1)}d`} />}
-      <Row label="μ" term="mu" value={`${fmt(lat!.path_mu_mean, 3)} ± ${fmt(lat!.path_mu_sd, 3)}`} />
-      <Row label="σ" term="sigma" value={`${fmt(lat!.path_sigma_mean, 3)} ± ${fmt(lat!.path_sigma_sd, 3)}`} />
+      <Row testId="pmcard-path-mu" label="μ" term="mu" value={`${fmt(lat!.path_mu_mean, 3)} ± ${fmt(lat!.path_mu_sd, 3)}`} />
+      <Row testId="pmcard-path-sigma" label="σ" term="sigma" value={`${fmt(lat!.path_sigma_mean, 3)} ± ${fmt(lat!.path_sigma_sd, 3)}`} />
       {isBayesian && (lat as any)?.path_hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt((lat as any).path_hdi_t95_lower, 1)}d — ${fmt((lat as any).path_hdi_t95_upper, 1)}d`} />}
       {(lat as any)?.path_onset_mu_corr != null && <Row label="onset↔μ" term="onset-mu-corr" value={fmt((lat as any).path_onset_mu_corr, 3)} />}
     </>
@@ -204,13 +206,6 @@ export function PromotedModelCard({ probability, latency, t95, pathT95, theme = 
       ))}
     </div>
   ) : null;
-
-  // Path-curve scalar fallback: when path latency exists but no cohort Beta
-  // (analytic source produces a single rate, not separate window/cohort fits),
-  // use the edge probability for the path curve so the chart still draws both
-  // CDFs side-by-side. Mirrors the per-source ModelCard's behaviour.
-  const chartPathP = pathPMean ?? (hasPathLat ? edgePMean : null);
-  const chartPathPSd = pathPSd ?? (hasPathLat ? edgePSd : null);
 
   // ── Single responsive layout: flex-wrap gives two columns when wide, stacks when narrow ──
   return (
@@ -269,11 +264,11 @@ export function PromotedModelCard({ probability, latency, t95, pathT95, theme = 
         </div>
       )}
       <ModelRateChart
-        edgeP={edgePMean} edgeMu={lat?.mu_mean} edgeSigma={lat?.sigma_mean} edgeOnset={lat?.onset_delta_days ?? lat?.onset_mean}
+        edgeP={edgePMean} edgeMu={lat?.mu_mean} edgeSigma={lat?.sigma_mean} edgeOnset={lat?.onset_delta_days}
         edgePSd={edgePSd} edgeMuSd={lat?.mu_sd} edgeSigmaSd={lat?.sigma_sd} edgeOnsetSd={lat?.onset_sd}
         edgeOnsetMuCorr={lat?.onset_mu_corr} edgeT95={t95}
-        pathP={chartPathP} pathMu={lat?.path_mu_mean} pathSigma={lat?.path_sigma_mean} pathOnset={lat?.path_onset_delta_days}
-        pathPSd={chartPathPSd} pathMuSd={lat?.path_mu_sd} pathSigmaSd={lat?.path_sigma_sd} pathOnsetSd={lat?.path_onset_sd}
+        pathP={pathPMean} pathMu={lat?.path_mu_mean} pathSigma={lat?.path_sigma_mean} pathOnset={lat?.path_onset_delta_days}
+        pathPSd={pathPSd} pathMuSd={lat?.path_mu_sd} pathSigmaSd={lat?.path_sigma_sd} pathOnsetSd={lat?.path_onset_sd}
         pathOnsetMuCorr={(lat as any)?.path_onset_mu_corr} pathT95={pathT95}
       />
     </div>
@@ -292,7 +287,7 @@ export function PromotedModelCard({ probability, latency, t95, pathT95, theme = 
 function PromotedSourceHeader({ source }: { source?: 'bayesian' | 'analytic' }) {
   const label = source === 'bayesian' ? 'Bayesian' : source === 'analytic' ? 'Analytic' : 'No source promoted';
   return (
-    <div style={{
+    <div data-testid="pmcard-source-header" style={{
       display: 'flex', alignItems: 'baseline', gap: 6,
       padding: '0 0 4px', marginBottom: 2,
       fontSize: 10, color: 'var(--text-muted, #999)',
@@ -479,9 +474,9 @@ function bandPolygon(name: string, ages: number[], upper: number[], lower: numbe
  */
 export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRateChartProps) {
   const hasEdge = props.edgeP != null;
-  const hasEdgeLat = hasEdge && props.edgeMu != null && props.edgeSigma != null;
+  const hasEdgeLat = hasEdge && props.edgeMu != null && props.edgeSigma != null && props.edgeOnset != null;
   const hasPath = props.pathP != null;
-  const hasPathLat = hasPath && props.pathMu != null && props.pathSigma != null;
+  const hasPathLat = hasPath && props.pathMu != null && props.pathSigma != null && props.pathOnset != null;
   if (!hasEdge && !hasPath) return null;
 
   const option = useMemo(() => {
@@ -495,7 +490,7 @@ export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRat
     if (hasEdge) {
       const ep = props.edgeP!;
       if (hasEdgeLat) {
-        const emu = props.edgeMu!; const esig = props.edgeSigma!; const eon = props.edgeOnset ?? 0;
+        const emu = props.edgeMu!; const esig = props.edgeSigma!; const eon = props.edgeOnset!;
         const bands = computeBands(ages, ep, emu, esig, eon,
           props.edgePSd ?? 0, props.edgeMuSd ?? 0, props.edgeSigmaSd ?? 0, props.edgeOnsetSd ?? 0,
           props.edgeOnsetMuCorr ?? 0);
@@ -525,7 +520,7 @@ export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRat
     if (hasPath) {
       const pp = props.pathP!;
       if (hasPathLat) {
-        const pmu = props.pathMu!; const psig = props.pathSigma!; const pon = props.pathOnset ?? 0;
+        const pmu = props.pathMu!; const psig = props.pathSigma!; const pon = props.pathOnset!;
         const bands = computeBands(ages, pp, pmu, psig, pon,
           props.pathPSd ?? 0, props.pathMuSd ?? 0, props.pathSigmaSd ?? 0, props.pathOnsetSd ?? 0,
           props.pathOnsetMuCorr ?? 0);

@@ -13,7 +13,7 @@ This is the chart-evidence engine for `cohort_maturity_v3` and the row surface t
 
 **Defensive coding inside the engine is dangerous and must be avoided.** No `or 0.0`, no `np.clip`, no `try/except: pass`, no `if x is None: return`, no `max(0.0, ...)` clamps on residuals, no schema case-forks (`y` vs `Y`, `str` vs `date`). All defence lives at the perimeter ([INVARIANTS.md](INVARIANTS.md) I-47).
 
-**Branching by case is the recurring failure mode** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58). The row pipeline carries the worst of it — 20+ `if is_identity_carrier:` branches plus a separate `_synthesize_identity_carrier_observed_surface` helper (audit H-5). These are **debt to be retired gradually**, not precedent. Identity carrier is **data**, not a route — `composed_carrier = None`, reach=1, CDF=Dirac(0) — and the design target is one code path that degenerates algebraically.
+**Branching by case is the recurring failure mode** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58). The row pipeline carries the worst of it — ~10 `if identity_carrier:` branches in the selected-Cohort reducer (audit H-5, partially retired May 2026 when the `_synthesize_identity_carrier_observed_surface` parallel pipeline was folded into the unified `_build_observed_span_evidence_surface` as a zero-edge degeneracy). These remaining branches are **debt to be retired gradually**, not precedent. Identity carrier is **data**, not a route — `composed_carrier = None`, reach=1, CDF=Dirac(0) — and the design target is one code path that degenerates algebraically.
 
 **The maintainer constantly polices these patterns and will revert new instances.** If existing code in this file seems to justify a fallback or a case-fork ("look, the surrounding code already does it"), you are looking at exactly the debt that's being retired. Match the substrate's discipline. The 21 findings in [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) — H-1 monotone-repair clamp at `:3587`, H-4 residual floor at `:5347`, H-5 pervasive identity-carrier branching, M-1 try/except swallows around `runtime.selected_y_prefix` — are all on the remediation list. None are precedent.
 
@@ -72,8 +72,11 @@ Identity-carrier mode (`population_root == denominator_node` — i.e. `window()`
 
 **Known structural debt against this unified model** (`docs/current/cohort-maturity-evidence-coverage-design.md`, [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) H-5):
 
-- `_synthesize_identity_carrier_observed_surface` (`cohort_forecast_v3.py:3996`) is still a parallel pipeline for the carrier observed surface when `is_identity_carrier`. The target factoring is a single `_build_observed_span_evidence_surface` call that degenerates to "source from the X-rooted subject primitive's row metadata" when `root_node == end_node` (zero-edge topology). Until that lands, the layer-5 carrier surface follows two code paths.
 - The reducer (`_selected_cohort_group_rate_draws`) still has ~10 `if identity_carrier:` branches for Pop D / Pop C arithmetic. These compute correct degenerate values but are case-forks against the AP58 contract; the target factoring expresses them as `composed_carrier=None ⇒ identity reach=1, Dirac arrival` flowing through one formula.
+
+**Recently retired** (May 2026):
+
+- `_synthesize_identity_carrier_observed_surface` parallel pipeline. Folded into `_build_observed_span_evidence_surface` as a zero-edge degeneracy: when `root_node == end_node`, the unified function dispatches to `_build_zero_edge_observed_surface`, which reads `n_weighted` off the primitive rooted at the node. This still has an internal "topology empty?" clause that selects between reading `n_weighted` from the X-rooted primitive vs accumulating `k_weighted` through chain max-flow. Collapsing that final clause requires a design decision about how the carrier observed surface should encode chain-side coverage gaps in active mode (the two readings diverge under incomplete observations).
 
 ### 1a. Data flow vs call order
 
