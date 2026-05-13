@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.3b
+**Released:** 13-May-26
+
+All tests now passing
+
+---
+
 ## Version 2.1.2b
 **Released:** 13-May-26
 
