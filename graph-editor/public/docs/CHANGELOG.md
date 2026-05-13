@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.2b
+**Released:** 13-May-26
+
+Further consolidations of CF; fixed nightly run
+
+---
+
 ## Version 2.1.1b
 **Released:** 12-May-26
 
