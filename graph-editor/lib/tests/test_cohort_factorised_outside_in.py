@@ -1405,6 +1405,88 @@ def test_a_equals_x_identity_collapses_to_window():
 @requires_db
 @requires_data_repo
 @requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_a_equals_x_provenance_uses_unified_path_not_rescue():
+    """End-to-end AP59 gate: `cohort(A=X)` must wire selected-evidence via the
+    unified path, not the reducer's legacy-rescue branch.
+
+    The audit recorded in ``docs/current/cohort-maturity-atom-3-plan.md`` §1
+    showed that the prior closure-gate test
+    (``test_end_to_end_parity_window_vs_cohort_a_equals_x_row_dicts``) does
+    not exercise the production wiring; it pre-populates
+    ``runtime.selected_source_day_mass`` / ``runtime.selected_x_prefix`` and
+    bypasses ``_root_window_carrier_n_by_anchor_day``. That test cannot
+    detect the AP59 silent rescue at
+    ``cohort_forecast_v3.py:4796-4801``.
+
+    This test drives ``_run_analyse_v3`` for both equivalent ``window(X→end)``
+    and ``cohort(A=X, X→end)`` queries and asserts:
+
+    1. The selected-evidence diagnostics report ``refusal`` absent (the
+       builder succeeded for every selected cohort).
+    2. Every per-cohort reducer diagnostic carries ``from_selected: true``,
+       i.e. the unified prefix path fired and the legacy
+       ``engine_cohort.obs_x/obs_y`` rescue did NOT.
+    3. The window and cohort(A=X) modes both pass these checks identically.
+
+    Per the atom-3 plan §6a baseline (12-May-26), this test is expected to
+    pass on ``synth-simple-abc`` because its X-rooted edge evidence superset
+    contains a WINDOW-family row that incidentally satisfies the
+    slice-family filter at ``cohort_forecast_v3.py:1799``. The test exists
+    to install the invariant-12 guard: any future regression that re-routes
+    ``cohort(A=X)`` through the rescue branch — for instance by tightening
+    the filter or by mis-classifying candidates — must fail here.
+    """
+    window = _run_analyse_v3(
+        _SIMPLE, f"{_SIMPLE_AB}.window(29-Jan-26:29-Apr-26)",
+        diagnostic=True,
+    )
+    cohort = _run_analyse_v3(
+        _SIMPLE, f"{_SIMPLE_AB}.cohort(29-Jan-26:29-Apr-26)",
+        diagnostic=True,
+    )
+
+    def _assert_unified(payload: dict[str, Any], mode: str) -> None:
+        diag = payload.get("_diagnostics") or {}
+        sel_proj = diag.get("selected_cohort_projection")
+        assert isinstance(sel_proj, dict), (
+            f"[{mode}] missing _diagnostics.selected_cohort_projection "
+            f"in analyse response; diag keys={list(diag.keys())!r}"
+        )
+
+        # Builder must not have refused: the post-build refusal token is
+        # absent on the success path, and the unified path must have been
+        # the one that emitted the projection. Identity-carrier mode is
+        # the signal: identity_carrier=True for cohort(A=X) and the
+        # equivalent window query.
+        cohorts = sel_proj.get("cohorts") or []
+        assert cohorts, (
+            f"[{mode}] selected_cohort_projection.cohorts empty; "
+            f"selected-evidence builder produced no per-cohort projection. "
+            f"This is an AP59-shaped refusal: the builder gave up and "
+            f"the reducer would silently rescue via engine_cohort.obs_x/"
+            f"obs_y at cohort_forecast_v3.py:4796-4801."
+        )
+        bad = [
+            (i, c) for i, c in enumerate(cohorts)
+            if not c.get("skipped") and c.get("from_selected") is not True
+        ]
+        assert not bad, (
+            f"[{mode}] every non-skipped cohort must carry "
+            f"from_selected=True (unified-path provenance). Cohorts that "
+            f"failed: {bad!r}. from_selected=False means the reducer "
+            f"reached its legacy rescue branch — AP59 (invariant 12 "
+            f"violation: failures must degrade visibly, not fall back "
+            f"silently to frame-derived obs_x/obs_y)."
+        )
+
+    _assert_unified(window, mode="window")
+    _assert_unified(cohort, mode="cohort(A=X)")
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
 @requires_synth(_FANOUT, enriched=True)
 @pytest.mark.parametrize("subject_dsl", (_FANOUT_FAST, _FANOUT_SLOW))
 def test_single_hop_non_latent_upstream_collapses_to_window(subject_dsl: str):

@@ -318,7 +318,6 @@ def test_active_row_emits_evidence_for_covered_day_with_zero_numerator():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[2],
@@ -393,7 +392,6 @@ def test_active_row_emits_evidence_for_covered_day_with_zero_denominator():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[2],
@@ -519,7 +517,6 @@ def test_active_row_emits_evidence_x_through_epoch_b():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[2],
@@ -584,7 +581,6 @@ def test_seam_rate_equals_seam_midpoint_via_observed_prefix_coupling():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[2],
@@ -631,7 +627,6 @@ def test_no_observed_prefix_means_no_coupling_and_no_evidence():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[0],
@@ -707,7 +702,6 @@ def test_evidence_rate_never_exceeds_midpoint_in_epoch_a():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[3],
@@ -780,7 +774,6 @@ def test_evidence_rate_never_exceeds_midpoint_at_any_tau():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[3],
@@ -869,7 +862,6 @@ def test_coverage_is_one_in_epoch_a_with_dense_daily_snapshots():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[2],
@@ -952,7 +944,6 @@ def test_coverage_decays_smoothly_as_cohorts_age_past_last_snapshot():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=cohorts,
         cohort_list=[
             {'anchor_day': '2026-03-01'},
@@ -1035,7 +1026,6 @@ def test_coverage_is_fractional_under_partial_share_placement():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[2],
@@ -1244,7 +1234,6 @@ def test_carrier_and_subject_coverage_vary_independently():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[2],

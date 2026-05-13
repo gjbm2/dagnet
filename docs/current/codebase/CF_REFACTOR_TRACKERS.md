@@ -85,6 +85,28 @@ The post-73n test audit and batch-pipeline retirement plan. Not active-design �
 
 ---
 
+## Promotion status
+
+Each tracker is in one of three states. Trackers in **ready-to-promote** carry stable invariants that can be absorbed into a codebase doc; the tracker itself can then be archived to `docs/archive/`. **Near-ready** trackers have stable core decisions but one or two open follow-ups; they should be reviewed for partial promotion (absorb the stable §s, keep the tracker for the open parts). **Active** trackers must stay.
+
+| Tracker | Status | Promotion target / open items |
+|---|---|---|
+| `cf-defensive-coding-audit.md` | Active | None of H-1…H-7 remediated; the audit is the live source of [`CF_DEFENSIVE_FINDINGS.md`](CF_DEFENSIVE_FINDINGS.md). Stays. |
+| `cohort-1apr-falling-k-problem-statement.md` | Active | F-1 unification still open; §A.1 / §A.3 / §A.4 / §A.6 widely cited by code. Stays until F-1 lands; then absorb §A invariants into [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) §2/§3. |
+| `cohort-maturity-evidence-coverage-design.md` | **Ready to promote** | Design stable; three-state cell contract and coverage formula are referenced inline from [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) §5. Absorb into that doc and archive tracker. |
+| `selected-a-clock-retrieval-frontier-provenance-proposal.md` | Near-ready | Strict support invariants implemented; "fallback for malformed inputs" still being refined. Absorb the invariant section into [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) §2.4 / [`INVARIANTS.md`](INVARIANTS.md); keep tracker for the open follow-up. |
+| `snapshot-fetch-envelope-design.md` | **Ready to promote** | Best-converged tracker; cited from runtime, preparation, and `FORECAST_PREPARATION.md`. Promote to `docs/current/codebase/SNAPSHOT_FETCH_ENVELOPE.md` (or absorb into [`FORECAST_PREPARATION.md`](FORECAST_PREPARATION.md) §5 — the design is already summarised there). |
+| `cohort-outside-in-post-73n-regression-tracker.md` | Active (forensic) | AP60 fixture engineering still underway. Forensic narrative form must be preserved — do not promote. Cited from row pipeline (midpoint shift, curvature correction). |
+| `cohort-maturity-selected-cohort-projection-pattern.md` | Near-ready | Phase 3 admission rule implemented; Atom 3 (retire residual `engine_cohorts` responsibilities) still open. Absorb Phase 3 rule into [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) §7; keep tracker for Atom 3. |
+| `cohort-maturity-selected-a-clock-evidence-clock-adapter-plan.md` | **Ready to promote** | "The design landed." Cited from [`FORECAST_RUNTIME_ARCHITECTURE.md`](FORECAST_RUNTIME_ARCHITECTURE.md) §5. Absorb the carrier-backmap algebra into that section and archive. |
+| `post-cf-rebuild-batch-pipeline.md` / `post-cf-rebuild-py-test-audit-7-may-26.md` | Historical | Already a record, not a working tracker. Move to `docs/archive/` when convenient; nothing actively cites them by `§`-number. |
+
+**Net**: three trackers are ready to promote, two near-ready, three stay active, two are archivable. The codebase docs they would absorb into already exist; promotion is a copy-edit pass plus archive move, not new doc creation.
+
+Promotion criterion (per [`DOCUMENTATION_STRUCTURE.md`](DOCUMENTATION_STRUCTURE.md)): the content describes a now-stable invariant that an agent would navigate to as "what is true", not "how we got here". Tracker prose that retains forensic shape (the regression tracker; the audit) cannot be promoted without losing what makes it useful.
+
+---
+
 ## How the trackers cross-cite
 
 The trackers reference each other via shorthand. A few common ones:

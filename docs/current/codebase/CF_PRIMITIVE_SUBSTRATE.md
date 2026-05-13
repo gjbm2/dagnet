@@ -3,6 +3,8 @@
 **Status**: Active reference, 12-May-26
 **Scope**: the per-request primitive substrate that underlies the v3 conditioned-forecast runtime — contract types, evidence binding, the single conditioning locus, span composition, role-labelled readout. Companion to [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) (which describes the runtime that consumes the substrate) and [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) (which gives the semantic contract).
 
+> New to the CF cluster? Read [CF_MAP.md](CF_MAP.md) first for orientation and the canonical reading order.
+
 This doc is the entry point an agent needs to read **before** opening `primitives.py`, `primitive_evidence.py`, `primitive_conditioning.py`, `subject_span_composer.py`, or `primitive_readout.py`. Without it the modules look like a 5,000-line dataclass party.
 
 ---
@@ -20,6 +22,8 @@ When in doubt: **let it raise, let it propagate as NaN, let composition refuse**
 ---
 
 ## 1. The five layers
+
+> **Call order within a request**: the five substrate layers below describe a *data flow*. They are invoked together inside `build_resolved_cf_runtime` (Layer 5's `compute_resolved_runtime_readout` orchestrates Layers 2–4). Stage A as a whole sits **after** row layer 1 (frame evidence) and **before** row layers 2–8 (dual-prefix construction, reducer, projection). The full call order through the public entry is documented in [CF_ROW_PIPELINE.md §1a](CF_ROW_PIPELINE.md#1a-data-flow-vs-call-order).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐

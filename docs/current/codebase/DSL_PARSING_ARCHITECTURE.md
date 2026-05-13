@@ -1,8 +1,10 @@
 # DSL Parsing Architecture
 
-**Single Source of Truth**: All DSL parsing flows through `queryDSL.ts`
+**Scope**: this doc covers both the **FE TypeScript** parser cluster (`queryDSL.ts`, `dslExplosion.ts`, `compositeQueryParser.ts`) and the **BE Python** parser plus auxiliary extractors (`query_dsl.py`, `analysis_subject_resolution.py`, `forecast_preparation.py`).
 
-## Core Modules
+The FE side has a single parser: `queryDSL.ts` is the only place that handles `context()`, `window()`, `visited()`, etc. on the frontend. The BE side has a formal parser (`query_dsl.py`) that handles **most** of the grammar but **not `cohort()`**; cohort-mode requests are extracted from the raw DSL string via auxiliary regex helpers. The "single source of truth" property is per-side, not global.
+
+## Core Modules (FE)
 
 ### 1. `queryDSL.ts` - Atomic Expression Parser
 **Purpose**: Parse individual constraint expressions (no compound operators)
@@ -63,6 +65,40 @@
 
 ---
 
+## Core Modules (BE — Python)
+
+### 4. `query_dsl.py` — Formal Grammar Parser (BE)
+
+**Purpose**: Parse query DSL into a typed `ParsedQuery` dataclass on the backend.
+
+**Functions**:
+- `parse_query(dsl) → ParsedQuery` — full parse: from/to, visited, exclude, context, contextAny, window, case, asat
+- Schema authority: `graph-editor/public/schemas/query-dsl-1.0.0.json`
+
+**Handles**: from, to, visited, visitedAny, exclude, context, contextAny, window, case, minus, plus, asat.
+
+**Does NOT Handle**: `cohort()` — the cohort clause is parsed by the auxiliary extractors below. This is the root reason for the auxiliary helpers in §5; consolidating `cohort()` into `query_dsl.py` is the long-term clean-up.
+
+**Used By**: `analysis_subject_resolution.py`, the runner cluster broadly, anything that needs `ParsedQuery` fields.
+
+---
+
+### 5. Auxiliary BE Extractors (regex-based)
+
+Because `query_dsl.py` does not parse `cohort()`, three auxiliary helpers extract cohort-clause fields by regex on the raw DSL string. Each has a single concern:
+
+| Helper | Location | Extracts |
+|---|---|---|
+| `_extract_temporal_mode(query_dsl)` | [`analysis_subject_resolution.py:398`](../../graph-editor/lib/analysis_subject_resolution.py#L398) | Returns `'cohort'` / `'window'` / `None` by string presence |
+| `_extract_time_bounds(query_dsl)` | [`analysis_subject_resolution.py:474`](../../graph-editor/lib/analysis_subject_resolution.py#L474) | Returns `(anchor_from, anchor_to)` as ISO date strings. Regex handles both `window(start:end)` and `cohort([anchor,]start:end)` — the optional anchor prefix is the AP31 defect site (see Pitfalls below). |
+| `_extract_cohort_anchor_node(query_dsl)` | [`forecast_preparation.py:245`](../../graph-editor/lib/runner/forecast_preparation.py#L245) | Returns the anchor node id from `cohort(anchor,start:end)`, or `None`. Separate concern from `_extract_time_bounds` (anchor vs dates). |
+
+These are **not duplicates of each other** — they have distinct outputs. They are duplicate **with the formal parser's responsibility**: each one would disappear if `query_dsl.py` parsed `cohort()`. Until then, add new cohort extractors here (not elsewhere) and keep them adjacent so the redundancy stays visible.
+
+**Used By**: `analysis_subject_resolution.resolve_analysis_subjects`, `forecast_preparation.resolve_forecast_subjects`, ultimately the CF preparation layer (see [`FORECAST_PREPARATION.md`](FORECAST_PREPARATION.md) §2.4).
+
+---
+
 ## Architecture Principles
 
 1. **Single Parser for Constraints**: `parseConstraints()` is the ONLY place that parses context, window, visited, etc.
@@ -73,10 +109,12 @@
 
 3. **Normalized Output**: All paths use `normalizeConstraintString()` for canonical form
 
-4. **No Duplication**:
+4. **No Duplication (FE)**:
    - Don't write regex for context() parsing outside queryDSL.ts
    - Don't parse window() outside queryDSL.ts
    - Call parseConstraints() if you need to extract constraints
+
+5. **BE additions must go via the formal parser** (`query_dsl.py`) where possible. New cohort-clause fields belong in the §5 auxiliary helpers only until `cohort()` is promoted into `query_dsl.py`; consolidating there closes the §5 redundancy.
 
 ## Usage Examples
 
@@ -120,6 +158,8 @@ When adding new constraint types:
 **Root cause**: `cohort(anchor,start:end)` has an optional anchor-node prefix before the date range. A regex like `cohort\(([^:]*):([^)]*)\)` captures `anchor,start-date` as group 1. `_resolve_date('anchor,12-Dec-25')` fails all date-format checks and falls through to `today.isoformat()`.
 
 **Fix**: make the anchor prefix optional in the regex: `cohort\((?:[^,)]*,)?([^:,]*):([^)]*)\)`. Test with both `cohort(start:end)` and `cohort(anchor,start:end)` forms. Check the grammar in `DSL_SYNTAX_REFERENCE.md` before writing DSL regexes.
+
+**Current state**: `_extract_time_bounds` ([`analysis_subject_resolution.py:474`](../../graph-editor/lib/analysis_subject_resolution.py#L474)) implements the fixed regex. AP31 is closed there, but the broader anti-pattern (writing a regex for a DSL clause that the formal parser doesn't own) is the recurring failure mode — the auxiliary helpers in §5 are all candidates for the same defect when their regexes are widened. Promotion of `cohort()` into `query_dsl.py` retires the whole class.
 
 ## Related Docs
 

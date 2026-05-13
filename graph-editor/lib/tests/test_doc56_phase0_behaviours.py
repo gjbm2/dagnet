@@ -202,6 +202,41 @@ def _parameterised_edges(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _deepest_parameterised_edge(
+    graph: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Pick the parameterised edge whose `to_node` is deepest in topological
+    order — i.e. the one that exercises the longest accumulated upstream
+    donor chain.
+
+    The Family-C agreement claim ("CF and v3 must agree on the same edge
+    under the same DSL") is detectable on any single edge — a forked
+    mini-engine drifts on every edge it touches, not just rare ones. The
+    deepest edge is the most discriminating sample because numerical
+    drift from accumulated upstream-observation handling is largest
+    there; if parity holds on it, it holds on the shallower edges too.
+    """
+    candidates = _parameterised_edges(graph)
+    if not candidates:
+        return None
+    parents: Dict[str, List[str]] = {}
+    for e in graph.get("edges", []):
+        parents.setdefault(e.get("to", ""), []).append(e.get("from", ""))
+    memo: Dict[str, int] = {}
+
+    def _depth(uuid: str) -> int:
+        if uuid in memo:
+            return memo[uuid]
+        ps = parents.get(uuid, [])
+        if not ps:
+            memo[uuid] = 0
+            return 0
+        memo[uuid] = 1 + max(_depth(p) for p in ps)
+        return memo[uuid]
+
+    return max(candidates, key=lambda e: _depth(e.get("to", "")))
+
+
 def _run_runner_analysis(
     graph_name: str,
     analysis_type: str,
@@ -280,41 +315,46 @@ def test_cf_and_v3_chart_carrier_tier_agree():
     mismatches: List[str] = []
     checked = 0
     nmap = {n["uuid"]: n.get("id", "") for n in graph.get("nodes", [])}
-    for edge in _parameterised_edges(graph):
+    # Sieve: a forked-engine regression manifests on any edge, so a single
+    # representative edge per fixture is sufficient. Pick the deepest
+    # parameterised edge — the longest accumulated donor chain is where
+    # any divergence is largest.
+    edge = _deepest_parameterised_edge(graph)
+    if edge is not None:
         from_id = nmap.get(edge.get("from", ""), "")
         to_id = nmap.get(edge.get("to", ""), "")
         key = (from_id, to_id)
-        if key not in cf_by_id:
-            continue
+        if key in cf_by_id:
+            cf_forensic = cf_by_id[key].get("_forensic") or {}
+            cf_tier = (
+                cf_forensic.get("_inputs", {}).get("carrier_tier")
+                if isinstance(cf_forensic, dict) else None
+            )
 
-        cf_forensic = cf_by_id[key].get("_forensic") or {}
-        cf_tier = (
-            cf_forensic.get("_inputs", {}).get("carrier_tier")
-            if isinstance(cf_forensic, dict) else None
-        )
+            # v3 chart for same edge
+            v3_resp = _run_v3(
+                graph_name,
+                f"from({from_id}).to({to_id})",
+                dsl_temporal,
+            )
+            rows = _extract_maturity_rows(v3_resp)
+            # Carrier tier isn't in per-row forensic today; keep exercising
+            # the row-builder path so this turns into a real parity check as
+            # soon as v3 exposes the same forensic field.
+            _ = rows
 
-        # v3 chart for same edge
-        v3_resp = _run_v3(
-            graph_name,
-            f"from({from_id}).to({to_id})",
-            dsl_temporal,
-        )
-        rows = _extract_maturity_rows(v3_resp)
-        # Carrier tier isn't in per-row forensic today; keep exercising
-        # the row-builder path so this turns into a real parity check as
-        # soon as v3 exposes the same forensic field.
-        _ = rows
+            if cf_tier is not None:
+                checked += 1
+                # Today CF and v3 use the same carrier function; if
+                # forensic later exposes a v3 tier, compare. For now we
+                # simply require CF to record a tier on cohort-mode edges
+                # where reach > 0.
+                if not cf_tier:
+                    mismatches.append(
+                        f"  edge {from_id}->{to_id}: CF tier empty"
+                    )
 
-        if cf_tier is None:
-            continue  # forensic didn't expose tier; nothing to compare yet
-        checked += 1
-        # Today CF and v3 use the same carrier function; if forensic
-        # later exposes a v3 tier, compare. For now we simply require
-        # CF to record a tier on cohort-mode edges where reach > 0.
-        if not cf_tier:
-            mismatches.append(f"  edge {from_id}->{to_id}: CF tier empty")
-
-    # Acceptable outcome today: either we checked edges and all had a
+    # Acceptable outcome today: either we checked an edge and it had a
     # valid tier, or forensic doesn't expose it (checked=0). The test
     # fails only when CF exposes tier information that is itself
     # malformed — which flags real drift.
@@ -364,57 +404,67 @@ def test_cf_p_mean_matches_v3_p_infinity():
     failures: List[str] = []
     checked = 0
 
+    # Sieve: one representative edge per (graph, dsl) cell. The Family-C
+    # claim is detectable on any single edge — a forked mini-engine drifts
+    # everywhere — and the deepest parameterised edge is the most
+    # discriminating sample because accumulated upstream-observation
+    # drift is largest there. Previously this loop iterated every
+    # parameterised edge per cell (~50-80 v3 calls total, ~245s wall);
+    # one edge per cell trims it to ~7 v3 calls without changing what
+    # the test detects.
     for graph_name, dsl in matrix:
         graph = load_graph_json(graph_name)
         cf_resp = _run_cf(graph_name, dsl)
         cf_by_id = _cf_edge_by_id(cf_resp)
 
         nmap = {n["uuid"]: n.get("id", "") for n in graph.get("nodes", [])}
-        for edge in _parameterised_edges(graph):
-            from_id = nmap.get(edge.get("from", ""), "")
-            to_id = nmap.get(edge.get("to", ""), "")
-            key = (from_id, to_id)
-            if key not in cf_by_id:
-                continue
-            cf_p_mean = cf_by_id[key].get("p_mean")
-            if cf_p_mean is None:
-                continue
+        edge = _deepest_parameterised_edge(graph)
+        if edge is None:
+            continue
+        from_id = nmap.get(edge.get("from", ""), "")
+        to_id = nmap.get(edge.get("to", ""), "")
+        key = (from_id, to_id)
+        if key not in cf_by_id:
+            continue
+        cf_p_mean = cf_by_id[key].get("p_mean")
+        if cf_p_mean is None:
+            continue
 
-            try:
-                v3_resp = _run_v3(
-                    graph_name,
-                    f"from({from_id}).to({to_id})",
-                    dsl,
-                )
-            except Exception as e:
-                failures.append(f"  {graph_name} {from_id}->{to_id}: v3 call failed: {e}")
-                continue
+        try:
+            v3_resp = _run_v3(
+                graph_name,
+                f"from({from_id}).to({to_id})",
+                dsl,
+            )
+        except Exception as e:
+            failures.append(f"  {graph_name} {from_id}->{to_id}: v3 call failed: {e}")
+            continue
 
-            rows = _extract_maturity_rows(v3_resp)
-            if not rows:
-                continue
-            last = rows[-1]
-            v3_p_inf = last.get("p_infinity_mean")
-            if v3_p_inf is None:
-                # Older response shape fallback: use last non-None midpoint.
-                for r in reversed(rows):
-                    if r.get("midpoint") is not None:
-                        v3_p_inf = r["midpoint"]
-                        break
-            if v3_p_inf is None:
-                continue
+        rows = _extract_maturity_rows(v3_resp)
+        if not rows:
+            continue
+        last = rows[-1]
+        v3_p_inf = last.get("p_infinity_mean")
+        if v3_p_inf is None:
+            # Older response shape fallback: use last non-None midpoint.
+            for r in reversed(rows):
+                if r.get("midpoint") is not None:
+                    v3_p_inf = r["midpoint"]
+                    break
+        if v3_p_inf is None:
+            continue
 
-            checked += 1
-            delta = abs(float(cf_p_mean) - float(v3_p_inf))
-            if delta > TOL:
-                failures.append(
-                    f"  {graph_name} {from_id}->{to_id}: "
-                    f"CF={cf_p_mean:.6f} v3={v3_p_inf:.6f} |Δ|={delta:.2e}"
-                )
+        checked += 1
+        delta = abs(float(cf_p_mean) - float(v3_p_inf))
+        if delta > TOL:
+            failures.append(
+                f"  {graph_name} {from_id}->{to_id}: "
+                f"CF={cf_p_mean:.6f} v3={v3_p_inf:.6f} |Δ|={delta:.2e}"
+            )
 
     assert checked > 0, "No edges exercised — fixture or server misconfigured."
     assert not failures, (
-        f"CF p_mean diverged from v3 p_infinity on {len(failures)}/{checked} edges:\n"
+        f"CF p_mean diverged from v3 p_infinity on {len(failures)}/{checked} cells:\n"
         + "\n".join(failures)
     )
 

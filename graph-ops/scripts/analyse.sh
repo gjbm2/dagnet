@@ -27,6 +27,7 @@ if [ $# -lt 2 ]; then
   echo "  --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json sidecar"
   echo "  --force-vars             With --bayes-vars, bypass rhat/ess quality gates"
   echo "  --no-cache               Bypass disk bundle cache"
+  echo "  --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)"
   echo "  --verbose, -v            Show all internal debug logging"
   echo ""
   echo "Environment:"

@@ -860,23 +860,17 @@ def test_runtime_built_selected_a_clock_evidence_requires_carrier_support_for_su
     )
 
 
-def test_identity_carrier_keeps_frontier_anchored_subject_residual():
-    """Window/cohort(A=X) identity must not use carrier-distribution logic."""
-    from runner.cohort_forecast_v3 import _selected_cohort_group_rate_draws
-
-    subject_cdf = [0.0, 0.10, 0.30, 0.60, 0.85, 0.95, 1.0, 1.0]
-    cohort = _single_active_cohort(frontier_age=4)
-
-    draws = _selected_cohort_group_rate_draws(
-        _identity_runtime(subject_cdf=subject_cdf),
-        [cohort],
-        horizon=7,
-    )
-
-    assert draws is not None
-    # H(frontier)=0.8*0.85, H(5)=0.8*0.95, residual=(0.76-0.68)/(1-0.68).
-    expected_tau_5 = (20.0 + 80.0 * 0.25) / 100.0
-    assert draws[0, 5] == pytest.approx(expected_tau_5)
+# Retired: `test_identity_carrier_keeps_frontier_anchored_subject_residual`
+# fed prefix data via the engine_cohort fields directly, relying on the
+# reducer's branch-3 rescue (deleted in atom-3 stage 4 per
+# `docs/current/cohort-maturity-atom-3-plan.md`). Its semantic intent —
+# verify the identity-carrier Pop D residual produces a monotone forecast
+# midpoint that stays above the empirical rate — is covered by
+# `test_identity_carrier_residual_monotone_under_window` in
+# `test_cf_pipeline_input_conditions.py`, which exercises the unified
+# pipeline through the public entry with structural assertions derived
+# from the spec rather than a hand-computed numeric against the
+# legacy-rescue input shape.
 
 
 def test_selected_a_clock_prefix_feeds_reducer_without_mutating_cohort():
@@ -1035,7 +1029,6 @@ def test_active_rows_emit_a_clock_evidence_separately_from_projection():
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau={},
         engine_cohorts=[cohort],
         cohort_list=[{'anchor_day': '2026-03-01'}],
         cohort_eval_ages=[2],

@@ -5,6 +5,8 @@
 
 This doc describes the current runtime after the primitive substrate, carrier/subject composition, selected-Cohort mass reducer, active-carrier projection, and selected A-clock evidence adapter work landed. Reading order for a new contributor: semantics doc first, this doc second, data-flow doc third.
 
+> New to the CF cluster? Read [`CF_MAP.md`](CF_MAP.md) first for orientation and the canonical reading order across all CF docs.
+
 ---
 
 ## ⚠️ STOP — read this before editing the runtime
@@ -21,6 +23,10 @@ This doc describes the current runtime after the primitive substrate, carrier/su
 
 An `[I10]` request enters either the cohort maturity analysis endpoint or the conditioned forecast endpoint. Both surfaces route through `compute_cohort_maturity_rows_v3` in `graph-editor/lib/runner/cohort_forecast_v3.py`; there is no separate row engine for CF scalars.
 
+The live call order through `compute_cohort_maturity_rows_v3` interleaves the **primitive substrate stage** (the 5 layers in [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md)) with the **row pipeline stage** (the 8 layers in [CF_ROW_PIPELINE.md](CF_ROW_PIPELINE.md)). Frame evidence (row layer 1) runs **before** substrate construction; substrate stage A runs once; the rest of the row pipeline (layers 2–8) runs **after** the substrate, reading the resolved runtime. See [CF_ROW_PIPELINE.md §1a](CF_ROW_PIPELINE.md#1a-data-flow-vs-call-order) for the explicit ordered diagram.
+
+Single-pool evidence invariant: every consumer in the call chain reads evidence from one canonical pool — the flat `runtime.request_evidence_candidates` — derived from the public `evidence_candidates` argument and/or `per_edge_*_candidates` via `_aggregate_request_candidates`. There is no parameter-shape switch between production and test paths; see [CF_ROW_PIPELINE.md §1b](CF_ROW_PIPELINE.md#1b-single-pool-invariant-for-evidence).
+
 The live flow is:
 
 1. `build_cohort_evidence_from_frames` materialises the chart's selected Cohorts, identity-carrier observed prefixes, epoch boundaries, and completeness evaluation ages. For active `cohort(A, X -> end)` it deliberately zeroes the X-clock target-frame prefixes so local/window evidence cannot masquerade as selected A-clock row evidence.
@@ -28,9 +34,9 @@ The live flow is:
 3. `build_resolved_cf_runtime` resolves the subject span `X -> end`, resolves the carrier span `A -> X` only when `A != X`, builds independent subject and carrier arrival maps, and calls `primitive_readout.compute_resolved_runtime_readout`.
 4. `compute_resolved_runtime_readout` prepares every primitive through the single conditioning locus, composes `composed_subject`, optionally composes `composed_carrier`, builds unconditioned overlays, and returns role-labelled provenance.
 5. `_aggregate_request_candidates` builds one request candidate pool from the superset-derived target, subject-span, and carrier candidates. Primitive-local binding later filters this pool by primitive identity and clock.
-6. Active carrier requests rebind each selected Cohort's `a_pop` from root-window carrier candidates through `_root_window_carrier_n_by_anchor_day`; frame-bundle `a` is not an admissible fallback.
-7. `_build_active_selected_a_clock_evidence_from_runtime` builds `SelectedAClockEvidence` from primitive-bound observed rows plus runtime clock surfaces. Carrier evidence is composed on the selected A-clock, and subject evidence is placed using the join-conditioned carrier timing surface before numerator/denominator pairing.
-8. `_project_runtime_rows` emits rows. E+F midpoint and fan fields come from `_selected_cohort_group_rate_draws`, which reduces selected-Cohort numerator and denominator mass before division. Active evidence-named fields read only from `SelectedAClockEvidence`. Model overlays come from `_composed_pair_per_tau_rate_draws`.
+6. `_root_window_carrier_n_by_anchor_day` builds the per-anchor base mass (`n_by_anchor`) from the flat `runtime.request_evidence_candidates` pool — runs for both identity-carrier and active modes. The active-only step is the subsequent `ec.a_pop` overwrite at `cohort_forecast_v3.py:6155`, where the frame-bundle `a` is replaced by the candidate-derived count; window/identity-carrier mode preserves `a_pop` from the frame `a_frozen`. Frame-bundle `a` is not an admissible substitute for the candidate-derived count on the active path.
+7. `_build_selected_source_day_mass` and `_build_carrier_only_denominator_prefix` attach the dual-prefix objects to the runtime (`selected_source_day_mass`, `selected_x_prefix`). Then `_build_selected_a_clock_evidence_from_runtime` builds `SelectedAClockEvidence` from primitive-bound observed rows plus the runtime clock surfaces. Carrier evidence is composed on the selected A-clock; subject evidence is placed using the join-conditioned carrier timing surface before numerator/denominator pairing. Post atom-3 stage 4, **this whole sequence is unified across identity-carrier and active modes** — both consume `SelectedAClockEvidence` for their per-cohort prefixes; there is no rescue branch reading `engine_cohort.obs_x/obs_y`. Residual structural debt: `_synthesize_identity_carrier_observed_surface` is still a parallel pipeline for the carrier observed surface under identity carrier ([CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) H-5).
+8. `_project_runtime_rows` emits rows. E+F midpoint and fan fields come from `_selected_cohort_group_rate_draws`, which reduces selected-Cohort numerator and denominator mass before division. Evidence-named fields (`evidence_x`, `evidence_y`, `rate`) read only from `SelectedAClockEvidence`. Model overlays come from `_composed_pair_per_tau_rate_draws`.
 9. `_attach_cf_row_metadata` adds public conditioning/provenance metadata to the first row sentinel.
 
 The key change from the older mental model is that row projection is no longer a direct readout of request-level `p × CDF` curves. E+F rows are now selected-Cohort group trajectories: per-particle `ΣY(τ) / ΣX(τ)` after observed prefixes, Pop D, Pop C, carrier continuation, and subject progression have all been projected into numerator and denominator mass.
@@ -86,16 +92,19 @@ Active `cohort(A != X)` requires a real composed carrier for selected-Cohort pro
 
 ## 5. Evidence Materialisation
 
-`build_cohort_evidence_from_frames` is now a display-evidence materialiser, not a carrier builder and not a scalar authority.
+`build_cohort_evidence_from_frames` is a display-evidence materialiser, not a carrier builder and not a scalar authority. It builds `engine_cohorts` (with `a_pop`, `frontier_age`, epoch boundaries, and — for window mode — `obs_x`/`obs_y` arrays) and the per-Cohort `cohort_list`.
 
-For identity-carrier rows, it builds `engine_cohorts` with observed `obs_x`, `obs_y`, `x_frozen`, `y_frozen`, frontier age, evidence counts, and row epoch boundaries. `_project_runtime_rows` can aggregate those observed prefixes directly for `rate`, `rate_pure`, `evidence_x`, and `evidence_y`.
+Post atom-3 stage 4 (May 2026), `_project_runtime_rows` no longer reads `obs_x` / `obs_y` directly off `engine_cohorts` for evidence-named row fields. **Both identity-carrier and active modes read row evidence from `SelectedAClockEvidence`.** The frame-derived `obs_x/obs_y` arrays survive on `engine_cohorts` for non-v3 legacy consumers (notably `compute_forecast_trajectory` callers — daily-conversions annotation, surprise-gauge-style legacy paths) but are not consumed by the v3 row builder.
 
-For active carrier rows, the same function intentionally emits zero observed prefixes. X-clocked target frames are valid primitive evidence but not valid selected A-clock row evidence. The active row path uses two separate objects instead:
+The unified evidence path:
 
-- `SelectedAClockEvidence` carries actual selected A-clock observations when they are available. It keeps denominator `x_at_query_x` and numerator `y_at_subject_end` paired on the same A-clock row. It is built by `_build_active_selected_a_clock_evidence_from_runtime` from `ConditionedTransitionPrimitive.weighted_evidence`, topology composition, and the join-conditioned carrier timing surface.
-- `_root_window_carrier_n_by_anchor_day` supplies the selected A-day base mass `a_pop` from root-window `n` on the first carrier primitive rooted at A. It reads superset-derived carrier candidates, filters by semantic window-family identity rather than source family, and records per-anchor provenance as either `root_window_carrier_n` or `no_root_window_evidence`.
+- `SelectedAClockEvidence` carries the selected A-clock observations. It keeps denominator `x_at_query_x` and numerator `y_at_subject_end` paired on the same A-clock row. It is built by `_build_selected_a_clock_evidence_from_runtime` from `ConditionedTransitionPrimitive.weighted_evidence`, topology composition, and (for active mode) the join-conditioned carrier timing surface. In identity-carrier mode the X-day → A-day mapping is identity, so the join-conditioned backmap is replaced by direct `root_day_shares` reads.
+- `_root_window_carrier_n_by_anchor_day` supplies the per-anchor base mass `n_by_anchor` from root-window `n` on the carrier-side first edge (active) or on the X-rooted subject primitive (identity carrier — A == X so the "first carrier edge" is degenerate). It reads `runtime.request_evidence_candidates` directly — the canonical single-pool evidence source. It filters by semantic window-family identity rather than source family, and records per-anchor provenance.
+- In **active mode**, `n_by_anchor` overwrites each cohort's `a_pop`; frame-bundle `a` is not an admissible substitute. In **window/identity-carrier mode**, `a_pop` is preserved from the frame's `a_frozen` (the candidate-derived `n_by_anchor` drives the prefix construction but not the per-cohort scalar).
 
-If no selected A-clock evidence exists, active `rate` / `rate_pure` / evidence-named fields are absent rather than patched from local subject rows. The projected E+F fan and midpoint still come from the runtime's composed carrier and subject surfaces, scaled by admissible `a_pop`.
+If `SelectedAClockEvidence` cannot be resolved (no admissible candidates), evidence-named row fields are absent rather than reconstructed from a different substrate. The projected E+F fan and midpoint still come from the runtime's composed carrier and subject surfaces, but the per-particle reducer degrades to zero-prefix-from-prior — visible degradation, not silent rescue ([COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) invariant 12).
+
+**Known structural debt**: a parallel pipeline survives at `_synthesize_identity_carrier_observed_surface` for the carrier observed surface in identity-carrier mode ([CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) H-5). The target factoring is a single `_build_observed_span_evidence_surface` that handles `root_node == end_node` as a zero-edge degeneracy.
 
 Subject-side selected evidence is not placed by exact calendar age alone and is not placed by reading an upstream model-vars latency map. `_join_conditioned_carrier_backmap` maps subject-rooted observed rows back onto selected A-days using the composed carrier's join-conditioned CDF surface. Rows without primitive root-day shares or a valid join-conditioned carrier placement remain off-clock rather than falling back to a calendar shortcut.
 
@@ -128,13 +137,13 @@ This mass-first reduction is why E+F rows now represent the chart object: select
 
 Observed evidence fields are separate from projection fields:
 
-- Identity-carrier rows aggregate `engine_cohorts` prefixes directly.
-- Active-carrier rows read only `SelectedAClockEvidence.aggregate_by_tau` when actual selected observations are supplied. `_project_runtime_rows` derives the active evidence buckets internally from that object; callers do not pass an alternate active-evidence map.
+- Both identity-carrier and active rows read `SelectedAClockEvidence.aggregate_by_tau` when admissible observations are supplied. `_project_runtime_rows` derives the per-τ evidence buckets internally from that object; callers do not pass an alternate evidence map. Post atom-3 stage 4, there is no path that aggregates `engine_cohorts.obs_x/obs_y` for v3 evidence-named row fields.
+- When `SelectedAClockEvidence` is absent or has no cells, evidence-named row fields are absent (None) rather than reconstructed from the frame substrate — invariant 12.
 - Model projection never fills evidence-named fields.
 
-Epoch gating differs intentionally. Non-active rows clear E+F midpoint/fan before `tau_solid_max` because the observed line owns the fully observed epoch. Active rows can render midpoint/fan across the full row range because selected A-clock observations may be absent while the carrier/subject projection is still meaningful.
+Epoch gating: rows clear E+F midpoint/fan before `tau_solid_max` when the observed line owns the fully observed epoch. The active-mode path can render midpoint/fan across the full row range because selected A-clock observations may be absent while the carrier/subject projection is still meaningful.
 
-Completeness is projected by `_runtime_completeness` from the same request-rooted composed CDF used by the runtime. Identity rows weight by selected denominator evidence; active rows weight by `a_pop` and use selected A-clock frontier ages when exact selected prefixes exist.
+Completeness is projected by `_runtime_completeness` from the same request-rooted composed CDF used by the runtime. Cohort weights come from `cohort_weights` (active: from `a_pop`; identity-carrier: from `evidence_n`/`x_frozen`). Selected A-clock frontier ages drive the eval point when exact selected prefixes exist.
 
 Public scalar row fields `p_infinity_mean`, `p_infinity_sd`, and `p_infinity_sd_epistemic` come from `ResolvedCFRuntime.public_moments`. They are scalar subject-span moments, not a promise that the selected-Cohort group trajectory converges numerically to the final row midpoint.
 
@@ -173,29 +182,13 @@ Invalidation remains coarse-grained through `result_cache.clear_all()`. Scope-be
 
 The cohort maturity analysis endpoint and the conditioned forecast endpoint both call the same v3 machinery. Cross-surface parity comes from shared runtime objects, shared primitive preparation, shared selected-Cohort reduction, selected A-clock evidence construction, and shared row projection.
 
-The fetch-envelope plan that feeds subject and carrier observations is built at the preparation layer in `forecast_preparation.prepare_forecast_subject_group` and applied before runtime construction. Prepared per-edge entries expose those rows as `evidence_superset_rows`. The runtime no longer performs in-runtime DB widening, and `forecast_runtime.prepare_forecast_runtime_inputs` no longer constructs target-edge evidence or request-level evidence sets. See [`snapshot-fetch-envelope-design.md`](../snapshot-fetch-envelope-design.md).
+The fetch-envelope plan that feeds subject and carrier observations is built at the preparation layer in `forecast_preparation.prepare_forecast_subject_group` and applied before runtime construction. Prepared per-edge entries expose those rows as `evidence_superset_rows`. The runtime no longer performs in-runtime DB widening, and `forecast_runtime.prepare_forecast_runtime_inputs` no longer constructs target-edge evidence or request-level evidence sets. See [`snapshot-fetch-envelope-design.md`](../snapshot-fetch-envelope-design.md) and [`FORECAST_PREPARATION.md`](FORECAST_PREPARATION.md) §5.
+
+**Legacy inline fallback.** `build_resolved_cf_runtime` ([`cohort_forecast_v3.py:1353-1376`](../../graph-editor/lib/runner/cohort_forecast_v3.py#L1353-L1376)) constructs the envelope plan inline when the caller does not supply one, so legacy and test entry points still work in active mode. Production requests always route through the preparation layer; the inline path is a fallback, not a parallel path, and is tracked as case-fork debt in [`CF_DEFENSIVE_FINDINGS.md`](CF_DEFENSIVE_FINDINGS.md). The two construction sites must remain semantically identical.
 
 ## 11. What Lives Where
 
-| Concern | Module |
-|---|---|
-| Request-level v3 orchestration | `cohort_forecast_v3.compute_cohort_maturity_rows_v3` |
-| Runtime object | `cohort_forecast_v3.ResolvedCFRuntime` |
-| Frame/display evidence materialisation | `cohort_forecast_v3.build_cohort_evidence_from_frames` |
-| Superset row to candidate translation | `cohort_forecast_v3.build_superset_candidates_by_edge`, `cohort_forecast_v3.build_carrier_superset_candidates_by_edge`, `edge_binding_descriptor.build_candidates_for_descriptor` |
-| Selected A-clock evidence object | `cohort_forecast_v3.SelectedAClockEvidence` |
-| Selected A-clock evidence builder | `cohort_forecast_v3._build_active_selected_a_clock_evidence_from_runtime` |
-| Selected subject-row A-clock placement | `cohort_forecast_v3._join_conditioned_carrier_backmap` |
-| Active selected base mass | `cohort_forecast_v3._root_window_carrier_n_by_anchor_day` |
-| Selected-Cohort E+F reducer | `cohort_forecast_v3._selected_cohort_group_rate_draws` |
-| Row projection | `cohort_forecast_v3._project_runtime_rows` |
-| Runtime assembly | `cohort_forecast_v3.build_resolved_cf_runtime` |
-| Primitive preparation and role composition | `primitive_readout.compute_resolved_runtime_readout` |
-| Single conditioning locus | `primitive_conditioning.condition_primitive` |
-| Primitive evidence binding | `primitive_evidence.bind_primitive_evidence` |
-| Prefix arrival maps | `prefix_arrival.build_prefix_arrival_map` |
-| Span composition | `subject_span_composer.compose_primitive_span` |
-| Residual / unparameterised refusal | `primitive_residual_guard.classify_edge_requirement` |
+The file → role lookup across the full CF cluster lives in [`CF_MAP.md`](CF_MAP.md) §3 — preparation modules, substrate modules, the row pipeline functions inside `cohort_forecast_v3.py`, and the hold-out engines, all in one table. This section used to duplicate the substrate + row-pipeline slice of that table; it now defers.
 
 ## 12. Things That Are Not Here
 

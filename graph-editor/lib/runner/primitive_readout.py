@@ -246,31 +246,6 @@ def _prepare_conditioned_primitive(
     return _PreparedPrimitive(resolution=resolution, primitive=primitive)
 
 
-# Stage 0c §3.3 shadow band on displayed rate.
-SHADOW_ABS_BAND = 0.005
-SHADOW_REL_BAND = 0.01
-
-# Stage 0c §3.3 acceptance band on displayed rate.
-ACCEPTANCE_ABS_BAND = 0.002
-ACCEPTANCE_REL_BAND = 0.004
-
-
-def _within_band(
-    delta: Optional[float],
-    legacy: Optional[float],
-    abs_band: float,
-    rel_band: float,
-) -> Optional[bool]:
-    if delta is None or legacy is None:
-        return None
-    abs_ok = abs(delta) <= abs_band
-    if abs(legacy) >= 1e-12:
-        rel_ok = abs(delta) / abs(legacy) <= rel_band
-    else:
-        rel_ok = True
-    return bool(abs_ok and rel_ok)
-
-
 @dataclass(frozen=True)
 class SpanEdgeResolution:
     """Per-edge inputs for one edge of the X→end subject closure.
@@ -481,12 +456,6 @@ class ResolvedRuntimeReadoutResult:
     p_mean_primitive: Optional[float]
     p_sd_primitive: Optional[float]
     p_sd_epistemic_primitive: Optional[float]
-    legacy_p_mean: Optional[float]
-    legacy_p_sd: Optional[float]
-    legacy_p_sd_epistemic: Optional[float]
-    delta_p_mean: Optional[float]
-    delta_p_sd: Optional[float]
-    deltas_within_shadow_band: Optional[bool]
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
     arrival_map: Optional[PrefixArrivalMap] = None
     primitive_registry: Optional[RequestPrimitiveRegistry] = None
@@ -572,9 +541,6 @@ def compute_resolved_runtime_readout(
     scenario_seed: int,
     options: Optional[ConditioningPolicyOptions] = None,
     compose_options: Optional[ComposeOptions] = None,
-    legacy_p_mean: Optional[float] = None,
-    legacy_p_sd: Optional[float] = None,
-    legacy_p_sd_epistemic: Optional[float] = None,
     prior_source: Optional[str] = None,
     unconditioned_overlay_bases: Sequence[str] = ('predictive',),
     request_evidence_candidates: Optional[Sequence[Any]] = None,
@@ -650,12 +616,6 @@ def compute_resolved_runtime_readout(
             p_mean_primitive=None,
             p_sd_primitive=None,
             p_sd_epistemic_primitive=None,
-            legacy_p_mean=legacy_p_mean,
-            legacy_p_sd=legacy_p_sd,
-            legacy_p_sd_epistemic=legacy_p_sd_epistemic,
-            delta_p_mean=None,
-            delta_p_sd=None,
-            deltas_within_shadow_band=None,
             diagnostics=provenance,
         )
 
@@ -990,37 +950,11 @@ def compute_resolved_runtime_readout(
         p_sd_epi_pri = None
     subject_source = "primitive_span.subject"
 
-    delta_p_mean = (
-        p_mean_pri - legacy_p_mean
-        if (p_mean_pri is not None and legacy_p_mean is not None) else None
-    )
-    delta_p_sd = (
-        p_sd_pri - legacy_p_sd
-        if (p_sd_pri is not None and legacy_p_sd is not None) else None
-    )
-    within_shadow = _within_band(
-        delta_p_mean,
-        legacy_p_mean,
-        SHADOW_ABS_BAND,
-        SHADOW_REL_BAND,
-    )
     diag["composed_public_moments"] = {
         "p_mean": p_mean_pri,
         "p_sd": p_sd_pri,
         "p_sd_epistemic": p_sd_epi_pri,
     }
-    diag["legacy_public_moments"] = {
-        "p_mean": legacy_p_mean,
-        "p_sd": legacy_p_sd,
-        "p_sd_epistemic": legacy_p_sd_epistemic,
-    }
-    diag["delta_p_mean"] = delta_p_mean
-    diag["delta_p_sd"] = delta_p_sd
-    diag["within_shadow_band"] = within_shadow
-    diag["acceptance_abs_band"] = ACCEPTANCE_ABS_BAND
-    diag["acceptance_rel_band"] = ACCEPTANCE_REL_BAND
-    diag["shadow_abs_band"] = SHADOW_ABS_BAND
-    diag["shadow_rel_band"] = SHADOW_REL_BAND
     diag["subject_probability_source"] = (
         subject_source
         if composed_subject.is_draw_coherent
@@ -1148,12 +1082,6 @@ def compute_resolved_runtime_readout(
         p_mean_primitive=p_mean_pri,
         p_sd_primitive=p_sd_pri,
         p_sd_epistemic_primitive=p_sd_epi_pri,
-        legacy_p_mean=legacy_p_mean,
-        legacy_p_sd=legacy_p_sd,
-        legacy_p_sd_epistemic=legacy_p_sd_epistemic,
-        delta_p_mean=delta_p_mean,
-        delta_p_sd=delta_p_sd,
-        deltas_within_shadow_band=within_shadow,
         diagnostics=provenance,
         arrival_map=subject_arrival_map,
         primitive_registry=registry,
@@ -1165,10 +1093,6 @@ def compute_resolved_runtime_readout(
 
 
 __all__ = [
-    "ACCEPTANCE_ABS_BAND",
-    "ACCEPTANCE_REL_BAND",
-    "SHADOW_ABS_BAND",
-    "SHADOW_REL_BAND",
     "CarrierEdgeResolution",
     "ResolvedRuntimeReadoutResult",
     "SpanEdgeResolution",

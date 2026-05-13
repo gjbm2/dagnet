@@ -649,23 +649,34 @@ def _identity_carrier_engine_cohort(*, a_pop=100.0, frontier_age=3):
 
 
 def test_end_to_end_parity_window_vs_cohort_a_equals_x_row_dicts():
-    """Sub-stage 2c end-to-end parity (tightened from the 2a builder-
-    level form).
+    """Builder-and-row-builder parity check (NOT end-to-end production wiring).
 
     Equivalent ``window(X→end)`` and ``cohort(A=X, X→end)`` runtimes —
     same observation timeline, same X, same subject end, same date
     range, identical numerical content modulo evidence-role metadata —
     must produce identical row dicts when projected through
-    ``_project_runtime_rows``. This is the **named gate for atom 2
-    closing**: after 2c the row builder no longer branches on mode for
-    evidence emission, so the row outputs must agree byte-for-byte
-    across the two queries that share the runtime object per the 73n
-    invariant.
+    ``_project_runtime_rows`` after the selected-evidence builder runs.
 
-    Any drift here means the unified row builder still re-decides
-    semantics by case, violating both the design (§5.2 acceptance
-    contract) and canonical invariant 1 (one general forecast
-    machinery path) / 6 (identity carrier is data, not a route).
+    **Scope honesty (atom-3 plan stage 1)**: this test fixture
+    pre-populates ``runtime.selected_source_day_mass`` and
+    ``runtime.selected_x_prefix`` directly (see
+    ``_identity_carrier_runtime``), bypassing the production wiring
+    step ``_root_window_carrier_n_by_anchor_day`` and the
+    n_by_anchor-gated assignment in ``compute_cohort_maturity_rows_v3``
+    that contain the slice-family filter at ``cohort_forecast_v3.py:1799``.
+    The audit recorded in ``docs/current/cohort-maturity-atom-3-plan.md``
+    §1 flagged this as the AP59 fixture bypass: this test passing does
+    NOT prove the unified path traverses the production wiring on real
+    queries. The true end-to-end provenance gate lives in
+    ``test_cohort_factorised_outside_in.py``
+    (``test_a_equals_x_provenance_uses_unified_path_not_rescue``).
+
+    What this test does prove, with the provenance assertions added at
+    stage 1, is that **given** a runtime whose carrier-side wiring has
+    been satisfied (by whatever means), the unified builder accepts it
+    for both ``window`` and ``cohort(A=X)`` and emits cells with
+    refusal='ok' for both modes, and the row builder emits identical
+    row dicts. That is a necessary-but-not-sufficient closure check.
     """
     from runner.cohort_forecast_v3 import (
         _build_selected_a_clock_evidence_from_runtime,
@@ -682,6 +693,28 @@ def test_end_to_end_parity_window_vs_cohort_a_equals_x_row_dicts():
             anchor_to='2026-03-01',
             max_tau=4,
         )
+
+        # Atom-3 stage 1 provenance assertions. The unified builder
+        # must succeed (refusal='ok') and emit cells for both modes;
+        # absence of these would mean the builder refused, which on
+        # the production wiring path triggers the AP59 silent rescue
+        # in the reducer (cohort_forecast_v3.py:4796-4801).
+        assert selected is not None and selected.has_cells(), (
+            f"Selected-evidence builder must succeed and emit cells "
+            f"for evidence_role={evidence_role!r}; got "
+            f"selected={selected!r}"
+        )
+        diag = getattr(
+            runtime, 'selected_a_clock_evidence_diagnostics', None,
+        )
+        assert diag is not None and diag.get('refusal') == 'ok', (
+            f"Selected-evidence diagnostics must report refusal='ok' "
+            f"for evidence_role={evidence_role!r}; got {diag!r}. "
+            f"Any other refusal token means the builder degenerated "
+            f"and the reducer would silently rescue via "
+            f"engine_cohort.obs_x/obs_y (AP59)."
+        )
+
         engine_cohort = _identity_carrier_engine_cohort(
             a_pop=100.0, frontier_age=3,
         )
@@ -695,7 +728,6 @@ def test_end_to_end_parity_window_vs_cohort_a_equals_x_row_dicts():
         runtime.unconditioned_overlays = {}
         return _project_runtime_rows(
             runtime=runtime,
-            evidence_by_tau={},
             engine_cohorts=[engine_cohort],
             cohort_list=cohort_list,
             cohort_eval_ages=[3],

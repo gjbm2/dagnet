@@ -15,6 +15,14 @@ below with the materialisation, transport, and CLI changes shipped by
 28-Apr-26). The original project-bayes path now redirects here.
 
 **Cross-references**:
+- [CF_MAP.md](CF_MAP.md) —
+  one-page orientation to the full CF cluster: file → role lookup,
+  end-to-end stage flow, canonical reading order. Read first if you're
+  new to the cluster.
+- [FORECAST_PREPARATION.md](FORECAST_PREPARATION.md) —
+  the BE preparation layer that produces the inputs the [I10] handler
+  hands to the runtime (subject resolution, snapshot fetch + regime
+  selection, frame composition, envelope plan construction).
 - [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) —
   semantic source of truth for the carrier / subject / numerator
   representation contract this doc serialises. The "Implementation

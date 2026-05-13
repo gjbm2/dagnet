@@ -1247,9 +1247,6 @@ def build_resolved_cf_runtime(
     is_multi_hop: bool,
     anchor_node_id: Optional[str],
     resolved: Any,
-    legacy_p_mean: Optional[float],
-    legacy_p_sd: Optional[float],
-    legacy_p_sd_epistemic: Optional[float],
     unconditioned_overlay_bases: Sequence[str] = ('predictive',),
     evidence_candidates: Optional[List[Any]] = None,
     envelope_plan: Optional[Any] = None,
@@ -1421,9 +1418,6 @@ def build_resolved_cf_runtime(
         subject_edge_resolutions=subject_resolutions,
         carrier_edge_resolutions=carrier_resolutions,
         scenario_seed=_runtime_seed(scenario_id, 'resolved_cf_runtime'),
-        legacy_p_mean=legacy_p_mean,
-        legacy_p_sd=legacy_p_sd,
-        legacy_p_sd_epistemic=legacy_p_sd_epistemic,
         prior_source=getattr(resolved, 'source', None),
         unconditioned_overlay_bases=unconditioned_overlay_bases,
         request_evidence_candidates=evidence_candidates,
@@ -1513,33 +1507,6 @@ def build_resolved_cf_runtime(
         unconditioned_overlays=dict(result.unconditioned_overlays),
         source_layer_transitions=source_layer_transitions,
     )
-
-
-def _evidence_display_at_tau(
-    *,
-    evidence_by_tau: Dict[int, Dict],
-    tau: int,
-    tau_future_max: int,
-) -> Optional[Dict[str, Any]]:
-    """Observed chart evidence at tau from prepared FrameEvidence."""
-    if tau > tau_future_max:
-        return None
-    ev = evidence_by_tau.get(int(tau))
-    if not ev:
-        return None
-    ev_x = float(ev.get('sum_x') or 0.0)
-    if ev_x <= 0:
-        return None
-    ev_y = float(ev.get('sum_y') or 0.0)
-    n_cohorts = int(ev.get('n_cohorts') or 0)
-    return {
-        'sum_y': ev_y,
-        'sum_x': ev_x,
-        'sum_y_pure': ev_y,
-        'sum_x_pure': ev_x,
-        'n_cohorts': n_cohorts,
-        'n_mature': n_cohorts,
-    }
 
 
 def _composed_pair_request_cdf_draws(
@@ -1747,7 +1714,7 @@ def _build_selected_cohort_projection_bases(
 
 
 def _root_window_carrier_n_by_anchor_day(
-    per_edge_upstream_candidates: Optional[Mapping[str, Any]],
+    candidates: Optional[Sequence[Any]],
     anchor_node_id: Optional[str],
 ) -> Dict[str, float]:
     """Per-anchor-day root-window n from the first carrier primitive
@@ -1760,58 +1727,54 @@ def _root_window_carrier_n_by_anchor_day(
     whose from-node is the anchor `A`). Its `n` per anchor day is the
     count that entered A on that day.
 
-    Iterates the per-carrier-edge raw candidate map, picks candidates whose
-    primitive subject starts at the anchor, and groups candidate `n` by
+    Reads the canonical flat request candidate pool
+    (`runtime.request_evidence_candidates`). Picks candidates whose
+    primitive subject starts at the anchor and groups candidate `n` by
     `coordinate.observed_date` taking the maximum.
 
     Filters candidates by the semantic slice family only — root-window
     evidence — and does not inspect downstream source family. Evidence
-    source/deduping complexity is owned by the superset interface.
+    source/deduping complexity is owned by the superset interface;
+    `_aggregate_request_candidates` has already deduped the pool by
+    `(source, identity, coordinate, n, k)` before the runtime is built,
+    so this function does no further dedup.
 
-    Returns an empty dict when the inputs are missing or no edge has a
-    from-node matching the anchor; callers must treat empty (or
-    missing-keys) as "no admissible base mass" and exclude that cohort
-    from active projection rather than fall back to frame-bundle `a`.
+    Returns an empty dict when the inputs are missing or no candidate
+    has a `subject_from` matching the anchor; callers must treat empty
+    (or missing-keys) as "no admissible base mass" and exclude that
+    cohort from active projection rather than fall back to frame-bundle
+    `a`.
     """
     from evidence_merge import SliceFamily
 
     result: Dict[str, float] = {}
-    if not per_edge_upstream_candidates or not anchor_node_id:
+    if not candidates or not anchor_node_id:
         return result
     anchor_str = str(anchor_node_id)
-    seen_inputs: set = set()
-    for raw_value in per_edge_upstream_candidates.values():
-        if raw_value is None or id(raw_value) in seen_inputs:
+    for cand in candidates:
+        if cand is None:
             continue
-        seen_inputs.add(id(raw_value))
-        if isinstance(raw_value, (list, tuple)):
-            candidates = tuple(raw_value)
-        else:
-            candidates = ()
-        for cand in candidates:
-            if cand is None:
-                continue
-            ident = getattr(cand, 'identity', None)
-            if ident is None:
-                continue
-            if str(getattr(ident, 'subject_from', '')) != anchor_str:
-                continue
-            if getattr(ident, 'slice_family', None) is not SliceFamily.WINDOW:
-                continue
-            coord = getattr(cand, 'coordinate', None)
-            if coord is None:
-                continue
-            obs_date = str(getattr(coord, 'observed_date', '') or '')[:10]
-            if not obs_date:
-                continue
-            try:
-                n_float = float(getattr(cand, 'n', 0))
-            except (TypeError, ValueError):
-                continue
-            if n_float <= 0:
-                continue
-            if n_float > result.get(obs_date, 0.0):
-                result[obs_date] = n_float
+        ident = getattr(cand, 'identity', None)
+        if ident is None:
+            continue
+        if str(getattr(ident, 'subject_from', '')) != anchor_str:
+            continue
+        if getattr(ident, 'slice_family', None) is not SliceFamily.WINDOW:
+            continue
+        coord = getattr(cand, 'coordinate', None)
+        if coord is None:
+            continue
+        obs_date = str(getattr(coord, 'observed_date', '') or '')[:10]
+        if not obs_date:
+            continue
+        try:
+            n_float = float(getattr(cand, 'n', 0))
+        except (TypeError, ValueError):
+            continue
+        if n_float <= 0:
+            continue
+        if n_float > result.get(obs_date, 0.0):
+            result[obs_date] = n_float
     return result
 
 
@@ -2816,11 +2779,34 @@ def _build_observed_span_evidence_surface(
     except Exception:
         SliceFamily = None  # type: ignore
 
-    # Build local-clock raw rate surfaces from the request candidate pool
-    # before primitive arrival-weighting. This supplies downstream window
-    # kernels on their own local clock; selected downstream source mass is
-    # synthetic, so the value kernel must not be narrowed to the selected
-    # upstream anchor days by placement.
+    # Build local-clock raw rate surfaces from the request candidate
+    # pool. The (n, k) values populated here feed `edge_nk_by_local_
+    # source_day` and ultimately the rate-attributed subject prefix
+    # (Y amplitude) via `_build_age_only_rate_cache` /
+    # `_build_local_source_day_rate_cache`.
+    #
+    # The slice-family-WINDOW filter is not a "filter for coverage". It
+    # gates "is this candidate's raw (n, k) semantically interchangeable
+    # with a window-rooted local-clock observation?". Only WINDOW-family
+    # candidates are: their (n, k) means "k out of n at this edge's local
+    # source-day under window binding". COHORT-family candidates carry
+    # (n, k) rooted at the cohort anchor A — a different counting basis;
+    # using them as if they were local-clock rows starves the rate cache
+    # for downstream multi-hop edges where the arrival-weighted
+    # primitive-bound n_weighted / k_weighted from Loop B is the
+    # correct value.
+    #
+    # The two loops (this one and the primitive-row loop below) are
+    # mutually exclusive per edge: an edge admitted here lands in
+    # `candidate_backed_local_edges` and the primitive-row loop skips
+    # it. The filter ensures the shortcut only activates when the raw
+    # candidates are in the right shape.
+    #
+    # Risk #8 of cohort-maturity-evidence-coverage-design.md hypothesised
+    # this filter spuriously collapses carrier coverage on active
+    # cohort(A != X) queries with cohort request slice. The §6a baseline
+    # in cohort-maturity-atom-3-plan.md showed it does not reproduce in
+    # prod; the filter stays.
     for candidate in getattr(runtime, 'request_evidence_candidates', None) or ():
         ident = getattr(candidate, 'identity', None)
         coord = getattr(candidate, 'coordinate', None)
@@ -4749,16 +4735,14 @@ def _selected_cohort_group_rate_draws(
         )
 
     # Seam invariant (docs/current/cohort-1apr-falling-k-problem-
-    # statement.md A.4): in active mode the reducer's `x_frozen` /
-    # `y_frozen` and the row builder's `aggregate_by_tau` must read
-    # the SAME selected prefix object. When `selected_a_clock_evidence`
-    # is provided, it is authoritative for every selected cohort; the
-    # legacy `engine_cohort.obs_x/obs_y` fallback is refused to prevent
-    # the seam from gapping.
-    use_selected_evidence = (
-        selected_a_clock_evidence is not None
-        and selected_a_clock_evidence.has_cells()
-    )
+    # statement.md A.4): the reducer's `x_frozen` / `y_frozen` and the
+    # row builder's `aggregate_by_tau` MUST read the SAME selected
+    # prefix object. `selected_a_clock_evidence` is authoritative for
+    # every cohort; when a cohort has no selected cells the reducer
+    # treats it as zero-prefix and projects the entire `a_pop` from the
+    # prior. There is no legacy `engine_cohort.obs_x/obs_y` rescue —
+    # invariant 12 ("failures degrade visibly; they do not silently
+    # fall back").
     for cohort_idx, ec in enumerate(engine_cohorts):
         projection_basis = (
             projection_bases[cohort_idx]
@@ -4776,29 +4760,12 @@ def _selected_cohort_group_rate_draws(
             y_frozen = float(selected_prefix.y_frozen)
             obs_x = selected_prefix.obs_x
             obs_y = selected_prefix.obs_y
-        elif use_selected_evidence:
-            # Active mode but this anchor has no cells. Per the seam
-            # invariant, we do NOT fall through to engine_cohort.obs_x/
-            # obs_y (the legacy frame-derived path the active builder
-            # explicitly supersedes). Instead, treat the cohort as
-            # zero-prefix, frontier 0, and let the math project the
-            # entire `a_pop` population from the prior via the existing
-            # carrier × subject Pop C arm. Skipping the cohort here was
-            # the previous behaviour and made the rate surface collapse
-            # to NaN whenever no anchor had selected cells — even
-            # though the cohort's `a_pop` is known and the conditioned
-            # model curve is well-defined.
+        else:
             frontier = 0
             x_frozen = 0.0
             y_frozen = 0.0
             obs_x = [0.0] * T
             obs_y = [0.0] * T
-        else:
-            frontier = int(ec.frontier_age)
-            x_frozen = float(ec.x_frozen)
-            y_frozen = float(ec.y_frozen)
-            obs_x = ec.obs_x
-            obs_y = ec.obs_y
         a_pop = float(getattr(ec, 'a_pop', 0.0) or 0.0)
 
         if projection_basis is not None and not projection_basis.has_observed_frontier:
@@ -5067,7 +5034,6 @@ def _runtime_completeness(
 def _project_runtime_rows(
     *,
     runtime: ResolvedCFRuntime,
-    evidence_by_tau: Dict[int, Dict],
     engine_cohorts: Sequence[Any],
     cohort_eval_ages: Sequence[int],
     cohort_weights: Sequence[float],
@@ -5587,15 +5553,11 @@ class FrameEvidence:
     engine_cohorts: list           # List[CohortEvidence]
     cohort_list: List[Dict]        # sorted cohort_info dicts
     cohort_at_tau: Dict            # per-cohort tau observations
-    evidence_by_tau: Dict          # aggregate evidence at each tau
     max_tau: int                   # display range (rows, chart x-axis)
     saturation_tau: int            # internal sweep horizon / fallback support
     tau_solid_max: int
     tau_future_max: int
     last_frame_date: Optional[_date] = None
-    x_provider: Optional[Any] = None
-    from_node_arrival: Optional[Any] = None
-    carrier_tier: str = 'none'
 
 
 def build_cohort_evidence_from_frames(
@@ -5639,25 +5601,6 @@ def build_cohort_evidence_from_frames(
     lat = resolved.latency
 
     # ── Find last frame ────────────────────────────────────────────
-    # DIAG: dump frame anchors to see what the FE/data-layer surfaces
-    try:
-        import json as _json
-        frame_summary = []
-        for f in frames[-3:]:
-            sd = str(f.get('snapshot_date', ''))[:10]
-            anchors = sorted({str(dp.get('anchor_day', ''))[:10] for dp in (f.get('data_points') or [])})
-            frame_summary.append({'snapshot_date': sd, 'n_data_points': len(f.get('data_points') or []), 'anchors_first_10': anchors[:10], 'anchors_last_5': anchors[-5:] if len(anchors) > 10 else []})
-        with open('/tmp/cov_frames.json', 'w') as _f:
-            _json.dump({
-                'n_frames': len(frames),
-                'first_frame_date': str(frames[0].get('snapshot_date'))[:10] if frames else None,
-                'last_frame_date': str(frames[-1].get('snapshot_date'))[:10] if frames else None,
-                'last_3_frames': frame_summary,
-                'anchor_from': str(anchor_from),
-                'anchor_to': str(anchor_to),
-            }, _f, indent=2)
-    except Exception:
-        pass
     last_frame = None
     last_frame_date: Optional[_date] = None
     for f in frames:
@@ -5753,9 +5696,6 @@ def build_cohort_evidence_from_frames(
                 dp.get('data_retrieved_at'),
             )
 
-    # evidence_by_tau is built after engine_cohorts so row projection reads
-    # the same materialised observed series the trajectory consumes.
-
     # ── tau_observed per cohort ────────────────────────────────────
     # Canonical formula (DATE_MODEL_COHORT_MATURITY.md §2.3):
     #   tau_observed = min(
@@ -5824,8 +5764,8 @@ def build_cohort_evidence_from_frames(
     #                  the projection only holds at min(frontier).
     # tau_future_max : right edge of epoch B — calendar age of the oldest
     #                  cohort up to sweep_to. Owns the chart's epoch
-    #                  boundary AND the _evidence_display_at_tau censor;
-    #                  must NOT be coupled to per-cohort data_retrieved_at
+    #                  boundary; must NOT be coupled to per-cohort
+    #                  data_retrieved_at
     #                  (which can lag for individual anchors and would
     #                  invert the tau_solid_max ≤ tau_future_max invariant
     #                  the row builder and chart both rely on).
@@ -5903,9 +5843,6 @@ def build_cohort_evidence_from_frames(
     # Frame evidence is raw observed chart evidence only. Active A!=X
     # carrier semantics are owned by the primitive-backed runtime span;
     # this builder must not construct a carrier or alter public scalars.
-    from_node_arrival = None
-    carrier_tier = 'none'
-
     engine_cohorts: list = []
     materialised_cohort_list: List[Dict[str, Any]] = []
     for ci in cohort_list:
@@ -6003,43 +5940,15 @@ def build_cohort_evidence_from_frames(
     if not engine_cohorts:
         return None
 
-    # ── Aggregate evidence_by_tau from engine_cohorts ──────────────
-    # Both sum_x and sum_y are observed values drawn from the engine
-    # cohorts' obs_x / frame y at each recorded tau. n_cohorts counts
-    # cohorts that reported a real observation at this tau.
-    evidence_by_tau: Dict[int, Dict] = {}
-    for ci, engine_cohort in zip(materialised_cohort_list, engine_cohorts):
-        ad_str = ci['anchor_day'].isoformat()
-        for tau in cohort_at_tau.get(ad_str, {}):
-            if tau < 0 or tau > saturation_tau:
-                continue
-            bucket = evidence_by_tau.setdefault(
-                int(tau),
-                {'sum_y': 0.0, 'sum_x': 0.0, 'n_cohorts': 0},
-            )
-            if tau < len(engine_cohort.obs_x):
-                bucket['sum_x'] += float(engine_cohort.obs_x[tau])
-            else:
-                bucket['sum_x'] += float(engine_cohort.x_frozen)
-            if tau < len(engine_cohort.obs_y):
-                bucket['sum_y'] += float(engine_cohort.obs_y[tau])
-            else:
-                bucket['sum_y'] += float(engine_cohort.y_frozen)
-            bucket['n_cohorts'] += 1
-
     return FrameEvidence(
         engine_cohorts=engine_cohorts,
         cohort_list=materialised_cohort_list,
         cohort_at_tau=dict(cohort_at_tau),
-        evidence_by_tau=evidence_by_tau,
         max_tau=max_tau,
         saturation_tau=saturation_tau,
         tau_solid_max=tau_solid_max,
         tau_future_max=tau_future_max,
         last_frame_date=last_frame_date,
-        x_provider=None,
-        from_node_arrival=from_node_arrival,
-        carrier_tier=carrier_tier,
     )
 
 
@@ -6166,9 +6075,6 @@ def compute_cohort_maturity_rows_v3(
         anchor_node_id=anchor_node_id,
         resolved=resolved,
         evidence_candidates=request_candidates,
-        legacy_p_mean=None,
-        legacy_p_sd=None,
-        legacy_p_sd_epistemic=None,
         unconditioned_overlay_bases=(
             ('predictive', 'epistemic') if show_model_curve else ('predictive',)
         ),
@@ -6193,21 +6099,37 @@ def compute_cohort_maturity_rows_v3(
     # for identity carrier (`window()` or `cohort(A=X)`) the matching
     # candidate is the X-rooted subject primitive itself — A == X so
     # there is no separate upstream carrier. Same function, same filter,
-    # different sub-object degenerates as a property of the data
-    # (sub-stage 2b natural-degeneracy framing).
+    # different sub-object degenerates as a property of the data.
+    #
+    # The slice-family-WINDOW filter inside `_root_window_carrier_n_by_
+    # anchor_day` is load-bearing: the candidate's raw `n` per
+    # `observed_date` is the X-rooted count under window binding, which
+    # is the correct N_cohort surface per anchor day. For multi-hop
+    # window subjects routing N_cohort through `engine_cohort.a_pop`
+    # instead would substitute a frame-derived per-cohort scalar for
+    # the per-day candidate counts — different aggregation, different
+    # amplitude downstream in M_select and X_prefix. Atom-3 plan stage 2
+    # attempted that substitution on invariant-6 grounds; it broke
+    # multi-hop window numerically and was reverted. AP59 reachability
+    # on cohort-only-evidence fixtures is not a current production
+    # defect (§6a baseline) and is guarded by the stage 1 provenance
+    # test (`test_a_equals_x_provenance_uses_unified_path_not_rescue`).
     _pop_root_for_lookup = (
         str(runtime.population_root)
         if getattr(runtime, 'population_root', None)
         else anchor_node_id
     )
-    _combined_candidates: Dict[str, Any] = {}
-    if per_edge_upstream_candidates:
-        _combined_candidates.update(per_edge_upstream_candidates)
-    if per_edge_subject_candidates:
-        _combined_candidates.update(per_edge_subject_candidates)
+    # Single-pool read: every evidence consumer in the CF row pipeline
+    # reads from `runtime.request_evidence_candidates`, the flat,
+    # deduplicated pool built by `_aggregate_request_candidates` before
+    # the runtime was constructed. The `per_edge_*_candidates` params
+    # on the public entry are still accepted (production builds them
+    # via `build_(carrier_)superset_candidates_by_edge` and passes them
+    # at `api_handlers.py:1800-1801` / `:2235-2236`) — they feed
+    # `_aggregate_request_candidates` only.
     if fe.engine_cohorts:
         n_by_anchor = _root_window_carrier_n_by_anchor_day(
-            _combined_candidates,
+            runtime.request_evidence_candidates,
             _pop_root_for_lookup,
         )
     if _is_active_carrier and fe.engine_cohorts:
@@ -6374,7 +6296,6 @@ def compute_cohort_maturity_rows_v3(
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        evidence_by_tau=fe.evidence_by_tau,
         engine_cohorts=fe.engine_cohorts,
         cohort_list=fe.cohort_list,
         cohort_eval_ages=cohort_eval_ages,

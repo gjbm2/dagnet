@@ -493,26 +493,16 @@ def test_v3_row_schema_has_canonical_fields(baseline_rows):
     assert not missing, f'v3 row missing canonical fields: {missing}'
 
 
-def test_v3_fan_bands_carry_band_level_and_median(baseline_rows):
-    """fan_bands must carry the chart's blend-mode envelope set
-    {80, 90, 95, 99}, each with lo ≤ hi.
-
-    The chart's band-level setting (`bayes_band_level`) offers
-    off / 80 / 90 / 95 / 99 / blend — see
-    `analysisDisplaySettingsRegistry.ts` and the blend layering in
-    `cohortComparisonBuilders.ts`. The producer mirrors that set; see
-    `band_levels` in `cohort_forecast_v3._build_chart_rows`.
-    """
-    rows_with_bands = [r for r in baseline_rows
-                       if isinstance(r.get('fan_bands'), dict)
-                       and r['fan_bands']]
-    assert rows_with_bands, 'no rows carry a fan_bands dict'
-    sample = rows_with_bands[len(rows_with_bands) // 2]
-    fb = sample['fan_bands']
-    for level in ('80', '90', '95', '99'):
-        assert level in fb, f'fan_bands missing canonical level {level}'
-        lo, hi = fb[level]
-        assert lo <= hi, f'fan_bands[{level}] lo={lo} > hi={hi}'
+# Retired: `test_v3_fan_bands_carry_band_level_and_median` asserted that
+# every row carries a `fan_bands` dict with canonical band levels
+# {80, 90, 95, 99}. It depended on the `baseline_rows` fixture's frames-
+# only input populating the reducer via the deleted rescue branch (atom-
+# 3 stage 4 per `docs/current/cohort-maturity-atom-3-plan.md`). The
+# fan_bands contract is now asserted in
+# `test_cf_pipeline_input_conditions.py` via `_assert_fan_band_contract`,
+# which checks the same four-level set, lo ≤ midpoint ≤ hi, bounds in
+# [0, 1] — on rows produced through the unified pipeline from real
+# evidence candidates rather than frames-only fixtures.
 
 
 # ── R2 — midpoint monotonically increasing (Family E) ─────────────────

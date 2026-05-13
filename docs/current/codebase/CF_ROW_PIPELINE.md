@@ -3,6 +3,8 @@
 **Status**: Active reference, 12-May-26
 **Scope**: how the v3 conditioned-forecast row builder turns a `ResolvedCFRuntime` into chart rows — the dual-prefix object model, the selected-cohort reducer, the row schema, the epoch model. Companion to [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) (the substrate that produces the runtime) and [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) (the runtime object).
 
+> New to the CF cluster? Read [CF_MAP.md](CF_MAP.md) first for orientation and the canonical reading order.
+
 This is the chart-evidence engine for `cohort_maturity_v3` and the row surface the conditioned-forecast endpoint returns. The pipeline is concentrated in `cohort_forecast_v3.py` (lines 4112 onward).
 
 ---
@@ -66,7 +68,44 @@ When in doubt: **let X=0 produce NaN, let missing prefixes refuse cleanly, let d
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-Steps 2-7 are skipped in the identity-carrier case (`population_root == denominator_node`); identity rows project from the runtime's composed subject directly and aggregate `engine_cohorts` prefixes. The dual-prefix machinery is the active-cohort `A != X` path.
+Identity-carrier mode (`population_root == denominator_node` — i.e. `window()` and `cohort(A=X)`) used to bypass steps 2-7 and read prefixes directly off `engine_cohorts.obs_x/obs_y` via a rescue branch in the reducer. Atom-3 stage 4 (May 2026) deleted that branch. **All modes — identity carrier and active — now run through the full pipeline (steps 1-8) and read prefixes from `SelectedAClockEvidence`.** When the candidate pool contains no `subject_from = pop_root` rows with `slice_family = WINDOW`, the prefix-construction layers (2-6) refuse and the reducer reports zero-prefix-from-prior (visible degradation, not silent rescue).
+
+**Known structural debt against this unified model** (`docs/current/cohort-maturity-evidence-coverage-design.md`, [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) H-5):
+
+- `_synthesize_identity_carrier_observed_surface` (`cohort_forecast_v3.py:3996`) is still a parallel pipeline for the carrier observed surface when `is_identity_carrier`. The target factoring is a single `_build_observed_span_evidence_surface` call that degenerates to "source from the X-rooted subject primitive's row metadata" when `root_node == end_node` (zero-edge topology). Until that lands, the layer-5 carrier surface follows two code paths.
+- The reducer (`_selected_cohort_group_rate_draws`) still has ~10 `if identity_carrier:` branches for Pop D / Pop C arithmetic. These compute correct degenerate values but are case-forks against the AP58 contract; the target factoring expresses them as `composed_carrier=None ⇒ identity reach=1, Dirac arrival` flowing through one formula.
+
+### 1a. Data flow vs call order
+
+The 8-step listing above describes the **data flow** — what each layer reads and produces. The **call order** inside the public entry `compute_cohort_maturity_rows_v3` is **interleaved** with the primitive substrate (CF_PRIMITIVE_SUBSTRATE.md Stage A):
+
+```
+compute_cohort_maturity_rows_v3:
+  1. resolve_model_params                       (resolves priors)
+  2. build_cohort_evidence_from_frames          ←  Row layer 1
+  3. _aggregate_request_candidates              (flatten evidence to one pool)
+  4. build_resolved_cf_runtime                  ←  Substrate stage A (A1–A5)
+  5. _root_window_carrier_n_by_anchor_day       ←  Row layer 2
+  6. _build_selected_source_day_mass            ←  Row layer 3
+  7. _build_carrier_only_denominator_prefix     ←  Row layer 4
+  8. _build_selected_a_clock_evidence_from_runtime
+                                                ←  Row layers 5 + 6
+  9. _project_runtime_rows                      ←  Row layers 7 + 8
+```
+
+Row layer 1 runs **before** the substrate, not after. Row layers 5+6 are produced together inside one call; layers 7+8 likewise. The primitive substrate (A1–A5) sits between row layer 1 and row layer 2. This is by design: the substrate consumes the candidate pool the row pipeline already flattened, and the row pipeline then reads runtime objects the substrate produced.
+
+### 1b. Single-pool invariant for evidence
+
+Per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` invariant 2 ("one entry point for evidence"), **every consumer in the row pipeline reads evidence from the same canonical pool: `runtime.request_evidence_candidates`**. This is the flat, deduplicated `Sequence[EvidenceCandidate]` built by `_aggregate_request_candidates` before `build_resolved_cf_runtime` is called.
+
+Concrete consequences:
+
+- The primitive substrate (Stage A) consumes the pool via `evidence_candidates=` on `build_resolved_cf_runtime`, which copies it onto the runtime as `request_evidence_candidates` (a tuple).
+- Row layer 2 (`_root_window_carrier_n_by_anchor_day`) reads `runtime.request_evidence_candidates` directly. It accepts the flat sequence — not a per-edge-keyed dict shape.
+- The public entry `compute_cohort_maturity_rows_v3` still accepts the legacy `per_edge_subject_candidates` and `per_edge_upstream_candidates` parameters. They are a caller convenience for production (`api_handlers.py` builds them via `build_(carrier_)superset_candidates_by_edge` and passes both). They feed `_aggregate_request_candidates` only and are not read elsewhere.
+
+A test or production call that supplies `evidence_candidates=` directly drives the same data path as production — no parameter-shape switch.
 
 ---
 
