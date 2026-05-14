@@ -441,7 +441,7 @@ def test_well_formed_snapshot_only_populates_chart_rows():
                               if isinstance(r.get('midpoint'), (int, float))]
     assert forecast_with_midpoint, (
         'no forecast-zone rows carry a midpoint — the runtime did not '
-        'compose a draw-coherent posterior on well-formed evidence'
+        'compose a per-draw posterior on well-formed evidence'
     )
     for r in forecast_with_midpoint:
         _assert_fan_band_contract(r, r['tau_days'])

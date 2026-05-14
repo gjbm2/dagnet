@@ -12,7 +12,7 @@ Contract source of truth:
 docs/current/project-bayes/73n-carrier-evidence-conditioning-implementation-plan.md
 §"Multi-Hop Subject Span Composition" lines 684-698; with
 algebra reuse from §"Mathematical Invariants" §429-431, §"Composition
-pass" §358-370, and §"Draw-family coherence" §126-138 / §585-591.
+pass" §358-370.
 
 Critical invariants this module pins:
 
@@ -25,17 +25,16 @@ Critical invariants this module pins:
     ``(transition, scope, prefix-arrival identity)`` and for populating
     every primitive at the same draw count ``S``. The composer only
     enforces local checks.
-  - If ANY primitive in the span is not draw-coherent
-    (``MOMENTS_ONLY`` / ``DEGRADED`` / ``UNAVAILABLE`` /
-    ``UNSUPPORTED_RESIDUAL``), the composed result drops to moments-only
-    and ``is_draw_coherent`` is False. Composition does NOT fabricate a
-    coherent draw family for a primitive that refused one (plan §591).
+  - Every constructed primitive is draw-bearing by contract (status
+    refusals are made before primitive construction, not after). The
+    composer always runs the per-draw DP and produces per-draw output;
+    there is no draw/no-draw fork.
   - Probability and conditional timing are kept separate. Reach affects
     counts and denominator mass; it does NOT multiply displayed subject
     rates (plan §441).
-  - DP algebra is delegated to ``timing_span`` for both moments-only and
-    per-draw primitive composition, so prefix-arrival and runtime spans
-    share one timing implementation.
+  - DP algebra is delegated to ``timing_span`` for per-draw primitive
+    composition, so prefix-arrival and runtime spans share one timing
+    implementation.
   - Single-hop is the natural degeneracy: a one-edge span yields the
     same composed result as the underlying primitive (plan §364).
 
@@ -69,11 +68,7 @@ import result_cache  # noqa: E402
 from .primitive_evidence import RequestPrimitiveRegistry
 from .primitives import (
     ConditionedTransitionPrimitive,
-    ConditioningStatus,
-    DrawFamilyMode,
-    PrimitiveScope,
     TimingFamily,
-    TransitionIdentity,
 )
 from .span_kernel import SpanTopology, _build_span_topology
 from .timing_span import _topological_reach, compose_timing_span_from_densities
@@ -137,28 +132,23 @@ class ComposedPrimitiveSpan:
     """Composed primitive span.
 
     The object exposes the composed span probability (reach) and
-    conditional timing CDF, both as moments and (when every primitive is
-    draw-coherent) as per-draw arrays. Consumers select the surface they
-    need; projection MUST keep reach separate from displayed rates per
-    plan §441.
-
-    ``is_draw_coherent`` is the authoritative gate for draw-level
-    consumption. Moments-only spans must not be presented as draw
-    families (plan §591); the ``span_p_draws`` and ``cdf_draws`` fields
-    are ``None`` in that case.
+    conditional timing CDF, both as moments and as per-draw arrays.
+    Every constructed primitive is draw-bearing by contract, so the
+    composer always produces per-draw output; consumers select the
+    surface they need. Projection MUST keep reach separate from
+    displayed rates per plan §441.
     """
     x_node_id: str
     end_node_id: str
     primitive_count: int
     draw_count: int
-    is_draw_coherent: bool
 
     span_p_mean: float
     span_p_sd: float
-    span_p_draws: Optional[np.ndarray]
+    span_p_draws: np.ndarray
 
     cdf_mean: np.ndarray
-    cdf_draws: Optional[np.ndarray]
+    cdf_draws: np.ndarray
 
     max_tau: int
 
@@ -200,9 +190,7 @@ class ComposeOptions:
 class CompositionError(Exception):
     """Raised when composition cannot proceed because a hard invariant is
     violated (no path X→end, missing primitive for an edge that the
-    topology requires, draw-count mismatch). Soft refusals (a primitive
-    declines to act as a coherent draw family) degrade to moments-only
-    rather than raising."""
+    topology requires, draw-count mismatch)."""
 
 
 # ─── Public composer entry point ───────────────────────────────────────
@@ -246,9 +234,8 @@ def compose_primitive_span(
     -------
     ComposedPrimitiveSpan
         Composed reach (``span_p_*``) and conditional CDF
-        (``cdf_*``). When every primitive is draw-coherent the per-draw
-        arrays are populated; otherwise the result is moments-only and
-        ``is_draw_coherent`` is False.
+        (``cdf_*``). Every constructed primitive is draw-bearing by
+        contract, so the per-draw arrays are always populated.
 
     Raises
     ------
@@ -260,9 +247,9 @@ def compose_primitive_span(
 
     # Resolve every edge in the topology to its primitive. Missing → hard
     # error: the caller must populate the registry before composing
-    # (plan §675). A primitive that is intentionally moments-only/degraded
-    # is a soft refusal handled below; a missing primitive is a contract
-    # violation.
+    # (plan §675). Refusal cases (unparameterised residuals, complement
+    # requests) are caught upstream at the residual guard and never
+    # reach the composer.
     edge_primitives: List[
         Tuple[Tuple[str, str], ConditionedTransitionPrimitive]
     ] = []
@@ -275,8 +262,6 @@ def compose_primitive_span(
                 f"every edge in the X→end topology must have a registry entry"
             )
         edge_primitives.append(((from_id, to_id), primitive))
-
-    primitive_count = len(edge_primitives)
 
     # Composed-span cache: deterministic given topology + primitive
     # identities + options. The DP convolution over per-edge per-draw
@@ -293,28 +278,15 @@ def compose_primitive_span(
     if hit:
         return cached
 
-    # Draw-coherence gate (plan §126-138, §591). Any single-primitive
-    # refusal collapses the whole span to moments-only.
-    coherent_primitives = [p for _, p in edge_primitives if p.is_draw_coherent]
-    all_coherent = len(coherent_primitives) == primitive_count
-
-    if all_coherent:
-        draw_counts = {p.draw_count for _, p in edge_primitives}
-        S = next(iter(draw_counts), 0)
-        composed = _compose_draws(
-            topo=topo,
-            edge_primitives=edge_primitives,
-            S=S,
-            max_tau=options.max_tau,
-            cdf_renorm_tolerance=options.cdf_renorm_tolerance,
-        )
-    else:
-        composed = _compose_moments(
-            topo=topo,
-            edge_primitives=edge_primitives,
-            max_tau=options.max_tau,
-            cdf_renorm_tolerance=options.cdf_renorm_tolerance,
-        )
+    draw_counts = {p.draw_count for _, p in edge_primitives}
+    S = next(iter(draw_counts), 0)
+    composed = _compose_draws(
+        topo=topo,
+        edge_primitives=edge_primitives,
+        S=S,
+        max_tau=options.max_tau,
+        cdf_renorm_tolerance=options.cdf_renorm_tolerance,
+    )
 
     _subject_span_cache.put(cache_key, composed)
     return composed
@@ -354,7 +326,6 @@ def _compose_draws(
             end_node_id=topo.y_node_id,
             primitive_count=0,
             draw_count=0,
-            is_draw_coherent=True,
             span_p_mean=1.0,
             span_p_sd=0.0,
             span_p_draws=np.array([], dtype=np.float64),
@@ -366,7 +337,6 @@ def _compose_draws(
                 edge_primitives=[],
                 mode="draws",
                 S=0,
-                all_coherent=True,
             ),
         )
 
@@ -469,7 +439,6 @@ def _compose_draws(
         edge_primitives=edge_primitives,
         mode="draws",
         S=S,
-        all_coherent=True,
     )
 
     return ComposedPrimitiveSpan(
@@ -477,128 +446,11 @@ def _compose_draws(
         end_node_id=topo.y_node_id,
         primitive_count=len(edge_primitives),
         draw_count=S,
-        is_draw_coherent=True,
         span_p_mean=span_p_mean,
         span_p_sd=span_p_sd,
         span_p_draws=span_p_draws,
         cdf_mean=cdf_mean,
         cdf_draws=conditional_cdf_draws,
-        max_tau=max_tau,
-        provenance=provenance,
-    )
-
-
-# ─── Moments-only composition ──────────────────────────────────────────
-
-
-def _compose_moments(
-    *,
-    topo: SpanTopology,
-    edge_primitives: List[
-        Tuple[Tuple[str, str], ConditionedTransitionPrimitive]
-    ],
-    max_tau: int,
-    cdf_renorm_tolerance: float,
-) -> ComposedPrimitiveSpan:
-    """Moments-only fallback.
-
-    Used when at least one primitive in the span refuses to act as a
-    coherent draw family (plan §591). The composer runs a single DP
-    using per-edge mean probabilities and mean conditional CDFs; the
-    result has no per-draw arrays and ``span_p_sd`` is reported as
-    ``NaN`` to signal that draw-level uncertainty is unavailable.
-    """
-    T = max_tau + 1
-    densities: Dict[Tuple[str, str], np.ndarray] = {}
-    edge_probs_mean: Dict[Tuple[str, str], float] = {}
-    refusal_reasons: List[Mapping[str, Any]] = []
-
-    for (from_id, to_id), primitive in edge_primitives:
-        p_mean = (
-            primitive.probability_posterior.mean
-            if primitive.probability_posterior is not None
-            else (primitive.probability_prior.mean
-                  if primitive.probability_prior is not None else 0.0)
-        )
-        edge_probs_mean[(from_id, to_id)] = float(p_mean)
-
-        if not primitive.is_draw_coherent:
-            refusal_reasons.append({
-                "edge_id": primitive.transition.edge_id,
-                "from": from_id,
-                "to": to_id,
-                "status": primitive.status.value,
-                "draw_family_mode": primitive.draw_family_mode.value,
-            })
-
-        if primitive.timing_family == TimingFamily.NON_LATENT:
-            density = np.zeros(T, dtype=np.float64)
-            density[0] = p_mean
-            densities[(from_id, to_id)] = density
-            continue
-
-        if primitive.timing_family == TimingFamily.DETERMINISTIC:
-            shift = primitive.timing_posterior.deterministic_shift_days
-            if shift is None or shift < 0:
-                density = np.zeros(T, dtype=np.float64)
-                density[0] = p_mean
-            else:
-                density = np.zeros(T, dtype=np.float64)
-                density[min(int(shift), max_tau)] = p_mean
-            densities[(from_id, to_id)] = density
-            continue
-
-        cdf_mean = np.asarray(
-            primitive.timing_posterior.cdf_mean, dtype=np.float64
-        )
-        cdf_aligned = _align_cdf_grid(cdf_mean[None, :], T)[0]
-        pmf = np.diff(cdf_aligned, prepend=0.0)
-        s_total = float(pmf.sum())
-        if s_total > cdf_renorm_tolerance:
-            pmf = pmf / s_total
-        else:
-            pmf = np.zeros_like(pmf)
-            pmf[0] = 1.0
-        densities[(from_id, to_id)] = pmf * p_mean
-
-    expected_reach = _topological_reach(topo, edge_probs_mean)
-    timing = compose_timing_span_from_densities(
-        graph={},
-        root_node_id=topo.x_node_id,
-        end_node_id=topo.y_node_id,
-        densities=densities,
-        max_tau=max_tau,
-        topology=topo,
-        expected_reach=expected_reach,
-        cdf_renorm_tolerance=cdf_renorm_tolerance,
-    )
-    span_p_mean = float(timing.reach)
-    cdf_mean = (
-        np.asarray(timing.conditional_cdf, dtype=np.float64)
-        if timing.conditional_cdf is not None
-        else np.zeros(T, dtype=np.float64)
-    )
-
-    provenance = _build_provenance(
-        topo=topo,
-        edge_primitives=edge_primitives,
-        mode="moments",
-        S=0,
-        all_coherent=False,
-        refusal_reasons=refusal_reasons,
-    )
-
-    return ComposedPrimitiveSpan(
-        x_node_id=topo.x_node_id,
-        end_node_id=topo.y_node_id,
-        primitive_count=len(edge_primitives),
-        draw_count=0,
-        is_draw_coherent=False,
-        span_p_mean=span_p_mean,
-        span_p_sd=float("nan"),
-        span_p_draws=None,
-        cdf_mean=cdf_mean,
-        cdf_draws=None,
         max_tau=max_tau,
         provenance=provenance,
     )
@@ -637,8 +489,6 @@ def _build_provenance(
     ],
     mode: str,
     S: int,
-    all_coherent: bool,
-    refusal_reasons: Optional[List[Mapping[str, Any]]] = None,
 ) -> Mapping[str, Any]:
     """Provenance block for the composed span.
 
@@ -653,8 +503,6 @@ def _build_provenance(
             "edge_id": primitive.transition.edge_id,
             "status": primitive.status.value,
             "timing_family": primitive.timing_family.value,
-            "draw_family_mode": primitive.draw_family_mode.value,
-            "is_draw_coherent": primitive.is_draw_coherent,
             "p_mean": (
                 primitive.probability_posterior.mean
                 if primitive.probability_posterior is not None
@@ -670,9 +518,7 @@ def _build_provenance(
         "topology_edge_count": len(topo.edge_list),
         "composition_mode": mode,
         "draw_count": S,
-        "all_coherent": all_coherent,
         "primitives": tuple(primitive_summaries),
-        "refusal_reasons": tuple(refusal_reasons or ()),
     }
 
 

@@ -1,14 +1,16 @@
 """
-Unsupported residual / unparameterised edge guard.
+Unparameterised edge guard.
 
-Defines the first guardrail for edge requirements that primitive
-conditioning cannot serve. Plan §"Residual / unparameterised edge
-guard" line 654-662:
+Defines the front-gate for edge requirements that primitive
+conditioning cannot serve. A refused decision propagates as an
+absent primitive plus an explicit diagnostic; the engine never
+constructs a posterior-less "refusal" primitive (plan §"Residual /
+unparameterised edge guard" line 654-662):
 
   - The first implementation deliberately does NOT derive residual
     probabilities. It may pass through explicit deterministic graph
-    semantics, but otherwise marks unparameterised residual / complement
-    edges UNSUPPORTED_RESIDUAL or DEGRADED for live CF composition.
+    semantics; every other unparameterised case is refused before
+    primitive construction with ``forward_to_conditioning=False``.
   - The guard MUST NOT turn supported doc 29b split/join/leakage
     topology into a residual/complement problem. A split, join,
     fan-in, fan-out, or side-exit leakage edge that lies inside the
@@ -16,33 +18,29 @@ guard" line 654-662:
     remains a normal DAG-composition case (plan §660).
   - Adjacency-only ``1 - p`` derivation is rejected by the guard.
     CF composition contains no ``1 - p``, residual-sibling, or
-    branch-complement code today (baseline §1.9, §1.11); Stage 4
-    surfaces a request for adjacency complement as
-    ``UNSUPPORTED_RESIDUAL`` rather than computing it.
+    branch-complement code today (baseline §1.9, §1.11); the guard
+    refuses adjacency-complement requests rather than computing
+    them.
   - No-evidence parameterised primitives remain ``PRIOR_ONLY``
-    (Stage 3's `_make_prior_only_primitive`). They never reach Stage 4.
+    (Stage 3's `_make_prior_only_primitive`). They never reach the
+    guard.
   - Graph-output sibling rebalancing remains owned by
-    ``UpdateManager.applyBatchLAGValues`` after CF writeback. Stage 4
-    does not move sibling rebalancing into CF (plan §55, §662;
-    baseline §1.11).
+    ``UpdateManager.applyBatchLAGValues`` after CF writeback. The
+    guard does not move sibling rebalancing into CF (plan §55,
+    §662; baseline §1.11).
   - A prepared span primitive that crosses the X boundary or mixes
     incompatible slice/context/regime/as-at metadata is already
     rejected by ``validate_span_primitive`` in
-    ``runner.primitive_evidence`` (Stage 2). Stage 4 consumes the
-    rejection signal and emits ``UNSUPPORTED_RESIDUAL`` when
-    composition cannot fall back to edge primitives (plan §123,
-    §431, §619).
-
-Stage 4 is shadow per the migration choreography (plan §391-399). The
-guard module is dormant in the live request path; Stage 5+ will
-consume it. The deliverable is callable and tested in isolation.
+    ``runner.primitive_evidence`` (Stage 2). The guard consumes the
+    rejection signal and refuses to forward to conditioning (plan
+    §123, §431, §619).
 
 This module imports only from ``runner.primitives``. It does NOT
 import from ``forecast_runtime``, ``forecast_state``,
 ``cohort_forecast_v3``, ``span_kernel``, ``timing_span``,
-or ``primitive_conditioning`` — Stage 4's guard sits next to the
-contract and forms the entry point that Stage 5+ composers will
-call before invoking Stage 3 conditioning.
+or ``primitive_conditioning`` — the guard sits next to the
+contract and forms the entry point composers call before invoking
+Stage 3 conditioning.
 """
 
 from __future__ import annotations
@@ -57,7 +55,6 @@ from .primitives import (
     CompatibilityBlendProvenance,
     ConditionedTransitionPrimitive,
     ConditioningStatus,
-    DrawFamilyMode,
     PrimitiveScope,
     ProbabilityPosterior,
     ResidualPolicyProvenance,
@@ -130,16 +127,16 @@ class ResidualGuardDecision:
     ``forward_to_conditioning`` is True for the PARAMETERISED case;
     the composer then calls Stage 3's ``condition_primitive``.
 
-    For every other case, ``status_to_emit`` is the conditioning
-    status the composer must use when emitting a primitive via
-    ``make_unsupported_residual_primitive`` or
-    ``make_structurally_deterministic_primitive``.
-
-    ``residual_policy`` is populated for the UNSUPPORTED_RESIDUAL
-    cases with the structural element that would have been needed.
+    For every other case, the request is refused before primitive
+    construction. ``rejection_reason`` describes why, and
+    ``residual_policy`` names the structural element the request
+    would have needed (for the residual / complement cases).
+    ``deterministic_p`` is set for STRUCTURALLY_DETERMINISTIC edges
+    that callers may wire directly to a deterministic-edge primitive
+    builder. Refused decisions do not produce a primitive at all —
+    they propagate as an absent primitive plus an explicit diagnostic.
     """
     forward_to_conditioning: bool
-    status_to_emit: Optional[ConditioningStatus]
     rejection_reason: Optional[str]
     residual_policy: Optional[ResidualPolicyProvenance]
     deterministic_p: Optional[float]
@@ -155,20 +152,23 @@ def classify_edge_requirement(
       - PARAMETERISED + no adjacency-complement request →
         forward to conditioning. Stage 3 is the single owner of the
         posterior; if its evidence is empty, Stage 3 emits PRIOR_ONLY.
-        Stage 4 never returns UNSUPPORTED_RESIDUAL for PARAMETERISED.
-      - PARAMETERISED + adjacency-complement requested → reject as
-        UNSUPPORTED_RESIDUAL (plan §55, §660).
+        The guard never refuses a PARAMETERISED edge that has no
+        complement request.
+      - PARAMETERISED + adjacency-complement requested → refuse
+        (``forward_to_conditioning=False``); ``residual_policy``
+        names the complement target (plan §55, §660).
       - STRUCTURALLY_DETERMINISTIC with explicit ``deterministic_p`` →
-        emit STRUCTURALLY_DETERMINISTIC.
+        ``deterministic_p`` set on the decision; caller wires it to
+        ``make_structurally_deterministic_primitive``.
       - STRUCTURALLY_DETERMINISTIC without ``deterministic_p`` →
         ``ValueError``. Determinism is never inferred from missing
         evidence (plan §99).
-      - UNPARAMETERISED_RESIDUAL → emit UNSUPPORTED_RESIDUAL with
-        ``residual_closure_required`` populated.
-      - UNPARAMETERISED_COMPLEMENT → emit UNSUPPORTED_RESIDUAL with
-        ``branch_complement_required`` populated.
-      - PREPARED_SPAN_REJECTED → emit UNSUPPORTED_RESIDUAL carrying
-        the Stage 2 ``validate_span_primitive`` rejection reason.
+      - UNPARAMETERISED_RESIDUAL → refuse; ``residual_policy``
+        carries ``residual_closure_required``.
+      - UNPARAMETERISED_COMPLEMENT → refuse; ``residual_policy``
+        carries ``branch_complement_required``.
+      - PREPARED_SPAN_REJECTED → refuse; ``rejection_reason``
+        carries the Stage 2 ``validate_span_primitive`` reason.
 
     The ``deterministic_p`` argument-or-not check is enforced as a
     contract on the caller — STRUCTURALLY_DETERMINISTIC without an
@@ -180,7 +180,6 @@ def classify_edge_requirement(
         if requirement.requires_adjacency_one_minus_p:
             return ResidualGuardDecision(
                 forward_to_conditioning=False,
-                status_to_emit=ConditioningStatus.UNSUPPORTED_RESIDUAL,
                 rejection_reason=(
                     'parameterised edge cannot be derived from a sibling '
                     'adjacency complement; CF composition does not perform '
@@ -198,7 +197,6 @@ def classify_edge_requirement(
             )
         return ResidualGuardDecision(
             forward_to_conditioning=True,
-            status_to_emit=None,
             rejection_reason=None,
             residual_policy=None,
             deterministic_p=None,
@@ -219,7 +217,6 @@ def classify_edge_requirement(
             )
         return ResidualGuardDecision(
             forward_to_conditioning=False,
-            status_to_emit=ConditioningStatus.STRUCTURALLY_DETERMINISTIC,
             rejection_reason=None,
             residual_policy=None,
             deterministic_p=float(requirement.deterministic_p),
@@ -228,7 +225,6 @@ def classify_edge_requirement(
     if requirement.kind == EdgeRequirementKind.UNPARAMETERISED_RESIDUAL:
         return ResidualGuardDecision(
             forward_to_conditioning=False,
-            status_to_emit=ConditioningStatus.UNSUPPORTED_RESIDUAL,
             rejection_reason=(
                 f'unparameterised residual closure required for '
                 f'{requirement.transition.edge_id}; CF does not derive '
@@ -245,7 +241,6 @@ def classify_edge_requirement(
     if requirement.kind == EdgeRequirementKind.UNPARAMETERISED_COMPLEMENT:
         return ResidualGuardDecision(
             forward_to_conditioning=False,
-            status_to_emit=ConditioningStatus.UNSUPPORTED_RESIDUAL,
             rejection_reason=(
                 f'unparameterised branch complement required for '
                 f'{requirement.transition.edge_id}; CF does not derive '
@@ -262,7 +257,6 @@ def classify_edge_requirement(
     if requirement.kind == EdgeRequirementKind.PREPARED_SPAN_REJECTED:
         return ResidualGuardDecision(
             forward_to_conditioning=False,
-            status_to_emit=ConditioningStatus.UNSUPPORTED_RESIDUAL,
             rejection_reason=(
                 requirement.prepared_span_rejection_reason
                 or 'prepared span primitive rejected by Stage 2 validator'
@@ -280,59 +274,6 @@ def classify_edge_requirement(
 
     raise ValueError(
         f'unknown EdgeRequirementKind {requirement.kind!r}'
-    )
-
-
-def make_unsupported_residual_primitive(
-    *,
-    transition: TransitionIdentity,
-    scope: PrimitiveScope,
-    draw_count: int,
-    residual_policy: ResidualPolicyProvenance,
-    rejection_reason: str,
-    raw_evidence_scope_key: Optional[str] = None,
-    prior_source: Optional[str] = None,
-) -> ConditionedTransitionPrimitive:
-    """Build an ``UNSUPPORTED_RESIDUAL`` primitive.
-
-    The primitive carries the Stage-1 ``ResidualPolicyProvenance`` slot
-    naming the structural element that would have been required, and
-    refuses to serve a coherent draw family — the Stage 1 contract's
-    ``probability_draws`` / ``timing_draws`` raise
-    ``DrawFamilyUnavailable`` for this status (plan §591).
-
-    The primitive's ``probability_posterior`` and ``timing_posterior``
-    are deliberately ``None``: there is no posterior to read. Composers
-    that hit an ``UNSUPPORTED_RESIDUAL`` primitive must either fall
-    back to a different topology (plan §660) or surface degraded
-    provenance to the caller.
-    """
-    return ConditionedTransitionPrimitive(
-        transition=transition,
-        scope=scope,
-        draw_count=draw_count,
-        status=ConditioningStatus.UNSUPPORTED_RESIDUAL,
-        timing_family=TimingFamily.DETERMINISTIC,
-        raw_evidence_scope_key=raw_evidence_scope_key,
-        weighted_evidence=None,
-        effective_evidence_totals=None,
-        subset_policy=None,
-        compatibility_blend=None,
-        residual_policy=residual_policy,
-        probability_posterior=None,
-        timing_posterior=None,
-        probability_prior=None,
-        timing_prior=None,
-        draw_family_mode=DrawFamilyMode.MOMENTS_ONLY,
-        draw_family_key=None,
-        prior_source=prior_source,
-        skipped_evidence_summary={
-            'rejection_reason': rejection_reason,
-        },
-        notes=(
-            f'status=unsupported_residual',
-            rejection_reason,
-        ),
     )
 
 
@@ -408,7 +349,6 @@ def make_structurally_deterministic_primitive(
         timing_posterior=timing_posterior,
         probability_prior=probability_posterior,
         timing_prior=timing_posterior,
-        draw_family_mode=DrawFamilyMode.KEYED_PRIOR,
         draw_family_key=None,
         prior_source=prior_source,
         skipped_evidence_summary={
@@ -447,5 +387,4 @@ __all__ = [
     'ResidualGuardDecision',
     'classify_edge_requirement',
     'make_structurally_deterministic_primitive',
-    'make_unsupported_residual_primitive',
 ]

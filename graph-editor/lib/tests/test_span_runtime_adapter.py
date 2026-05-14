@@ -283,8 +283,16 @@ def test_strict_span_model_rate_matches_identity_carrier_formula():
         span_p_draws=np.asarray([0.4, 0.2], dtype=float),
         cdf_draws=np.asarray([[0.0, 0.5, 1.0], [0.0, 1.0, 1.0]], dtype=float),
     )
+    # Identity carrier per the post-refactor contract: a zero-edge
+    # span (the algebraic identity of the operator-chain monoid), not
+    # ``None``. ``cdf_draws.shape[0] == 0`` is the signal the per-draw
+    # chain builder reads to emit an empty operator chain.
+    identity_carrier = types.SimpleNamespace(
+        span_p_draws=np.empty(0, dtype=float),
+        cdf_draws=np.zeros((0, 3), dtype=float),
+    )
 
-    draws = _strict_span_model_rate_draws(subject, None, horizon=2)
+    draws = _strict_span_model_rate_draws(subject, identity_carrier, horizon=2)
 
     np.testing.assert_allclose(
         draws,
@@ -300,7 +308,7 @@ def test_strict_span_model_rate_matches_active_carrier_formula():
         cdf_draws=np.asarray([[0.0, 1.0, 1.0], [0.0, 0.5, 1.0]], dtype=float),
     )
     carrier = types.SimpleNamespace(
-        is_draw_coherent=True,
+        span_p_draws=np.ones(2, dtype=float),
         cdf_draws=np.asarray([[0.0, 0.5, 1.0], [0.0, 1.0, 1.0]], dtype=float),
     )
 

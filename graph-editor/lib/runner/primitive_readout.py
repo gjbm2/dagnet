@@ -487,8 +487,6 @@ class ResolvedRuntimeReadoutResult:
             return False
         if self.composed_carrier is None:
             return False
-        if not self.composed_subject.is_draw_coherent:
-            return False
         if self.p_mean_primitive is None:
             return False
         return True
@@ -783,7 +781,6 @@ def compute_resolved_runtime_readout(
             "from": carrier_res.transition.source_node,
             "to": carrier_res.transition.destination_node,
             "status": primitive.status.value,
-            "is_draw_coherent": primitive.is_draw_coherent,
             "p_mean": (
                 float(primitive.probability_posterior.mean)
                 if primitive.probability_posterior is not None else None
@@ -845,7 +842,6 @@ def compute_resolved_runtime_readout(
             "to": subj_res.transition.destination_node,
             "is_target": subj_res.is_target,
             "status": primitive.status.value,
-            "is_draw_coherent": primitive.is_draw_coherent,
             "provenance": primitive.to_provenance_dict(),
         })
     diag["subject_primitives"] = tuple(subject_summaries)
@@ -890,7 +886,6 @@ def compute_resolved_runtime_readout(
         "role": "carrier_to_x",
         "primitive_count": composed_carrier.primitive_count,
         "draw_count": composed_carrier.draw_count,
-        "is_draw_coherent": composed_carrier.is_draw_coherent,
         "reach": composed_carrier.span_p_mean,
         "span_p_sd": composed_carrier.span_p_sd,
         "max_tau": composed_carrier.max_tau,
@@ -921,7 +916,6 @@ def compute_resolved_runtime_readout(
         "role": "subject_span",
         "primitive_count": composed_subject.primitive_count,
         "draw_count": composed_subject.draw_count,
-        "is_draw_coherent": composed_subject.is_draw_coherent,
         "span_p_mean": composed_subject.span_p_mean,
         "span_p_sd": composed_subject.span_p_sd,
         "max_tau": composed_subject.max_tau,
@@ -937,17 +931,9 @@ def compute_resolved_runtime_readout(
     # span probability — which collapses to `mean(p_draws)` for a
     # one-edge span, matching the primitive's IS posterior mean to MC
     # tolerance.
-    if (
-        composed_subject.is_draw_coherent
-        and composed_subject.span_p_draws is not None
-    ):
-        p_mean_pri = float(composed_subject.span_p_mean)
-        p_sd_pri = float(composed_subject.span_p_sd)
-        p_sd_epi_pri = float(composed_subject.span_p_sd)
-    else:
-        p_mean_pri = None
-        p_sd_pri = None
-        p_sd_epi_pri = None
+    p_mean_pri = float(composed_subject.span_p_mean)
+    p_sd_pri = float(composed_subject.span_p_sd)
+    p_sd_epi_pri = float(composed_subject.span_p_sd)
     subject_source = "primitive_span.subject"
 
     diag["composed_public_moments"] = {
@@ -955,11 +941,7 @@ def compute_resolved_runtime_readout(
         "p_sd": p_sd_pri,
         "p_sd_epistemic": p_sd_epi_pri,
     }
-    diag["subject_probability_source"] = (
-        subject_source
-        if composed_subject.is_draw_coherent
-        else f"{subject_source}_moments_only"
-    )
+    diag["subject_probability_source"] = subject_source
     diag["cache_status"] = _cache_status_snapshot()
 
     # ── Unconditioned overlay compositions ─────────────────────────
@@ -1052,17 +1034,13 @@ def compute_resolved_runtime_readout(
         diag[f'unconditioned_overlay_{basis}'] = {
             'subject_span_p_mean': overlay_subject.span_p_mean,
             'subject_span_p_sd': overlay_subject.span_p_sd,
-            'subject_is_draw_coherent': overlay_subject.is_draw_coherent,
             'subject_primitive_count': overlay_subject.primitive_count,
             'subject_draw_count': overlay_subject.draw_count,
             'carrier_primitive_count': overlay_carrier.primitive_count,
             'carrier_span_p_mean': overlay_carrier.span_p_mean,
         }
 
-    substituted = bool(
-        composed_subject.is_draw_coherent
-        and p_mean_pri is not None
-    )
+    substituted = bool(p_mean_pri is not None)
     provenance = _runtime_provenance(
         substituted=substituted,
         subject_source=diag["subject_probability_source"],

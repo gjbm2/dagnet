@@ -19,7 +19,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 def _span(*, cdf_draws, p_draws):
     cdf_arr = np.asarray(cdf_draws, dtype=np.float64)
     return SimpleNamespace(
-        is_draw_coherent=True,
         cdf_draws=cdf_arr,
         cdf_mean=cdf_arr.mean(axis=0),
         span_p_draws=np.asarray(p_draws, dtype=np.float64),
@@ -226,7 +225,6 @@ def _weighted_primitive(*, edge_id, source, dest, rows):
     from runner.primitives import (
         ConditionedTransitionPrimitive,
         ConditioningStatus,
-        DrawFamilyMode,
         PrimitiveScope,
         TimingFamily,
         TransitionIdentity,
@@ -285,7 +283,6 @@ def _weighted_primitive(*, edge_id, source, dest, rows):
         timing_posterior=None,
         probability_prior=None,
         timing_prior=None,
-        draw_family_mode=DrawFamilyMode.KEYED_PRIOR,
         draw_family_key=None,
         prior_source="test",
     )
@@ -1486,7 +1483,6 @@ def _make_test_subject_primitive(*, edge_id, source, dest):
     from runner.primitives import (
         ConditionedTransitionPrimitive,
         ConditioningStatus,
-        DrawFamilyMode,
         PrimitiveScope,
         TimingFamily,
         TransitionIdentity,
@@ -1516,7 +1512,6 @@ def _make_test_subject_primitive(*, edge_id, source, dest):
         subset_policy=None, compatibility_blend=None, residual_policy=None,
         probability_posterior=None, timing_posterior=None,
         probability_prior=None, timing_prior=None,
-        draw_family_mode=DrawFamilyMode.KEYED_PRIOR,
         draw_family_key=None, prior_source="t",
     )
 

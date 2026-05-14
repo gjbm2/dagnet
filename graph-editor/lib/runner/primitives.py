@@ -25,9 +25,10 @@ Critical invariants this module pins:
   - Draw-family identity is correctness, not performance. Two consumers
     presenting the same DrawFamilyKey under the same scope must receive
     identical draws under matching draw indices (plan §141, §585-589).
-  - MOMENTS_ONLY refusal is enforced at the contract level: probability_draws
-    and timing_draws raise DrawFamilyUnavailable. Composition cannot bypass
-    this (plan §591).
+  - Every constructed primitive is draw-bearing. probability_posterior.draws
+    and timing_posterior must be populated; a primitive that cannot supply
+    draws is a construction bug, not a runtime mode. Refusal cases stop
+    upstream at the residual guard, not inside the primitive.
   - Structurally non-latency timing is a Dirac-at-zero structural identity;
     p may be conditioned but mu/sigma/onset/completeness are provenance only
     (plan §83-87, §583).
@@ -54,15 +55,7 @@ class ConditioningStatus(str, Enum):
     CONDITIONED = "conditioned"
     PRIOR_ONLY = "prior_only"
     STRUCTURALLY_DETERMINISTIC = "structurally_deterministic"
-    UNSUPPORTED_RESIDUAL = "unsupported_residual"
     DEGRADED = "degraded"
-    UNAVAILABLE = "unavailable"
-
-
-class DrawFamilyMode(str, Enum):
-    KEYED_PRIOR = "keyed_prior"
-    REUSED_IS = "reused_is"
-    MOMENTS_ONLY = "moments_only"
 
 
 class TimingFamily(str, Enum):
@@ -269,8 +262,14 @@ class CompatibilityBlendProvenance:
 
 @dataclass(frozen=True)
 class ResidualPolicyProvenance:
-    """Why an UNSUPPORTED_RESIDUAL primitive was emitted. CF does not derive
-    these in 73n's first implementation (plan §97, §214)."""
+    """Why the residual guard refused to forward an edge to conditioning.
+
+    Names the structural element a parameterised primitive would have
+    needed — a branch complement (``1 - p`` of a sibling) or a residual
+    closure — that CF composition does not derive in 73n's first
+    implementation (plan §97, §214). Carried on the
+    ``ResidualGuardDecision`` rather than on a primitive: refused
+    decisions do not produce a primitive at all."""
     branch_complement_required: Optional[str]
     residual_closure_required: Optional[str]
     note: Optional[str] = None
@@ -283,8 +282,11 @@ class ResidualPolicyProvenance:
 class ProbabilityPosterior:
     """Posterior p (or prior p when prior_only).
 
-    draws is None for MOMENTS_ONLY mode. When present, len(draws) ==
-    parent primitive draw_count.
+    A constructed primitive's probability posterior carries
+    ``draws`` (``len(draws) == parent primitive draw_count``).
+    ``draws`` is ``Optional`` only because intermediate prior
+    summaries are also represented by this dataclass before the
+    primitive is materialised.
     """
     mean: float
     sd: float
@@ -312,10 +314,12 @@ class TimingPosterior:
 
 
 class DrawFamilyUnavailable(Exception):
-    """Raised when a consumer requests draws from a primitive that refuses
-    to act as a coherent draw family (MOMENTS_ONLY, DEGRADED, UNAVAILABLE,
-    or UNSUPPORTED_RESIDUAL). Refusal is enforced at the primitive contract
-    level, not in composition (plan §591)."""
+    """Raised when a primitive's draw arrays are missing in a way that
+    violates the construction invariant. A constructed primitive is
+    draw-bearing by definition: ``probability_posterior.draws`` and
+    ``timing_posterior`` must be populated. This exception signals a
+    construction bug; refusal cases stop upstream at the residual
+    guard, never as a primitive variant."""
 
 
 @dataclass(frozen=True)
@@ -343,45 +347,26 @@ class ConditionedTransitionPrimitive:
     probability_prior: Optional[ProbabilityPosterior]
     timing_prior: Optional[TimingPosterior]
 
-    draw_family_mode: DrawFamilyMode
     draw_family_key: Optional[DrawFamilyKey]
 
     prior_source: Optional[str]
     skipped_evidence_summary: Mapping[str, Any] = field(default_factory=dict)
     notes: Tuple[str, ...] = ()
 
-    @property
-    def is_draw_coherent(self) -> bool:
-        if self.draw_family_mode == DrawFamilyMode.MOMENTS_ONLY:
-            return False
-        return self.status not in (
-            ConditioningStatus.DEGRADED,
-            ConditioningStatus.UNAVAILABLE,
-            ConditioningStatus.UNSUPPORTED_RESIDUAL,
-        )
-
     def probability_draws(self) -> np.ndarray:
-        if not self.is_draw_coherent:
-            raise DrawFamilyUnavailable(
-                f"primitive {self.transition.edge_id} status="
-                f"{self.status.value} mode={self.draw_family_mode.value} "
-                f"refuses to serve a coherent draw family"
-            )
         if self.probability_posterior is None or \
                 self.probability_posterior.draws is None:
             raise DrawFamilyUnavailable(
-                f"primitive {self.transition.edge_id} has no probability draws"
+                f"primitive {self.transition.edge_id} has no probability "
+                f"draws — construction invariant violated"
             )
         return self.probability_posterior.draws
 
     def timing_draws(self) -> np.ndarray:
-        if not self.is_draw_coherent:
-            raise DrawFamilyUnavailable(
-                f"primitive {self.transition.edge_id} timing draws unavailable"
-            )
         if self.timing_posterior is None:
             raise DrawFamilyUnavailable(
-                f"primitive {self.transition.edge_id} has no timing posterior"
+                f"primitive {self.transition.edge_id} has no timing "
+                f"posterior — construction invariant violated"
             )
         if self.timing_posterior.cdf_draws is not None:
             return self.timing_posterior.cdf_draws
@@ -390,9 +375,7 @@ class ConditionedTransitionPrimitive:
         # well-formed array. Applies to structural identities (NON_LATENT,
         # DETERMINISTIC) and also to latent primitives whose conditioning
         # produced a deterministic CDF only (mu/sigma posterior not yet
-        # sampled per draw). This keeps the legacy single-CDF semantics
-        # the trajectory engine used while moving public scalars onto the
-        # primitive substrate.
+        # sampled per draw).
         if self.timing_posterior.cdf_mean is not None:
             mean = np.asarray(self.timing_posterior.cdf_mean, dtype=float)
             return np.tile(mean, (self.draw_count, 1))
@@ -462,8 +445,6 @@ class ConditionedTransitionPrimitive:
             "draw_count": self.draw_count,
             "status": self.status.value,
             "timing_family": self.timing_family.value,
-            "draw_family_mode": self.draw_family_mode.value,
-            "is_draw_coherent": bool(self.is_draw_coherent),
             "raw_evidence_scope_key": self.raw_evidence_scope_key,
             "has_weighted_evidence": self.weighted_evidence is not None,
             "weighted_evidence": weighted_evidence_block,

@@ -39,15 +39,10 @@ from runner.primitive_residual_guard import (
     ResidualGuardDecision,
     classify_edge_requirement,
     make_structurally_deterministic_primitive,
-    make_unsupported_residual_primitive,
 )
 from runner.primitives import (
-    ConditionedTransitionPrimitive,
     ConditioningStatus,
-    DrawFamilyMode,
-    DrawFamilyUnavailable,
     PrimitiveScope,
-    ResidualPolicyProvenance,
     TimingFamily,
     TransitionIdentity,
 )
@@ -88,37 +83,31 @@ def _scope() -> PrimitiveScope:
 
 
 def test_parameterised_requirement_forwards_to_conditioning():
-    """Plan §572: parameterised edges are owned by Stage 3, not Stage 4."""
+    """Plan §572: parameterised edges are owned by Stage 3."""
     req = EdgeRequirement(
         transition=_transition(),
         kind=EdgeRequirementKind.PARAMETERISED,
     )
     decision = classify_edge_requirement(req)
     assert decision.forward_to_conditioning is True
-    assert decision.status_to_emit is None
     assert decision.residual_policy is None
     assert decision.deterministic_p is None
     assert decision.rejection_reason is None
 
 
-def test_no_evidence_parameterised_does_not_become_unsupported_residual():
+def test_no_evidence_parameterised_is_handled_by_stage_3_not_refused():
     """Plan §95-96, §572: empty evidence under a PARAMETERISED requirement
-    is Stage 3's PRIOR_ONLY case, not Stage 4's UNSUPPORTED_RESIDUAL.
-
-    Stage 4's classifier never returns UNSUPPORTED_RESIDUAL for
-    PARAMETERISED requirements (unless the composer separately asks
-    for adjacency-complement derivation, which is its own error).
-    """
+    is Stage 3's PRIOR_ONLY case, not a refusal. The classifier
+    forwards; Stage 3 produces a draw-bearing prior-only primitive."""
     req = EdgeRequirement(
         transition=_transition(),
         kind=EdgeRequirementKind.PARAMETERISED,
     )
     decision = classify_edge_requirement(req)
     assert decision.forward_to_conditioning is True
-    assert decision.status_to_emit is None
 
 
-def test_structurally_deterministic_with_explicit_p_emits_deterministic_primitive():
+def test_structurally_deterministic_with_explicit_p_carries_p_on_decision():
     req = EdgeRequirement(
         transition=_transition(),
         kind=EdgeRequirementKind.STRUCTURALLY_DETERMINISTIC,
@@ -126,7 +115,6 @@ def test_structurally_deterministic_with_explicit_p_emits_deterministic_primitiv
     )
     decision = classify_edge_requirement(req)
     assert decision.forward_to_conditioning is False
-    assert decision.status_to_emit == ConditioningStatus.STRUCTURALLY_DETERMINISTIC
     assert decision.deterministic_p == 1.0
 
 
@@ -157,7 +145,7 @@ def test_structurally_deterministic_p_out_of_range_raises():
     assert 'out of range' in str(info.value).lower()
 
 
-def test_unparameterised_residual_emits_unsupported_residual():
+def test_unparameterised_residual_refuses_with_residual_closure():
     req = EdgeRequirement(
         transition=_transition(),
         kind=EdgeRequirementKind.UNPARAMETERISED_RESIDUAL,
@@ -165,13 +153,12 @@ def test_unparameterised_residual_emits_unsupported_residual():
     )
     decision = classify_edge_requirement(req)
     assert decision.forward_to_conditioning is False
-    assert decision.status_to_emit == ConditioningStatus.UNSUPPORTED_RESIDUAL
     assert decision.residual_policy is not None
     assert decision.residual_policy.residual_closure_required == 'X-end via residual closure'
     assert decision.residual_policy.branch_complement_required is None
 
 
-def test_unparameterised_complement_emits_unsupported_residual_with_target():
+def test_unparameterised_complement_refuses_with_branch_complement_target():
     req = EdgeRequirement(
         transition=_transition(),
         kind=EdgeRequirementKind.UNPARAMETERISED_COMPLEMENT,
@@ -179,7 +166,6 @@ def test_unparameterised_complement_emits_unsupported_residual_with_target():
     )
     decision = classify_edge_requirement(req)
     assert decision.forward_to_conditioning is False
-    assert decision.status_to_emit == ConditioningStatus.UNSUPPORTED_RESIDUAL
     assert decision.residual_policy is not None
     assert decision.residual_policy.branch_complement_required == 'sibling-edge-uw'
     assert decision.residual_policy.residual_closure_required is None
@@ -189,8 +175,8 @@ def test_adjacency_one_minus_p_rejected_for_parameterised_edge():
     """Plan §55, §660: CF composition does not derive 1 - p from siblings.
 
     A PARAMETERISED requirement that flags adjacency-complement is
-    rejected as UNSUPPORTED_RESIDUAL with an explicit reason citing
-    the no-1-p invariant.
+    refused with an explicit rejection_reason citing the no-1-p
+    invariant.
     """
     req = EdgeRequirement(
         transition=_transition(),
@@ -200,16 +186,15 @@ def test_adjacency_one_minus_p_rejected_for_parameterised_edge():
     )
     decision = classify_edge_requirement(req)
     assert decision.forward_to_conditioning is False
-    assert decision.status_to_emit == ConditioningStatus.UNSUPPORTED_RESIDUAL
     assert decision.residual_policy is not None
     assert decision.residual_policy.branch_complement_required == 'sibling-edge-failure'
     assert 'sibling adjacency complement' in (decision.rejection_reason or '')
 
 
-def test_prepared_span_rejected_emits_unsupported_residual():
+def test_prepared_span_rejected_refuses_with_reason():
     """Plan §123, §431, §619: spans crossing X or mixing metadata are
-    Stage 2 rejections; Stage 4 surfaces them as UNSUPPORTED_RESIDUAL
-    when no edge fallback is possible."""
+    Stage 2 rejections; the guard surfaces them as a refusal with
+    rejection_reason."""
     req = EdgeRequirement(
         transition=_transition(),
         kind=EdgeRequirementKind.PREPARED_SPAN_REJECTED,
@@ -217,89 +202,23 @@ def test_prepared_span_rejected_emits_unsupported_residual():
     )
     decision = classify_edge_requirement(req)
     assert decision.forward_to_conditioning is False
-    assert decision.status_to_emit == ConditioningStatus.UNSUPPORTED_RESIDUAL
     assert decision.rejection_reason == 'span crosses the X boundary'
 
 
 # ─── Primitive constructors ────────────────────────────────────────────
-
-
-def test_unsupported_residual_primitive_refuses_draws():
-    """Plan §591: UNSUPPORTED_RESIDUAL primitives must refuse to serve a
-    coherent draw family. The Stage 1 contract enforces this — Stage 4
-    just needs to construct a primitive that uses the right slots."""
-    prim = make_unsupported_residual_primitive(
-        transition=_transition(),
-        scope=_scope(),
-        draw_count=1000,
-        residual_policy=ResidualPolicyProvenance(
-            branch_complement_required='sibling-failure',
-            residual_closure_required=None,
-            note='requested complement of evidence-backed sibling',
-        ),
-        rejection_reason='requested complement of evidence-backed sibling',
-    )
-    assert prim.status == ConditioningStatus.UNSUPPORTED_RESIDUAL
-    assert prim.is_draw_coherent is False
-    assert prim.draw_family_mode == DrawFamilyMode.MOMENTS_ONLY
-    with pytest.raises(DrawFamilyUnavailable):
-        prim.probability_draws()
-    with pytest.raises(DrawFamilyUnavailable):
-        prim.timing_draws()
-
-
-def test_unsupported_residual_primitive_carries_residual_policy_provenance():
-    """The residual_policy slot must name the structural element that
-    would have been required so callers can diagnose the rejection."""
-    prim = make_unsupported_residual_primitive(
-        transition=_transition('edge-residual'),
-        scope=_scope(),
-        draw_count=500,
-        residual_policy=ResidualPolicyProvenance(
-            branch_complement_required=None,
-            residual_closure_required='X-end residual closure',
-            note='no parameterised primitive on residual closure',
-        ),
-        rejection_reason='no parameterised primitive on residual closure',
-    )
-    assert prim.subset_policy is None
-    assert prim.compatibility_blend is None
-    assert prim.residual_policy is not None
-    assert prim.residual_policy.residual_closure_required == 'X-end residual closure'
-
-
-def test_unsupported_residual_provenance_dict_contains_residual_policy_slot():
-    """Stage 8 will roll provenance into the response. The dump must
-    expose the residual_policy slot separately from subset_policy and
-    compatibility_blend (plan §245)."""
-    prim = make_unsupported_residual_primitive(
-        transition=_transition(),
-        scope=_scope(),
-        draw_count=100,
-        residual_policy=ResidualPolicyProvenance(
-            branch_complement_required='sibling',
-            residual_closure_required=None,
-            note='note',
-        ),
-        rejection_reason='reason',
-    )
-    dump = prim.to_provenance_dict()
-    assert dump['status'] == 'unsupported_residual'
-    assert dump['residual_policy'] == {
-        'branch_complement_required': 'sibling',
-        'residual_closure_required': None,
-        'note': 'note',
-    }
-    assert dump['subset_policy'] is None
-    assert dump['compatibility_blend'] is None
-    assert dump['probability_posterior'] is None
+#
+# Removed: ``test_unsupported_residual_primitive_refuses_draws``,
+# ``test_unsupported_residual_primitive_carries_residual_policy_provenance``,
+# and ``test_unsupported_residual_provenance_dict_contains_residual_policy_slot``.
+# ``make_unsupported_residual_primitive`` was deleted along with
+# ``UNSUPPORTED_RESIDUAL`` status: refusal happens upstream on the
+# ``ResidualGuardDecision`` itself (no primitive is ever constructed
+# for a refused edge).
 
 
 def test_structurally_deterministic_primitive_serves_constant_draws():
-    """STRUCTURALLY_DETERMINISTIC is a coherent draw family of one
-    repeated value. The contract's is_draw_coherent must be True
-    (status not in {DEGRADED, UNAVAILABLE, UNSUPPORTED_RESIDUAL}, mode
-    not MOMENTS_ONLY)."""
+    """STRUCTURALLY_DETERMINISTIC is a draw-bearing primitive of one
+    repeated value."""
     prim = make_structurally_deterministic_primitive(
         transition=_transition(),
         scope=_scope(),
@@ -307,8 +226,6 @@ def test_structurally_deterministic_primitive_serves_constant_draws():
         deterministic_p=1.0,
     )
     assert prim.status == ConditioningStatus.STRUCTURALLY_DETERMINISTIC
-    assert prim.is_draw_coherent is True
-    assert prim.draw_family_mode == DrawFamilyMode.KEYED_PRIOR
     p_draws = prim.probability_draws()
     assert p_draws.shape == (128,)
     np.testing.assert_array_equal(p_draws, np.full(128, 1.0))
@@ -399,9 +316,8 @@ def test_supported_split_join_leakage_topology_classifies_as_parameterised():
         decision = classify_edge_requirement(req)
         assert decision.forward_to_conditioning is True, (
             f'parameterised {role_label} edge must forward to Stage 3, '
-            f'not be intercepted by Stage 4'
+            f'not be intercepted by the residual guard'
         )
-        assert decision.status_to_emit is None
         assert decision.residual_policy is None
 
 
@@ -526,7 +442,6 @@ def test_residual_guard_does_not_expose_sibling_rebalancer():
         'ResidualGuardDecision',
         'classify_edge_requirement',
         'make_structurally_deterministic_primitive',
-        'make_unsupported_residual_primitive',
     }
     assert set(mod.__all__) == expected
     forbidden_substrings = ('rebalance', 'sibling', 'writeback', 'applyBatch')

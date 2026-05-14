@@ -49,10 +49,7 @@ from runner.primitives import (
     ConditionedTransitionPrimitive,
     ConditioningStatus,
     DrawFamilyKey,
-    DrawFamilyMode,
     PrimitiveScope,
-    ProbabilityPosterior,
-    SubsetPolicyProvenance,
     TimingFamily,
     TimingPosterior,
     TransitionIdentity,
@@ -195,48 +192,6 @@ def _build_prior_only_primitive(
     )
 
 
-def _make_moments_only_primitive(*, from_id, to_id, edge_id):
-    """Construct a MOMENTS_ONLY primitive that refuses coherent draws."""
-    transition = TransitionIdentity(
-        source_node=from_id, destination_node=to_id, edge_id=edge_id,
-    )
-    scope = _scope()
-    return ConditionedTransitionPrimitive(
-        transition=transition,
-        scope=scope,
-        draw_count=200,
-        status=ConditioningStatus.CONDITIONED,
-        timing_family=TimingFamily.NON_LATENT,
-        raw_evidence_scope_key='ev-scope-empty',
-        weighted_evidence=WeightedPrimitiveEvidenceView(
-            n_weighted_total=0.0,
-            k_weighted_total=0.0,
-            rows=(),
-            arrival_weight_summary={'topology_case': 'test'},
-            binding_policy='test',
-            evidence_scope_key='ev-scope-empty',
-        ),
-        effective_evidence_totals=(0.0, 0.0),
-        subset_policy=SubsetPolicyProvenance(
-            m_S=0.0, m_G=None, r=None,
-            skip_reason='moments_only_test',
-            equality_explicit=True,
-        ),
-        compatibility_blend=None,
-        residual_policy=None,
-        probability_posterior=ProbabilityPosterior(mean=0.5, sd=0.1, draws=None),
-        timing_posterior=TimingPosterior(
-            family=TimingFamily.NON_LATENT,
-            cdf_mean=tuple(1.0 for _ in range(61)),
-        ),
-        probability_prior=ProbabilityPosterior(mean=0.5, sd=0.1, draws=None),
-        timing_prior=None,
-        draw_family_mode=DrawFamilyMode.MOMENTS_ONLY,
-        draw_family_key=None,
-        prior_source='test_synthetic',
-    )
-
-
 def _build_registry_with_primitives(primitives):
     """Register a list of (primitive, scope) pairs into a fresh registry."""
     arrival_map = _empty_arrival_map()
@@ -279,7 +234,6 @@ def test_single_hop_degenerates_to_underlying_primitive():
         options=ComposeOptions(max_tau=60),
     )
     assert composed.primitive_count == 1
-    assert composed.is_draw_coherent
     # composed mean should match primitive's posterior mean within MC noise
     assert composed.span_p_mean == pytest.approx(
         primitive.probability_posterior.mean, abs=0.03
@@ -387,40 +341,6 @@ def test_draw_coherence_preserved_across_primitives():
     assert np.array_equal(composed_a.span_p_draws, composed_b.span_p_draws)
 
 
-# ─── Degraded / moments-only fallback ──────────────────────────────────
-
-
-def test_moments_only_primitive_drops_span_to_moments_only():
-    """Plan §591: a primitive that refuses to act as a coherent draw
-    family forces the composed span to drop to moments-only. The
-    composer does not fabricate a coherent draw family.
-    """
-    graph = _make_graph([('e-x-m', 'X', 'M'), ('e-m-y', 'M', 'Y')])
-    p1 = _build_prior_only_primitive(
-        from_id='X', to_id='M', edge_id='e-x-m',
-    )
-    p2_moments = _make_moments_only_primitive(
-        from_id='M', to_id='Y', edge_id='e-m-y',
-    )
-    composed = compose_primitive_span(
-        graph=graph, x_node_id='X', end_node_id='Y',
-        registry=_build_registry_with_primitives([p1, p2_moments]),
-        edge_to_primitive_lookup=_lookup_factory({
-            'e-x-m': p1, 'e-m-y': p2_moments,
-        }),
-        options=ComposeOptions(max_tau=60),
-    )
-    assert composed.is_draw_coherent is False
-    assert composed.span_p_draws is None
-    assert composed.cdf_draws is None
-    # Provenance carries the refusal reason.
-    refusals = composed.provenance.get('refusal_reasons')
-    assert refusals
-    assert any(
-        r.get('edge_id') == 'e-m-y' for r in refusals
-    )
-
-
 # ─── Hard contract violations ──────────────────────────────────────────
 
 
@@ -496,29 +416,17 @@ def test_provenance_records_composition_mode_draws():
         options=ComposeOptions(max_tau=60),
     )
     assert composed.provenance['composition_mode'] == 'draws'
-    assert composed.provenance['all_coherent'] is True
     assert composed.provenance['primitive_count'] == 2
     primitive_summaries = composed.provenance['primitives']
     assert len(primitive_summaries) == 2
     assert {ps['edge_id'] for ps in primitive_summaries} == {'e-x-m', 'e-m-y'}
 
 
-def test_provenance_records_composition_mode_moments():
-    graph = _make_graph([('e-x-m', 'X', 'M'), ('e-m-y', 'M', 'Y')])
-    p1 = _build_prior_only_primitive(from_id='X', to_id='M', edge_id='e-x-m')
-    p2 = _make_moments_only_primitive(
-        from_id='M', to_id='Y', edge_id='e-m-y',
-    )
-    composed = compose_primitive_span(
-        graph=graph, x_node_id='X', end_node_id='Y',
-        registry=_build_registry_with_primitives([p1, p2]),
-        edge_to_primitive_lookup=_lookup_factory({
-            'e-x-m': p1, 'e-m-y': p2,
-        }),
-        options=ComposeOptions(max_tau=60),
-    )
-    assert composed.provenance['composition_mode'] == 'moments'
-    assert composed.provenance['all_coherent'] is False
+# Removed: ``test_provenance_records_composition_mode_moments``.
+# The moments-only composer path was deleted along with
+# ``ComposedPrimitiveSpan.is_draw_coherent`` — every constructed
+# primitive is draw-bearing, so the composer always runs the per-draw
+# DP and the provenance composition_mode is always ``draws``.
 
 
 # ─── Source enforcement: composer does not import forbidden modules ────

@@ -1812,13 +1812,11 @@ def _composed_pair_request_cdf_draws(
     (S, horizon+1) grid for a given (subject, carrier) composition pair.
     For carrier=identity (None) the result is the subject CDF directly;
     for active cohort the carrier and subject CDFs are convolved per
-    draw. Returns None when either object is moments-only.)
+    draw.)
     """
-    if subject is None or not subject.is_draw_coherent:
+    if subject is None:
         return None
     subject_cdf = subject.cdf_draws
-    if subject_cdf is None:
-        return None
 
     T = int(horizon) + 1
     if subject_cdf.shape[1] >= T:
@@ -1835,8 +1833,6 @@ def _composed_pair_request_cdf_draws(
 
     if carrier is None:
         return subj
-    if not carrier.is_draw_coherent or carrier.cdf_draws is None:
-        return None
     car = carrier.cdf_draws
     if car.shape[1] >= T:
         car = car[:, :T]
@@ -1862,13 +1858,101 @@ def _composed_pair_request_cdf_draws(
     return np.clip(convolved, 0.0, 1.0)
 
 
+# =====================================================================
+# Strict-span algebra — design spine
+# ---------------------------------------------------------------------
+# Preserved here so the algebraic structure of subject/carrier span
+# construction isn't lost across edits.
+#
+# Two distinct clock ideas:
+#   T1        = primitive conditioning root; used to weight evidence rows
+#   span_root = composition / readout origin for a whole carrier or
+#               subject span
+#
+# Query setup:
+#   window(X-Z):
+#     carrier_prims = empty
+#     subject_prims = edges along X -> Z
+#     for subject prim U->V:
+#         T1 = U                       # local primitive clock
+#         evidence is local U->V:
+#             n = arrivals at U
+#             k = arrivals at V
+#     subject_span_root = X            # compose local operators into X->Z
+#
+#   cohort(A, X-E):
+#     carrier_prims = edges along A -> X
+#     subject_prims = edges along X -> E
+#     for carrier prim U->V:
+#         T1 = A                       # A-rooted carrier clock
+#         evidence weighted by arrival A -> U
+#     for subject prim U->V:
+#         T1 = X                       # X-rooted subject clock
+#         evidence weighted by arrival X -> U
+#     carrier_span_root = A            # compose A->X
+#     subject_span_root = X            # compose X->E
+#
+# Conditioning layer (upstream — primitive_readout / primitive_conditioning):
+#   for prim U->V in carrier_prims + subject_prims:
+#       arrival_map = build_arrival_map(root=T1[prim], target=U)
+#                     # arrival-day weights at U;
+#                     # root == U -> identity / delta at t=0;
+#                     # root != U -> propagated arrival weights from
+#                     #              composed root->U timing.
+#                     # Normalised conditioning support; reach is
+#                     # a separate surface (not in the map).
+#       rows  = evidence(U->V, weighted_by=arrival_map)
+#       prim.reach = fit_reach(rows)   # local U->V transition probability
+#       prim.cdf   = fit_timing(rows)  # local U->V transition timing
+#
+# Composition layer (substrate ``compose_primitive_span`` plus the
+# per-draw chain build below):
+#   composed_carrier = compose(carrier_prims, root=A)
+#                      # empty / identity for window() and cohort(A=X)
+#   composed_subject = compose(subject_prims, root=X)
+#                      # serial composition of local U->V operators
+#
+# Key point for window(X-Y-Z): only the displayed denominator / window
+# population is fixed at X. The Y->Z primitive still has local n=Y, k=Z;
+# composition propagates X-rooted mass through Y to Z. Local conditioning
+# at the primitive layer + X-rooted span at the composition layer — both
+# honest, no double-bookkeeping.
+#
+# T1 is per-primitive; span_root is per-span. Window vs cohort differ
+# only in T1 (window: each primitive conditioned on its own local source;
+# cohort: each primitive in a span conditioned with reference to the
+# span's chain root). span_root is always the span's chain root,
+# regardless of mode.
+#
+# Helper-layer use of the core (this file):
+#   _build_span_per_draw_chain     - per-draw operator chain from a
+#                                    composed span; role-neutral and
+#                                    mode-neutral. Zero-edge span ->
+#                                    empty chain (operator-monoid
+#                                    identity).
+#   _strict_span_model_rate_draws  - two streams on a root-mass impulse:
+#                                    numerator   = evaluate(carrier_chain
+#                                                  + subject_chain, ...)
+#                                    denominator = evaluate(carrier_chain,
+#                                                  ...)
+#                                    rate = numerator / denominator.
+#                                    Identity carrier collapses both:
+#                                    denominator = root cumulative = 1
+#                                    -> rate = numerator.
+#   _strict_span_request_cdf_draws - same chain shape with reach = 1 per
+#                                    operator (conditioned spans already
+#                                    carry primitive probability). Empty
+#                                    carrier -> subject CDF unchanged.
+# =====================================================================
+
+
 def _build_span_per_draw_chain(
     span: Optional[ComposedPrimitiveSpan],
     *,
     S: int,
     days: int,
     edge_id: str,
-    reach_draws: np.ndarray,
+    reach_draws: Optional[np.ndarray] = None,
 ) -> tuple:
     """Per-draw operator chain for a composed span — works for subject or
     carrier with no role-flag.
@@ -1878,24 +1962,27 @@ def _build_span_per_draw_chain(
     operator chain per draw, and algebraic composition with an empty prefix
     is the identity element of the operator-chain monoid. An N-edge
     composition yields one collapsed operator per draw (the composed CDF
-    as a single delay kernel, scaled by ``reach_draws``).
+    as a single delay kernel, scaled by the per-draw reach factor).
 
-    ``reach_draws`` is the per-draw multiplicative factor applied to the
-    collapsed kernel: ``ones(S)`` when the composed span already includes
-    the primitive probability (e.g. conditioned spans), ``span.span_p_draws``
-    when the caller wants the unconditioned span reach factored in (e.g.
-    model rate draws).
+    ``reach_draws`` defaults to the span's natural reach
+    (``span.span_p_draws``) — each operator carries its primitive's natural
+    reach (algebraic default). Override with ``ones(S)`` only when emitting
+    a conditioned CDF where the conditioning has already absorbed primitive
+    probability into the CDF shape (request-CDF / completeness emission).
 
-    Returns ``None`` when ``span`` is absent (early-skip propagation) or
-    refuses draw-coherence — that signal is distinct from identity.
+    Returns ``None`` when ``span`` is absent (early-skip propagation) —
+    a signal distinct from identity (which is a zero-edge span emitting
+    an empty per-draw chain).
     """
     if span is None:
         return None
     cdf = span.cdf_draws
-    if cdf is None or cdf.shape[0] == 0:
+    if cdf.shape[0] == 0:
         return tuple(() for _ in range(S))
-    if not span.is_draw_coherent or cdf.shape[0] != S:
+    if cdf.shape[0] != S:
         return None
+    if reach_draws is None:
+        reach_draws = np.asarray(span.span_p_draws, dtype=float)
     cdf_padded = _pad_draw_cdfs(cdf, days)
     ops = draw_model_primitive_operators(
         PrimitiveDrawSurface(
@@ -1926,19 +2013,17 @@ def _strict_span_model_rate_draws(
     rows stay on the selected-Cohort reducer because they project a different
     object.
     """
-    if subject is None or subject.span_p_draws is None or subject.cdf_draws is None:
+    if subject is None:
         return None
     horizon_len = int(horizon) + 1
     S = int(np.asarray(subject.cdf_draws).shape[0])
     subject_chain = _build_span_per_draw_chain(
         subject, S=S, days=horizon_len,
         edge_id="strict-span-subject",
-        reach_draws=np.asarray(subject.span_p_draws, dtype=float),
     )
     carrier_chain = _build_span_per_draw_chain(
         carrier, S=S, days=horizon_len,
         edge_id="strict-span-carrier",
-        reach_draws=np.ones(S, dtype=float),
     )
     if subject_chain is None or carrier_chain is None:
         return None
@@ -2000,9 +2085,9 @@ def _strict_span_request_cdf_draws(
     prefix is the algebraic identity, so the result for identity is the
     subject CDF unchanged, with no `if carrier is None` branch in the body.
     Returns ``(S, horizon+1)`` cumulative request-rooted CDF, or ``None``
-    when either span is moments-only or the draw shapes disagree.
+    when the draw shapes disagree.
     """
-    if subject is None or not subject.is_draw_coherent or subject.cdf_draws is None:
+    if subject is None:
         return None
     horizon_len = int(horizon) + 1
     S = int(np.asarray(subject.cdf_draws).shape[0])
@@ -5101,13 +5186,10 @@ def _selected_cohort_group_rate_draws(
     per-Cohort and aggregate rates lie in [0, 1] by construction.
 
     Returns per-particle denominator, numerator, and rate draws. Rate cells
-    are NaN where X_total = 0 (undefined, not zero). Returns None when the
-    substrate is moments-only or carrier in active mode is moments-only.
+    are NaN where X_total = 0 (undefined, not zero).
     """
     subject = runtime.composed_subject
-    if subject is None or not subject.is_draw_coherent or subject.cdf_draws is None:
-        return None
-    if subject.span_p_draws is None:
+    if subject is None:
         return None
     if not engine_cohorts:
         return None
@@ -5142,10 +5224,6 @@ def _selected_cohort_group_rate_draws(
         p_car = None
         G = None
     else:
-        if not carrier.is_draw_coherent or carrier.cdf_draws is None:
-            return None
-        if carrier.span_p_draws is None:
-            return None
         p_car = np.asarray(carrier.span_p_draws, dtype=np.float64)
         if p_car.shape[0] != S:
             return None
@@ -5456,9 +5534,9 @@ def _runtime_completeness(
     observed frontier.
 
     Pulls completeness from the same composed CDF the row builder uses
-    so the public scalar and the rendered curves stay coherent. Returns
-    ``(None, None)`` if the runtime has no draw-coherent CDF or every
-    cohort has zero weight.
+    so the public scalar and the rendered curves stay aligned. Returns
+    ``(None, None)`` if the runtime has no composed CDF or every cohort
+    has zero weight.
     """
     if not cohort_eval_ages or not cohort_weights:
         return None, None
@@ -6448,10 +6526,10 @@ def compute_cohort_maturity_rows_v3(
     cases of the same object; active cohort uses a real composed
     carrier convolved with the subject CDF.
 
-    When the runtime cannot build a draw-coherent composition the public
-    fields are left ``None`` and the row marks itself as degraded; this
-    function never substitutes legacy aggregate timing or runs an
-    aggregate-IS conditioning step.
+    When the runtime cannot build a composition (missing primitives,
+    refused edges) the public fields are left ``None`` and the row
+    marks itself as degraded; this function never substitutes legacy
+    aggregate timing or runs an aggregate-IS conditioning step.
     """
     from .forecast_runtime import find_edge_by_id, get_cf_mode_and_reason
 

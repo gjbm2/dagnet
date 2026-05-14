@@ -71,8 +71,6 @@ from runner.primitive_evidence import (
 from runner.primitives import (
     CompatibilityBlendProvenance,
     ConditioningStatus,
-    DrawFamilyMode,
-    DrawFamilyUnavailable,
     SubsetPolicyProvenance,
     TimingFamily,
     TransitionIdentity,
@@ -452,8 +450,9 @@ def test_prior_only_when_no_evidence_admitted():
 
 def test_degraded_when_arrival_map_degraded():
     """When Stage 2's PrimitiveEvidenceResolution carries no weighted
-    view (degraded arrival_weight[U]), the primitive is DEGRADED and
-    refuses coherent draws.
+    view (degraded arrival_weight[U]), the primitive carries
+    ``status=DEGRADED`` as provenance and its draws are sampled from
+    the prior (the algebra treats it as any other primitive).
 
     A no-path graph (root != source node id) makes the prefix-arrival
     map produce a degraded entry for the primitive's source.
@@ -504,9 +503,11 @@ def test_degraded_when_arrival_map_degraded():
         resolution=res, resolved_model=rm, scenario_seed=42,
     )
     assert prim.status == ConditioningStatus.DEGRADED
-    assert prim.is_draw_coherent is False
-    with pytest.raises(DrawFamilyUnavailable):
-        prim.probability_draws()
+    # Post-refactor: DEGRADED is provenance only; the primitive is
+    # draw-bearing, sampled from the prior via the keyed-RNG seam.
+    draws = prim.probability_draws()
+    assert draws is not None
+    assert draws.shape == (prim.draw_count,)
 
 
 # ─── Structurally non-latency: probability conditioned, timing Dirac ───
@@ -895,24 +896,12 @@ def test_window_output_can_be_read_from_conditioned_primitive():
     assert pd['probability_posterior']['n_draws'] == 2000
 
 
-# ─── Draw-family mode: KEYED_PRIOR for conditioned primitives ──────────
-
-
-def test_conditioned_primitive_uses_keyed_prior_draw_family_mode():
-    """plan §590(a): a primitive must construct its draw family in
-    exactly one of three modes; for closed-form Beta-Binomial conjugate
-    + doc-52 mix, KEYED_PRIOR is the correct mode (draws sampled at
-    indices s from the canonical scenario RNG stream derived from the
-    draw-family key)."""
-    res = _build_resolution(
-        candidates=[_candidate(observed_date='2026-03-15', n=100, k=30)],
-    )
-    rm = _resolved_model(alpha=1.0, beta=1.0, n_effective=None)
-    prim = condition_primitive(
-        resolution=res, resolved_model=rm, scenario_seed=42,
-    )
-    assert prim.draw_family_mode == DrawFamilyMode.KEYED_PRIOR
-    assert prim.is_draw_coherent is True
+# Removed: ``test_conditioned_primitive_uses_keyed_prior_draw_family_mode``.
+# ``DrawFamilyMode`` had collapsed to a one-value enum after the
+# refactor; the field has been removed entirely. Draw-family identity
+# is carried by ``DrawFamilyKey`` alone — see
+# ``test_two_consumers_with_matching_draw_family_keys_get_identical_draws``
+# for the equivalent guarantee at the contract level.
 
 
 # ─── Phase 6b: degenerate-prior-Beta warning ────────────────────────────

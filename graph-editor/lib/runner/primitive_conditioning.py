@@ -79,7 +79,6 @@ from .primitives import (
     ConditionedTransitionPrimitive,
     ConditioningStatus,
     DrawFamilyKey,
-    DrawFamilyMode,
     PrimitiveScope,
     ProbabilityPosterior,
     SubsetPolicyProvenance,
@@ -256,24 +255,24 @@ def _condition_primitive_uncached(
     primitive equal to its model-var input.
 
     The function returns a fully-populated primitive in one of three
-    states:
+    states (every constructed primitive is draw-bearing):
 
       - ``CONDITIONED``: live evidence available, posterior conjugate-
         updated and (optionally) doc-52 blended. ``probability_posterior``
         is non-prior; ``effective_evidence_totals`` records the evidence
         pressure actually applied.
       - ``PRIOR_ONLY``: ``E`` is empty (no rows admitted), so the
-        posterior equals the prior. ``effective_evidence_totals = (0,0)``;
+        posterior equals the prior. Draws are sampled from the prior
+        via the keyed-RNG seam. ``effective_evidence_totals = (0,0)``;
         ``equality_explicit=True`` (trivial equality).
       - ``DEGRADED``: arrival weights were degraded so every raw row
         was rejected as off-clock; the binder produced a zero-row
-        weighted view. The primitive still carries the prior posterior
-        so composers can fall back, but ``is_draw_coherent`` is False.
+        weighted view. Draws are sampled from the prior via the same
+        keyed-RNG seam used by PRIOR_ONLY; status is provenance only.
 
-    The function never returns ``UNSUPPORTED_RESIDUAL`` or
-    ``STRUCTURALLY_DETERMINISTIC`` — those statuses are emitted by
-    Stage 4's residual/complement guard, not by primitive
-    conditioning.
+    The function never returns ``STRUCTURALLY_DETERMINISTIC`` — that
+    status is emitted by the residual guard's deterministic-edge
+    builder, not by primitive conditioning.
     """
     transition = resolution.transition
     primitive_scope = resolution.primitive_scope
@@ -301,8 +300,8 @@ def _condition_primitive_uncached(
     # Degraded topology: raw points existed but every one was rejected
     # off-clock because arrival_weights[U] is degraded (no path from
     # root, horizon inadequate, etc.). The binder still produced a
-    # zero-row weighted view; we surface the topology distinction here
-    # so composers can refuse to draw from the primitive.
+    # zero-row weighted view; the resulting primitive is draw-bearing
+    # from the prior, ``status=DEGRADED`` is surfaced as provenance.
     is_degraded_topology = (
         weighted_view.arrival_weight_summary.get('topology_case') == 'degraded'
         and resolution.diagnostics.raw_point_count > 0
@@ -314,9 +313,12 @@ def _condition_primitive_uncached(
             draw_count=options.draw_count,
             timing_family=timing_family,
             prior_posterior=prior_posterior,
+            prior_alpha=prior_alpha,
+            prior_beta=prior_beta,
             timing_obj=timing_obj,
             prior_source=prior_source,
             raw_evidence_scope_key=resolution.raw_evidence_set.provenance.scope_key,
+            draw_family_key=draw_family_key,
             note=(
                 f'arrival_weight[{transition.source_node}] degraded; '
                 f'primitive falls back to prior'
@@ -455,7 +457,6 @@ def _condition_primitive_uncached(
         timing_posterior=timing_obj_posterior,
         probability_prior=prior_posterior,
         timing_prior=timing_obj,
-        draw_family_mode=DrawFamilyMode.KEYED_PRIOR,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
         skipped_evidence_summary={
@@ -1347,11 +1348,11 @@ def _make_prior_only_primitive(
     Plan §95 / §570 require that prior-only primitives remain usable by
     composition; the Stage 1 contract test
     (``test_prior_only_primitive_has_empty_evidence_and_is_not_misreported``)
-    asserts ``is_draw_coherent`` and that ``probability_draws()`` returns
-    a populated array. We sample ``draw_count`` draws from
-    ``Beta(prior_alpha, prior_beta)`` via the keyed-RNG seam so two
-    consumers reading the same prior-only primitive under the same
-    scope receive identical draws (plan §141, §585-589).
+    asserts that ``probability_draws()`` returns a populated array. We
+    sample ``draw_count`` draws from ``Beta(prior_alpha, prior_beta)``
+    via the keyed-RNG seam so two consumers reading the same prior-only
+    primitive under the same scope receive identical draws (plan §141,
+    §585-589).
     """
     subset_policy = SubsetPolicyProvenance(
         m_S=0.0,
@@ -1392,7 +1393,6 @@ def _make_prior_only_primitive(
         timing_posterior=timing_obj,
         probability_prior=prior_posterior,
         timing_prior=timing_obj,
-        draw_family_mode=DrawFamilyMode.KEYED_PRIOR,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
         skipped_evidence_summary=(
@@ -1426,17 +1426,37 @@ def _make_degraded_primitive(
     draw_count: int,
     timing_family: TimingFamily,
     prior_posterior: ProbabilityPosterior,
+    prior_alpha: float,
+    prior_beta: float,
     timing_obj: TimingPosterior,
     prior_source: Optional[str],
     raw_evidence_scope_key: Optional[str],
+    draw_family_key: DrawFamilyKey,
     note: str,
 ) -> ConditionedTransitionPrimitive:
     """Build a DEGRADED primitive when Stage 2 produced no weighted view.
 
-    A degraded primitive carries the prior so composers can read a
-    fallback summary, but ``is_draw_coherent`` is False — Stage 1's
-    contract refuses ``probability_draws()`` for this status.
+    A degraded primitive carries the prior outright: there was no
+    evidence to condition on (arrival weights rejected every row
+    off-clock), so the posterior equals the prior. Per the new
+    contract, every constructed primitive is draw-bearing — draws are
+    sampled from the prior via the keyed-RNG seam under the same
+    ``primitive_p_draws`` derivation that PRIOR_ONLY uses, so two
+    consumers reading the same degraded primitive under the same scope
+    receive identical draws. Status remains ``DEGRADED`` for
+    diagnostics; the algebra treats it as any other primitive.
     """
+    p_rng = make_rng(draw_family_key, 'primitive_p_draws')
+    prior_draws = p_rng.beta(
+        max(prior_alpha, 1e-12),
+        max(prior_beta, 1e-12),
+        size=draw_count,
+    )
+    posterior = ProbabilityPosterior(
+        mean=float(prior_posterior.mean),
+        sd=float(prior_posterior.sd) if prior_posterior.sd is not None else 0.0,
+        draws=prior_draws,
+    )
     return ConditionedTransitionPrimitive(
         transition=transition,
         scope=scope,
@@ -1449,12 +1469,11 @@ def _make_degraded_primitive(
         subset_policy=None,
         compatibility_blend=None,
         residual_policy=None,
-        probability_posterior=prior_posterior,
+        probability_posterior=posterior,
         timing_posterior=timing_obj,
         probability_prior=prior_posterior,
         timing_prior=timing_obj,
-        draw_family_mode=DrawFamilyMode.MOMENTS_ONLY,
-        draw_family_key=None,
+        draw_family_key=draw_family_key,
         prior_source=prior_source,
         skipped_evidence_summary={},
         notes=(note,),
@@ -1584,8 +1603,7 @@ def make_unconditioned_primitive(
             timing_posterior=timing_obj_prior,
             probability_prior=prior_posterior,
             timing_prior=timing_obj_prior,
-            draw_family_mode=DrawFamilyMode.KEYED_PRIOR,
-            draw_family_key=draw_family_key,
+                draw_family_key=draw_family_key,
             prior_source=prior_source,
             skipped_evidence_summary={},
             notes=tuple(
@@ -1677,7 +1695,6 @@ def make_unconditioned_primitive(
         timing_posterior=timing_obj_overlay,
         probability_prior=prior_posterior,
         timing_prior=timing_obj_prior,
-        draw_family_mode=DrawFamilyMode.KEYED_PRIOR,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
         skipped_evidence_summary={},
