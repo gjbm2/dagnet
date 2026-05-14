@@ -45,6 +45,7 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
+from runner.request_envelope import build_request_envelope_plan
 
 
 # ── Helpers: inline synthetic graph + frames (no DB) ──────────────────
@@ -290,6 +291,19 @@ def _run_v3(
     # scenario_id is required by build_resolved_cf_runtime
     # (cohort_forecast_v3.py:1129 — `if not scenario_id: return None`).
     # Inline tests must pass a non-empty value.
+    envelope_plan = None
+    if (not is_window) and anchor_node_id and str(anchor_node_id) != str(query_from_node):
+        envelope_plan = build_request_envelope_plan(
+            graph=graph,
+            query_from_node=query_from_node,
+            query_to_node=query_to_node,
+            anchor_node_id=anchor_node_id,
+            anchor_from=date.fromisoformat(anchor_from),
+            anchor_to=date.fromisoformat(anchor_to),
+            is_window=False,
+            graph_preference='best_available',
+            scenario_id=scenario_id,
+        )
     return compute_cohort_maturity_rows_v3(
         frames=frames,
         graph=graph,
@@ -305,6 +319,7 @@ def _run_v3(
         is_multi_hop=is_multi_hop,
         band_level=0.90,
         scenario_id=scenario_id,
+        envelope_plan=envelope_plan,
     )
 
 

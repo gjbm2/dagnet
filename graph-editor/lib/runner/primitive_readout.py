@@ -20,9 +20,7 @@ single-hop / multi-hop / active-carrier readout functions in this module.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Sequence, Tuple
-
-from evidence_merge import EvidenceSet
+from typing import Any, Mapping, Optional, Sequence
 
 from datetime import date as _date, timedelta as _timedelta
 from typing import Dict, List
@@ -68,6 +66,10 @@ from .subject_span_composer import (
     CompositionError,
     compose_primitive_span,
 )
+# Re-export so cf-v3 (and any other consumer) can keep importing
+# ``ComposedUnconditionedOverlay`` from this module. The class itself
+# lives in the spine module; this module owns the request perimeter.
+from .model_span_spine import ComposedUnconditionedOverlay
 from .timing_span import (
     TimingTransitionPrimitive,
 )
@@ -100,47 +102,6 @@ def _cache_status_snapshot() -> Optional[List[Mapping[str, Any]]]:
 
 
 # ─── Canonical primitive preparation ────────────────────────────────────
-def _candidates_from_evidence_set(
-    evidence_set: Optional[EvidenceSet],
-) -> Tuple[EvidenceCandidate, ...]:
-    """Lift the candidates back out of a pre-merged ``EvidenceSet``.
-
-    The upstream feed (frames synthesis, retrieval) builds an
-    ``EvidenceSet`` whose ``points`` each carry the originating
-    ``EvidenceCandidate``. The canonical binder takes candidates and
-    re-runs the merge layer; for already-distinct candidates the merge
-    is idempotent and the result is shape-equivalent to the upstream
-    ``EvidenceSet`` modulo the binder's day-weighting.
-    """
-    if evidence_set is None or not evidence_set.points:
-        return ()
-    return tuple(point.candidate for point in evidence_set.points)
-
-
-def _empty_evidence_scope_for_window(
-    *,
-    transition: TransitionIdentity,
-    primitive_scope: PrimitiveScope,
-) -> EvidenceScope:
-    """Construct a window-subject-helper ``EvidenceScope`` for a primitive
-    that has no admitted evidence under the request scope.
-
-    The binder runs the merge layer with empty candidates, producing an
-    empty raw ``EvidenceSet`` and an empty weighted view. The conditioner
-    reads ``has_live_evidence`` as False and falls through to its
-    PRIOR_ONLY path, so the result is identical to the legacy explicit
-    prior-only constructor without a separate code path."""
-    return EvidenceScope(
-        role=EvidenceRole.WINDOW_SUBJECT_HELPER,
-        subject_from=transition.source_node,
-        subject_to=transition.destination_node,
-        date_from=primitive_scope.date_from,
-        date_to=primitive_scope.date_to,
-        as_at=primitive_scope.as_at,
-        scenario_id=primitive_scope.scenario_id,
-    )
-
-
 def _per_primitive_evidence_scope(
     *,
     transition: TransitionIdentity,
@@ -185,49 +146,100 @@ class _PreparedPrimitive:
     primitive: ConditionedTransitionPrimitive
 
 
+class PrimitiveUnavailable(Exception):
+    """Engine-level refusal: a primitive cannot be prepared for this request.
+
+    Raised by ``prepare_primitive`` when the residual guard refuses the
+    edge requirement or the arrival map has no weights for the primitive's
+    source node. The perimeter catches this to early-skip the request;
+    the engine does not silently fall back.
+    """
+
+    def __init__(self, reason: str, info: Mapping[str, Any]):
+        super().__init__(f"{reason}: {dict(info)}")
+        self.reason = reason
+        self.info = dict(info)
+
+
+def prepare_primitive(
+    *,
+    transition: TransitionIdentity,
+    primitive_scope: PrimitiveScope,
+    resolved_model: ResolvedModelParams,
+    arrival_map: PrefixArrivalMap,
+    scenario_seed: int,
+    options: ConditioningPolicyOptions,
+    prior_source: Optional[str],
+    request_candidates: Sequence[Any],
+    window_identity: bool = False,
+) -> _PreparedPrimitive:
+    """Bind + condition one primitive. Raises ``PrimitiveUnavailable`` on
+    residual-guard refusal or arrival-map miss; the engine does not return
+    a None sentinel."""
+    decision = classify_edge_requirement(
+        EdgeRequirement(
+            transition=transition,
+            kind=EdgeRequirementKind.PARAMETERISED,
+        )
+    )
+    if not decision.forward_to_conditioning:
+        raise PrimitiveUnavailable(
+            "residual_guard_refused",
+            {
+                "edge_id": transition.edge_id,
+                "rejection_reason": decision.rejection_reason,
+            },
+        )
+    arrival_weights = (
+        _window_identity_arrival_weights(primitive_scope)
+        if window_identity
+        else arrival_map.get(transition.source_node)
+    )
+    if arrival_weights is None:
+        raise PrimitiveUnavailable(
+            "arrival_map_miss",
+            {
+                "source_node": transition.source_node,
+                "edge_id": transition.edge_id,
+            },
+        )
+    return _prepare_conditioned_primitive(
+        transition=transition,
+        primitive_scope=primitive_scope,
+        resolved_model=resolved_model,
+        arrival_weights=arrival_weights,
+        scenario_seed=scenario_seed,
+        options=options,
+        prior_source=prior_source,
+        request_candidates=request_candidates,
+    )
+
+
 def _prepare_conditioned_primitive(
     *,
     transition: TransitionIdentity,
     primitive_scope: PrimitiveScope,
     resolved_model: ResolvedModelParams,
-    evidence_set: Optional[EvidenceSet],
     arrival_weights: NodeArrivalWeights,
     scenario_seed: int,
     options: ConditioningPolicyOptions,
     prior_source: Optional[str],
-    request_candidates: Optional[Sequence[EvidenceCandidate]] = None,
+    request_candidates: Sequence[EvidenceCandidate],
 ) -> _PreparedPrimitive:
     """Canonical bind → condition step for one request-local primitive.
 
-    73n evidence-clock alignment: when ``request_candidates`` is supplied,
-    the EvidenceScope is built per-primitive from the support of
+    The EvidenceScope is built per-primitive from the support of
     ``arrival_weights`` (the U-arrival clock for this primitive), and
-    the merge admits from the request-level raw candidate pool. The
-    pre-merged ``evidence_set`` is then provenance-only — the request-
-    level merge cannot be authoritative because its date bounds are the
-    public anchor clock, which only coincides with the primitive-local
-    clock for the query root (window mode or A=X cohort).
-
-    When ``request_candidates`` is ``None``, the legacy behaviour is
-    preserved: candidates are lifted from the pre-merged ``evidence_set``
-    and the merge re-runs against that set's stored scope.
+    the merge admits from the request-level raw candidate pool. Empty
+    candidate pools still flow through the binder and condition naturally
+    as prior-only primitives.
     """
-    if request_candidates is not None and not arrival_weights.is_degraded:
-        evidence_scope = _per_primitive_evidence_scope(
-            transition=transition,
-            primitive_scope=primitive_scope,
-            arrival_weights=arrival_weights,
-        )
-        candidates = tuple(request_candidates)
-    elif evidence_set is not None:
-        evidence_scope = evidence_set.scope
-        candidates = _candidates_from_evidence_set(evidence_set)
-    else:
-        evidence_scope = _empty_evidence_scope_for_window(
-            transition=transition,
-            primitive_scope=primitive_scope,
-        )
-        candidates = ()
+    evidence_scope = _per_primitive_evidence_scope(
+        transition=transition,
+        primitive_scope=primitive_scope,
+        arrival_weights=arrival_weights,
+    )
+    candidates = tuple(request_candidates)
 
     resolution = bind_primitive_evidence(
         transition=transition,
@@ -262,7 +274,6 @@ class SpanEdgeResolution:
     transition: TransitionIdentity
     primitive_scope: PrimitiveScope
     resolved_model: ResolvedModelParams
-    evidence_set: Optional[Any]
     is_target: bool
 
 
@@ -428,14 +439,13 @@ def _build_request_arrival_map(
 class CarrierEdgeResolution:
     """Per-edge inputs for one edge of the A→X carrier closure.
 
-    Active cohort requests enumerate these for A->X. Missing evidence is
-    represented by ``evidence_set=None`` and still flows through the same
-    canonical binder/conditioner path as evidence-bearing primitives.
+    Active cohort requests enumerate these for A->X. Evidence enters via
+    the request-level candidate pool, then primitive binding filters by
+    edge identity and clock support.
     """
     transition: TransitionIdentity
     primitive_scope: PrimitiveScope
     resolved_model: ResolvedModelParams
-    evidence_set: Optional[Any]
 
 
 @dataclass(frozen=True)
@@ -476,34 +486,17 @@ class ResolvedRuntimeReadoutResult:
     # operator-chain monoid, not ``None``. Bases not requested by the
     # caller are absent.
     unconditioned_overlays: Mapping[
-        str, 'ComposedUnconditionedOverlay'
+        str, ComposedUnconditionedOverlay
     ] = field(default_factory=dict)
 
     @property
     def should_substitute(self) -> bool:
-        if not self.eligible:
-            return False
-        if self.composed_subject is None:
-            return False
-        if self.composed_carrier is None:
-            return False
-        if self.p_mean_primitive is None:
-            return False
-        return True
-
-
-@dataclass(frozen=True)
-class ComposedUnconditionedOverlay:
-    """Subject + carrier compositions for one unconditioned overlay basis.
-
-    Mirrors the conditioned-side ``composed_subject``/``composed_carrier``
-    pair so the row projector's existing carrier⊛subject convolution
-    applies to the overlay without a parallel code path. ``carrier`` is
-    always composed; identity carrier is a zero-edge span (the algebraic
-    identity of the operator-chain monoid), not ``None``.
-    """
-    subject: ComposedPrimitiveSpan
-    carrier: ComposedPrimitiveSpan
+        return bool(
+            self.eligible
+            and self.composed_subject is not None
+            and self.composed_carrier is not None
+            and self.p_mean_primitive is not None
+        )
 
 
 def _build_resolved_runtime_prefix_arrival_identity(
@@ -538,20 +531,19 @@ def _build_resolved_runtime_prefix_arrival_identity(
 
 def compute_resolved_runtime_readout(
     *,
-    graph: Optional[Mapping[str, Any]],
-    population_root_node_id: Optional[str],
-    x_node_id: Optional[str],
-    end_node_id: Optional[str],
-    subject_edge_resolutions: Optional[List[SpanEdgeResolution]],
-    carrier_edge_resolutions: Optional[List[CarrierEdgeResolution]] = None,
+    graph: Mapping[str, Any],
+    population_root_node_id: str,
+    x_node_id: str,
+    end_node_id: str,
+    subject_edge_resolutions: Sequence[SpanEdgeResolution],
+    prebuilt_subject_arrival_map: PrefixArrivalMap,
+    carrier_edge_resolutions: Sequence[CarrierEdgeResolution],
     scenario_seed: int,
+    request_evidence_candidates: Sequence[Any],
     options: Optional[ConditioningPolicyOptions] = None,
     compose_options: Optional[ComposeOptions] = None,
     prior_source: Optional[str] = None,
     unconditioned_overlay_bases: Sequence[str] = ('predictive',),
-    request_evidence_candidates: Optional[Sequence[Any]] = None,
-    prebuilt_arrival_map: Optional[PrefixArrivalMap] = None,
-    prebuilt_subject_arrival_map: Optional[PrefixArrivalMap] = None,
     prebuilt_carrier_arrival_map: Optional[PrefixArrivalMap] = None,
     is_window: bool = False,
 ) -> ResolvedRuntimeReadoutResult:
@@ -559,54 +551,50 @@ def compute_resolved_runtime_readout(
 
     The public row/scalar path calls this helper instead of choosing by
     single-hop / multi-hop / active-cohort route. The cases differ only
-    by data: an empty carrier list means identity
-    carrier; the subject span is always X->end.
+    by data: an empty carrier list means identity carrier; the subject
+    span is always X->end.
+
+    This function is the perimeter wrapper around
+    ``model_span_spine.resolve_request_spans``: call the spine, catch
+    engine refusals (``PrimitiveUnavailable`` / ``CompositionError``)
+    and translate to early-skip. The algebra lives in the spine.
     """
+    from . import model_span_spine
+
     options = options or ConditioningPolicyOptions()
     compose_options = compose_options or ComposeOptions()
-    carrier_resolutions = list(carrier_edge_resolutions or ())
-    subject_resolutions = list(subject_edge_resolutions or ())
-    diag: Dict[str, Any] = {
+    # Thread the request's S into the composer so zero-edge identity spans
+    # are shape-(S, T) and downstream readout sees a uniform per-draw
+    # shape (no perimeter inspection of cdf_draws.shape[0]).
+    if compose_options.draw_count == 0:
+        from dataclasses import replace
+        compose_options = replace(compose_options, draw_count=options.draw_count)
+    carrier_resolutions = list(carrier_edge_resolutions)
+    subject_resolutions = list(subject_edge_resolutions)
+    diagnostics: Dict[str, Any] = {
         "eligible": True,
         "skip_reason": None,
         "population_root": population_root_node_id,
         "x_node_id": x_node_id,
         "end_node_id": end_node_id,
-        "request_candidates_count": (
-            len(request_evidence_candidates)
-            if request_evidence_candidates is not None
-            else None
-        ),
     }
 
-    def _runtime_provenance(
-        *,
-        note: Optional[str] = None,
-        substituted: bool = False,
-        subject_source: Optional[str] = None,
-    ) -> Mapping[str, Any]:
-        if note:
-            diag["note"] = note
-        return {
-            "carrier_span": diag.get("composed_carrier"),
-            "subject_span": diag.get("composed_subject"),
-            "primitives": {
-                "carrier": tuple(diag.get("carrier_primitives", ())),
-                "subject": tuple(diag.get("subject_primitives", ())),
-            },
+    def _early_skip(
+        reason: str, note: str, extra: Mapping[str, Any],
+    ) -> ResolvedRuntimeReadoutResult:
+        diagnostics["eligible"] = False
+        diagnostics["skip_reason"] = reason
+        diagnostics["note"] = note
+        diagnostics.update(extra)
+        provenance = {
+            "carrier_span": None,
+            "subject_span": None,
             "projection": {
-                "substituted": substituted,
-                "subject_probability_source": subject_source,
-                "delta_p_mean": diag.get("delta_p_mean"),
-                "within_shadow_band": diag.get("within_shadow_band"),
+                "substituted": False,
+                "subject_probability_source": None,
             },
-            "diagnostics": dict(diag),
+            "diagnostics": dict(diagnostics),
         }
-
-    def _early_skip(reason: str, note: str) -> ResolvedRuntimeReadoutResult:
-        diag["eligible"] = False
-        diag["skip_reason"] = reason
-        provenance = _runtime_provenance(note=note)
         return ResolvedRuntimeReadoutResult(
             eligible=False,
             skip_reason=reason,
@@ -618,448 +606,112 @@ def compute_resolved_runtime_readout(
             diagnostics=provenance,
         )
 
-    missing = [
-        name for name, value in (
-            ("graph", graph),
-            ("population_root_node_id", population_root_node_id),
-            ("x_node_id", x_node_id),
-            ("end_node_id", end_node_id),
-            ("subject_edge_resolutions", subject_edge_resolutions),
-        ) if value is None
-    ]
-    if missing or not subject_resolutions:
-        diag["missing_inputs"] = missing
-        return _early_skip(
-            "incomplete_inputs",
-            "resolved runtime inputs incomplete; falling back to legacy",
-        )
+    # Exactly one target subject edge is a request-construction invariant.
+    # Tuple unpacking keeps this sharp: zero or many targets raises.
+    (_,) = (r for r in subject_resolutions if r.is_target)
 
-    target_count = sum(1 for r in subject_resolutions if r.is_target)
-    if target_count != 1:
-        diag["target_count"] = target_count
-        return _early_skip(
-            "target_count_invalid",
-            f"expected exactly one target subject edge; got {target_count}",
-        )
-
-    target_resolution = next(r for r in subject_resolutions if r.is_target)
-    # Two-clocks split: the subject map is rooted at X (the subject's own
-    # root) and binds subject primitives. The carrier map is rooted at A
-    # (the population root) and only binds carrier primitives. When the
-    # caller has not pre-built them (legacy callers passing only
-    # ``prebuilt_arrival_map`` or no map at all), reconstruct them here.
-    # ``prebuilt_arrival_map`` is treated as the subject map for backward
-    # compatibility — for window() and cohort(A=X) requests the carrier
-    # role is identity-only (no carrier_resolutions) and the legacy single
-    # map was already X-rooted in those cases.
-    subject_arrival_map = (
-        prebuilt_subject_arrival_map
-        or prebuilt_arrival_map
-    )
+    # Two-clocks split: the caller owns arrival-map construction. The
+    # readout consumes the already-resolved subject (X-rooted) and carrier
+    # (A-rooted) maps.
+    subject_arrival_map = prebuilt_subject_arrival_map
     carrier_arrival_map = prebuilt_carrier_arrival_map
-    if subject_arrival_map is None:
-        subject_arrival_identity = _build_resolved_runtime_prefix_arrival_identity(
-            primitive_scope=target_resolution.primitive_scope,
-            request_root=str(x_node_id),
-        )
-        subject_arrival_map = _build_request_arrival_map(
-            graph=graph,
-            root_node_id=str(x_node_id),
-            primitive_scope_for_window=target_resolution.primitive_scope,
-            edge_resolutions=[
-                (r.transition, r.resolved_model) for r in subject_resolutions
-            ],
-            identity=subject_arrival_identity,
-            max_tau=compose_options.max_tau,
-        )
-    if carrier_resolutions and carrier_arrival_map is None:
-        carrier_arrival_identity = (
-            _build_resolved_runtime_prefix_arrival_identity(
-                primitive_scope=target_resolution.primitive_scope,
-                request_root=str(population_root_node_id),
-            )
-        )
-        carrier_arrival_map = _build_request_arrival_map(
-            graph=graph,
-            root_node_id=str(population_root_node_id),
-            primitive_scope_for_window=target_resolution.primitive_scope,
-            edge_resolutions=[
-                (r.transition, r.resolved_model) for r in carrier_resolutions
-            ],
-            identity=carrier_arrival_identity,
-            max_tau=compose_options.max_tau,
-        )
-    # The registry's identity-cache key is part of every primitive's
-    # registry key. The subject map is always present, so use it for the
-    # registry. Carrier primitives' registry keys are computed against
-    # the carrier map's identity directly at register-time (see
-    # ``RequestPrimitiveRegistry.register(..., prefix_identity=...)``).
-    registry = RequestPrimitiveRegistry(arrival_map=subject_arrival_map)
 
-    carrier_edge_to_primitive: Dict[
-        Tuple[str, str], ConditionedTransitionPrimitive
-    ] = {}
-    carrier_edge_id_to_primitive: Dict[str, ConditionedTransitionPrimitive] = {}
-    carrier_summaries: List[Mapping[str, Any]] = []
-    conditioned_primitive_map: Dict[str, ConditionedTransitionPrimitive] = {}
-
-    def _prepare_one(
-        *,
-        transition: TransitionIdentity,
-        primitive_scope: PrimitiveScope,
-        resolved_model: ResolvedModelParams,
-        evidence_set: Optional[Any],
-        guard_kind: str,
-        arrival_map: PrefixArrivalMap,
-        window_identity: bool = False,
-    ) -> Optional[_PreparedPrimitive]:
-        decision = classify_edge_requirement(
-            EdgeRequirement(
-                transition=transition,
-                kind=EdgeRequirementKind.PARAMETERISED,
-            )
-        )
-        if not decision.forward_to_conditioning:
-            diag[f"{guard_kind}_residual_guard_refused"] = {
-                "edge_id": transition.edge_id,
-                "reason": decision.rejection_reason,
-            }
-            return None
-        arrival_weights = (
-            _window_identity_arrival_weights(primitive_scope)
-            if window_identity
-            else arrival_map.get(transition.source_node)
-        )
-        if arrival_weights is None:
-            diag[f"{guard_kind}_arrival_map_miss"] = {
-                "source_node": transition.source_node,
-                "edge_id": transition.edge_id,
-            }
-            return None
-        return _prepare_conditioned_primitive(
-            transition=transition,
-            primitive_scope=primitive_scope,
-            resolved_model=resolved_model,
-            evidence_set=evidence_set,
-            arrival_weights=arrival_weights,
+    # Call the spine. Engine refusals (PrimitiveUnavailable from residual
+    # guard / arrival map miss; CompositionError from no-path topology)
+    # are caught here and translated to early-skip.
+    try:
+        spans = model_span_spine.resolve_request_spans(
+            graph=graph,
+            population_root_node_id=str(population_root_node_id),
+            x_node_id=str(x_node_id),
+            end_node_id=str(end_node_id),
+            carrier_resolutions=carrier_resolutions,
+            subject_resolutions=subject_resolutions,
+            subject_arrival_map=subject_arrival_map,
+            carrier_arrival_map=carrier_arrival_map,
             scenario_seed=scenario_seed,
             options=options,
+            compose_options=compose_options,
             prior_source=prior_source,
-            request_candidates=request_evidence_candidates,
+            request_evidence_candidates=request_evidence_candidates,
+            unconditioned_overlay_bases=unconditioned_overlay_bases,
+            is_window=is_window,
         )
-
-    for carrier_res in carrier_resolutions:
-        prepared = _prepare_one(
-            transition=carrier_res.transition,
-            primitive_scope=carrier_res.primitive_scope,
-            resolved_model=carrier_res.resolved_model,
-            evidence_set=carrier_res.evidence_set,
-            guard_kind="carrier",
-            arrival_map=carrier_arrival_map,
-        )
-        if prepared is None:
-            return _early_skip(
-                "carrier_primitive_unavailable",
-                "carrier primitive preparation failed; see diagnostics",
-            )
-        # Carrier primitives belong to the carrier-rooted clock, so their
-        # registry key must encode the carrier identity (not the
-        # subject-map identity the registry was initialised with).
-        registry_key = registry.register(
-            prepared.resolution,
-            prefix_identity=carrier_arrival_map.identity,
-        )
-        primitive = prepared.primitive
-        conditioned_primitive_map[registry_key] = primitive
-        carrier_edge_to_primitive[(
-            carrier_res.transition.source_node,
-            carrier_res.transition.destination_node,
-        )] = primitive
-        carrier_edge_id_to_primitive[carrier_res.transition.edge_id] = primitive
-        carrier_summaries.append({
-            "edge_id": carrier_res.transition.edge_id,
-            "from": carrier_res.transition.source_node,
-            "to": carrier_res.transition.destination_node,
-            "status": primitive.status.value,
-            "p_mean": (
-                float(primitive.probability_posterior.mean)
-                if primitive.probability_posterior is not None else None
-            ),
-            "p_sd": (
-                float(primitive.probability_posterior.sd)
-                if (
-                    primitive.probability_posterior is not None
-                    and primitive.probability_posterior.sd is not None
-                ) else None
-            ),
-            "provenance": primitive.to_provenance_dict(),
-        })
-    diag["carrier_primitives"] = tuple(carrier_summaries)
-
-    subject_edge_to_primitive: Dict[
-        Tuple[str, str], ConditionedTransitionPrimitive
-    ] = {}
-    subject_edge_id_to_primitive: Dict[str, ConditionedTransitionPrimitive] = {}
-    subject_summaries: List[Mapping[str, Any]] = []
-    subject_primitives: List[ConditionedTransitionPrimitive] = []
-    for subj_res in subject_resolutions:
-        # 73r: every subject primitive (target and non-target) flows
-        # through `_prepare_one` so it consumes the request-wide
-        # candidate pool through the same primitive-local merge as
-        # target and carrier primitives. Pre-73r the non-target branch
-        # bypassed this and bound from the pre-wrapped `evidence_set`,
-        # leaving file evidence on intermediate edges admissible only
-        # via the per-edge container — a parallel path the plan
-        # explicitly rejects (Required Design § One Request Candidate
-        # Pool).
-        guard_kind = "subject_target" if subj_res.is_target else "subject"
-        prepared = _prepare_one(
-            transition=subj_res.transition,
-            primitive_scope=subj_res.primitive_scope,
-            resolved_model=subj_res.resolved_model,
-            evidence_set=subj_res.evidence_set,
-            guard_kind=guard_kind,
-            arrival_map=subject_arrival_map,
-            window_identity=is_window,
-        )
-        if prepared is None:
-            return _early_skip(
-                "subject_primitive_unavailable",
-                "subject primitive preparation failed; see diagnostics",
-            )
-        registry_key = registry.register(prepared.resolution)
-        primitive = prepared.primitive
-        conditioned_primitive_map[registry_key] = primitive
-        subject_primitives.append(primitive)
-        subject_edge_to_primitive[(
-            subj_res.transition.source_node,
-            subj_res.transition.destination_node,
-        )] = primitive
-        subject_edge_id_to_primitive[subj_res.transition.edge_id] = primitive
-        subject_summaries.append({
-            "edge_id": subj_res.transition.edge_id,
-            "from": subj_res.transition.source_node,
-            "to": subj_res.transition.destination_node,
-            "is_target": subj_res.is_target,
-            "status": primitive.status.value,
-            "provenance": primitive.to_provenance_dict(),
-        })
-    diag["subject_primitives"] = tuple(subject_summaries)
-
-    def _subject_lookup(
-        from_id: str, to_id: str, edge_dict: Mapping[str, Any]
-    ):
-        edge_id = edge_dict.get('edge_id') or edge_dict.get('id')
-        if edge_id and edge_id in subject_edge_id_to_primitive:
-            return subject_edge_id_to_primitive[edge_id]
-        return subject_edge_to_primitive.get((from_id, to_id))
-
-    def _carrier_lookup(
-        from_id: str, to_id: str, edge_dict: Mapping[str, Any]
-    ):
-        edge_id = edge_dict.get('edge_id') or edge_dict.get('id')
-        if edge_id and edge_id in carrier_edge_id_to_primitive:
-            return carrier_edge_id_to_primitive[edge_id]
-        return carrier_edge_to_primitive.get((from_id, to_id))
-
-    # Carrier is composed unconditionally. When population_root == x, the
-    # walk has zero edges and the composer naturally produces a zero-edge
-    # identity composition — no perimeter branch on "identity vs active".
-    try:
-        composed_carrier = compose_primitive_span(
-            graph=graph,
-            x_node_id=str(population_root_node_id),
-            end_node_id=str(x_node_id),
-            registry=registry,
-            edge_to_primitive_lookup=_carrier_lookup,
-            options=compose_options,
+    except PrimitiveUnavailable as exc:
+        return _early_skip(
+            f"primitive_unavailable.{exc.reason}",
+            f"primitive preparation refused ({exc.reason})",
+            {"primitive_failure": dict(exc.info)},
         )
     except CompositionError as exc:
-        diag["carrier_composition_error"] = str(exc)
         return _early_skip(
-            "carrier_composition_error",
-            f"compose_primitive_span(A->X carrier) raised: {exc}",
+            "composition_error",
+            f"span composition refused: {exc}",
+            {"composition_error": str(exc)},
         )
-    diag["composed_carrier"] = {
+
+    # Success: spine returned composed pair + overlays. Build the public
+    # result + a minimal provenance block. The shadow wrapper (Phase 9)
+    # passes the provenance through opaquely.
+    p_mean = float(spans.composed_subject.span_p_mean)
+    p_sd = float(spans.composed_subject.span_p_sd)
+    p_sd_epi = float(spans.composed_subject.span_p_sd)
+
+    carrier_diag = {
         "anchor_node_id": str(population_root_node_id),
         "x_node_id": str(x_node_id),
         "role": "carrier_to_x",
-        "primitive_count": composed_carrier.primitive_count,
-        "draw_count": composed_carrier.draw_count,
-        "reach": composed_carrier.span_p_mean,
-        "span_p_sd": composed_carrier.span_p_sd,
-        "max_tau": composed_carrier.max_tau,
-        "binding_policy": composed_carrier.provenance.get("binding_policy"),
-        "composition_mode": composed_carrier.provenance.get("composition_mode"),
+        "primitive_count": spans.composed_carrier.primitive_count,
+        "draw_count": spans.composed_carrier.draw_count,
+        "reach": spans.composed_carrier.span_p_mean,
+        "span_p_sd": spans.composed_carrier.span_p_sd,
+        "max_tau": spans.composed_carrier.max_tau,
     }
-    carrier_span_role = dict(diag["composed_carrier"])
-
-    try:
-        composed_subject = compose_primitive_span(
-            graph=graph,
-            x_node_id=str(x_node_id),
-            end_node_id=str(end_node_id),
-            registry=registry,
-            edge_to_primitive_lookup=_subject_lookup,
-            options=compose_options,
-        )
-    except CompositionError as exc:
-        diag["subject_composition_error"] = str(exc)
-        return _early_skip(
-            "subject_composition_error",
-            f"compose_primitive_span(X->end subject) raised: {exc}",
-        )
-
-    diag["composed_subject"] = {
-        "x_node_id": composed_subject.x_node_id,
-        "end_node_id": composed_subject.end_node_id,
+    subject_diag = {
+        "x_node_id": spans.composed_subject.x_node_id,
+        "end_node_id": spans.composed_subject.end_node_id,
         "role": "subject_span",
-        "primitive_count": composed_subject.primitive_count,
-        "draw_count": composed_subject.draw_count,
-        "span_p_mean": composed_subject.span_p_mean,
-        "span_p_sd": composed_subject.span_p_sd,
-        "max_tau": composed_subject.max_tau,
-        "binding_policy": composed_subject.provenance.get("binding_policy"),
-        "composition_mode": composed_subject.provenance.get("composition_mode"),
+        "primitive_count": spans.composed_subject.primitive_count,
+        "draw_count": spans.composed_subject.draw_count,
+        "span_p_mean": spans.composed_subject.span_p_mean,
+        "span_p_sd": spans.composed_subject.span_p_sd,
+        "max_tau": spans.composed_subject.max_tau,
     }
-    subject_span_role = dict(diag["composed_subject"])
-
-    # 73g invariant 1: one general machinery path. Single-hop is the
-    # one-edge degeneration of multi-hop, not a separate readout.
-    # `_compose_draws` supplies `expected_reach` from `_topological_reach`
-    # per draw, so `composed_subject.span_p_mean` is the asymptotic
-    # span probability — which collapses to `mean(p_draws)` for a
-    # one-edge span, matching the primitive's IS posterior mean to MC
-    # tolerance.
-    p_mean_pri = float(composed_subject.span_p_mean)
-    p_sd_pri = float(composed_subject.span_p_sd)
-    p_sd_epi_pri = float(composed_subject.span_p_sd)
-    subject_source = "primitive_span.subject"
-
-    diag["composed_public_moments"] = {
-        "p_mean": p_mean_pri,
-        "p_sd": p_sd_pri,
-        "p_sd_epistemic": p_sd_epi_pri,
+    diagnostics["composed_carrier"] = carrier_diag
+    diagnostics["composed_subject"] = subject_diag
+    diagnostics["composed_public_moments"] = {
+        "p_mean": p_mean,
+        "p_sd": p_sd,
+        "p_sd_epistemic": p_sd_epi,
     }
-    diag["subject_probability_source"] = subject_source
-    diag["cache_status"] = _cache_status_snapshot()
+    diagnostics["subject_probability_source"] = "primitive_span.subject"
+    diagnostics["cache_status"] = _cache_status_snapshot()
 
-    # ── Unconditioned overlay compositions ─────────────────────────
-    # The composer is the same; only the per-edge primitive's draw
-    # family changes (prior particles instead of joint-conditioned
-    # posterior). Built per requested basis so requests that don't
-    # render a given band pay no MC cost for it.
-    unconditioned_overlays: Dict[str, ComposedUnconditionedOverlay] = {}
-    for basis in unconditioned_overlay_bases:
-        # Build per-edge primitive maps for this basis. Mirrors the
-        # conditioned-side closures above (id-pair fallback when edge_id
-        # not present) — same lookup shape, prior-only primitives.
-        c_map_id: Dict[Tuple[str, str], ConditionedTransitionPrimitive] = {}
-        c_map_eid: Dict[str, ConditionedTransitionPrimitive] = {}
-        for c_res in carrier_resolutions:
-            prim = make_unconditioned_primitive(
-                transition=c_res.transition,
-                primitive_scope=c_res.primitive_scope,
-                resolved_model=c_res.resolved_model,
-                scenario_seed=scenario_seed,
-                options=options,
-                dispersion_basis=basis,
-                prior_source=prior_source,
-            )
-            c_map_id[(
-                c_res.transition.source_node,
-                c_res.transition.destination_node,
-            )] = prim
-            c_map_eid[c_res.transition.edge_id] = prim
-        s_map_id: Dict[Tuple[str, str], ConditionedTransitionPrimitive] = {}
-        s_map_eid: Dict[str, ConditionedTransitionPrimitive] = {}
-        for s_res in subject_resolutions:
-            prim = make_unconditioned_primitive(
-                transition=s_res.transition,
-                primitive_scope=s_res.primitive_scope,
-                resolved_model=s_res.resolved_model,
-                scenario_seed=scenario_seed,
-                options=options,
-                dispersion_basis=basis,
-                prior_source=prior_source,
-            )
-            s_map_id[(
-                s_res.transition.source_node,
-                s_res.transition.destination_node,
-            )] = prim
-            s_map_eid[s_res.transition.edge_id] = prim
+    provenance = {
+        "carrier_span": carrier_diag,
+        "subject_span": subject_diag,
+        "projection": {
+            "substituted": True,
+            "subject_probability_source": "primitive_span.subject",
+        },
+        "diagnostics": dict(diagnostics),
+    }
 
-        def carrier_overlay_lookup(
-            from_id, to_id, edge_dict,
-            _eid=c_map_eid, _idp=c_map_id,
-        ):
-            edge_id = edge_dict.get('edge_id') or edge_dict.get('id')
-            if edge_id and edge_id in _eid:
-                return _eid[edge_id]
-            return _idp.get((from_id, to_id))
-
-        def subject_overlay_lookup(
-            from_id, to_id, edge_dict,
-            _eid=s_map_eid, _idp=s_map_id,
-        ):
-            edge_id = edge_dict.get('edge_id') or edge_dict.get('id')
-            if edge_id and edge_id in _eid:
-                return _eid[edge_id]
-            return _idp.get((from_id, to_id))
-
-        try:
-            overlay_carrier = compose_primitive_span(
-                graph=graph,
-                x_node_id=str(population_root_node_id),
-                end_node_id=str(x_node_id),
-                registry=registry,
-                edge_to_primitive_lookup=carrier_overlay_lookup,
-                options=compose_options,
-            )
-            overlay_subject = compose_primitive_span(
-                graph=graph,
-                x_node_id=str(x_node_id),
-                end_node_id=str(end_node_id),
-                registry=registry,
-                edge_to_primitive_lookup=subject_overlay_lookup,
-                options=compose_options,
-            )
-        except CompositionError as exc:
-            diag[f'unconditioned_{basis}_composition_error'] = str(exc)
-            continue
-        unconditioned_overlays[basis] = ComposedUnconditionedOverlay(
-            subject=overlay_subject,
-            carrier=overlay_carrier,
-        )
-        diag[f'unconditioned_overlay_{basis}'] = {
-            'subject_span_p_mean': overlay_subject.span_p_mean,
-            'subject_span_p_sd': overlay_subject.span_p_sd,
-            'subject_primitive_count': overlay_subject.primitive_count,
-            'subject_draw_count': overlay_subject.draw_count,
-            'carrier_primitive_count': overlay_carrier.primitive_count,
-            'carrier_span_p_mean': overlay_carrier.span_p_mean,
-        }
-
-    substituted = bool(p_mean_pri is not None)
-    provenance = _runtime_provenance(
-        substituted=substituted,
-        subject_source=diag["subject_probability_source"],
-    )
     return ResolvedRuntimeReadoutResult(
         eligible=True,
         skip_reason=None,
-        composed_subject=composed_subject,
-        composed_carrier=composed_carrier,
-        p_mean_primitive=p_mean_pri,
-        p_sd_primitive=p_sd_pri,
-        p_sd_epistemic_primitive=p_sd_epi_pri,
+        composed_subject=spans.composed_subject,
+        composed_carrier=spans.composed_carrier,
+        p_mean_primitive=p_mean,
+        p_sd_primitive=p_sd,
+        p_sd_epistemic_primitive=p_sd_epi,
         diagnostics=provenance,
         arrival_map=subject_arrival_map,
-        primitive_registry=registry,
-        conditioned_primitive_map=dict(conditioned_primitive_map),
-        carrier_span_role=carrier_span_role,
-        subject_span_role=subject_span_role,
-        unconditioned_overlays=unconditioned_overlays,
+        primitive_registry=spans.registry,
+        conditioned_primitive_map=dict(spans.conditioned_primitive_map),
+        carrier_span_role=dict(carrier_diag),
+        subject_span_role=dict(subject_diag),
+        unconditioned_overlays=spans.overlays,
     )
 
 

@@ -173,6 +173,41 @@ class ComposedPrimitiveSpan:
         """True when the composed span has positive reach."""
         return self.reach > 0.0
 
+    @classmethod
+    def identity(
+        cls,
+        *,
+        x_node_id: str,
+        end_node_id: str,
+        max_tau: int,
+        draw_count: int,
+        provenance: Mapping[str, Any],
+    ) -> "ComposedPrimitiveSpan":
+        """Identity element of the operator-chain monoid: a zero-edge walk.
+
+        Reach is the empty product (1.0); timing is "arrived at τ=0"
+        (CDF of ones). Per-draw arrays are shape-``(draw_count, T)`` filled
+        with ones — the algebraic identity replicated along the S axis so
+        downstream composition with active spans sees a uniform shape and
+        does not need supply-boundary shape inspections. Used by the
+        composer when ``x == end`` (window mode, ``cohort(A = X)``).
+        """
+        T = int(max_tau) + 1
+        S = int(draw_count)
+        return cls(
+            x_node_id=x_node_id,
+            end_node_id=end_node_id,
+            primitive_count=0,
+            draw_count=S,
+            span_p_mean=1.0,
+            span_p_sd=0.0,
+            span_p_draws=np.ones(S, dtype=np.float64),
+            cdf_mean=np.ones(T, dtype=np.float64),
+            cdf_draws=np.ones((S, T), dtype=np.float64),
+            max_tau=max_tau,
+            provenance=provenance,
+        )
+
 
 @dataclass(frozen=True)
 class ComposeOptions:
@@ -185,6 +220,7 @@ class ComposeOptions:
     """
     max_tau: int = 400
     cdf_renorm_tolerance: float = 1e-6
+    draw_count: int = 0
 
 
 class CompositionError(Exception):
@@ -279,7 +315,7 @@ def compose_primitive_span(
         return cached
 
     draw_counts = {p.draw_count for _, p in edge_primitives}
-    S = next(iter(draw_counts), 0)
+    S = next(iter(draw_counts), options.draw_count)
     composed = _compose_draws(
         topo=topo,
         edge_primitives=edge_primitives,
@@ -316,27 +352,18 @@ def _compose_draws(
     T = max_tau + 1
     n_edges = len(edge_primitives)
 
-    # Zero-edge span (x == end) is the algebraic identity of the
-    # operator-chain monoid: empty product on reach (1.0), arrived at
-    # tau=0 on timing (cdf = ones). No primitives → no draws; the
-    # per-draw arrays are genuinely empty along the S axis.
+    # Zero-edge span (x == end): dispatch to the identity element of the
+    # operator-chain monoid. The general-case path below reduces draws
+    # via ``np.mean`` / ``np.std``, which return NaN on empty input —
+    # the identity element supplies the algebraic answers directly.
     if n_edges == 0:
-        return ComposedPrimitiveSpan(
+        return ComposedPrimitiveSpan.identity(
             x_node_id=topo.x_node_id,
             end_node_id=topo.y_node_id,
-            primitive_count=0,
-            draw_count=0,
-            span_p_mean=1.0,
-            span_p_sd=0.0,
-            span_p_draws=np.array([], dtype=np.float64),
-            cdf_mean=np.ones(T, dtype=np.float64),
-            cdf_draws=np.zeros((0, T), dtype=np.float64),
             max_tau=max_tau,
+            draw_count=S,
             provenance=_build_provenance(
-                topo=topo,
-                edge_primitives=[],
-                mode="draws",
-                S=0,
+                topo=topo, edge_primitives=[], mode="draws", S=S,
             ),
         )
 

@@ -283,17 +283,22 @@ def test_strict_span_model_rate_matches_identity_carrier_formula():
         span_p_draws=np.asarray([0.4, 0.2], dtype=float),
         cdf_draws=np.asarray([[0.0, 0.5, 1.0], [0.0, 1.0, 1.0]], dtype=float),
     )
-    # Identity carrier per the post-refactor contract: a zero-edge
-    # span (the algebraic identity of the operator-chain monoid), not
-    # ``None``. ``cdf_draws.shape[0] == 0`` is the signal the per-draw
-    # chain builder reads to emit an empty operator chain.
+    # Identity carrier per the post-Phase-5.5 contract: a zero-edge
+    # composition produced by ``ComposedPrimitiveSpan.identity(S, T)`` —
+    # algebraic identity of the operator-chain monoid replicated S times,
+    # not a ``(0, T)`` sentinel. Reach is ones(S); CDF is ones((S, T))
+    # (arrived at τ=0 for all draws). Composition with this contributes
+    # S identity operators that pass the root impulse through unchanged.
     identity_carrier = types.SimpleNamespace(
-        span_p_draws=np.empty(0, dtype=float),
-        cdf_draws=np.zeros((0, 3), dtype=float),
+        span_p_draws=np.ones(2, dtype=float),
+        cdf_draws=np.ones((2, 3), dtype=float),
     )
 
     draws = _strict_span_model_rate_draws(subject, identity_carrier, horizon=2)
 
+    # rate(τ) = subject.p × subject.CDF(τ) since denominator = 1 for all τ.
+    # At τ=0 with denominator=1 and numerator=subject.p × subject.CDF[0]=0,
+    # 0/1 = 0 (defined). Active-mode 0/0 → NaN is unreachable here.
     np.testing.assert_allclose(
         draws,
         np.asarray([[0.0, 0.2, 0.4], [0.0, 0.2, 0.2]], dtype=float),
@@ -314,6 +319,9 @@ def test_strict_span_model_rate_matches_active_carrier_formula():
 
     draws = _strict_span_model_rate_draws(subject, carrier, horizon=2)
 
+    # Post-Phase-5.5: the spine emits algebraic truth — 0/0 at τ=0 (no
+    # carrier mass arrived yet in active mode) propagates as NaN, not the
+    # guarded zero the previous wrapper produced.
     expected = []
     for p_draw, subject_cdf, carrier_cdf in zip(
         subject.span_p_draws,
@@ -326,14 +334,11 @@ def test_strict_span_model_rate_matches_active_carrier_formula():
                 np.diff(subject_cdf, prepend=0.0),
             )[:3]
         )
-        expected.append(
-            np.where(
-                carrier_cdf > 1e-9,
-                (numerator_cdf * p_draw) / np.maximum(carrier_cdf, 1e-9),
-                0.0,
-            )
-        )
-    np.testing.assert_allclose(draws, np.asarray(expected, dtype=float))
+        with np.errstate(invalid='ignore', divide='ignore'):
+            expected.append((numerator_cdf * p_draw) / carrier_cdf)
+    np.testing.assert_allclose(
+        draws, np.asarray(expected, dtype=float), equal_nan=True,
+    )
 
 
 def test_project_runtime_rows_routes_all_model_overlays_through_strict_span(monkeypatch):

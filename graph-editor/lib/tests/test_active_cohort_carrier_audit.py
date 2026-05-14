@@ -161,15 +161,22 @@ def test_active_cohort_carrier_readout_does_not_call_build_upstream_carrier():
 
 def test_active_cohort_carrier_readout_uses_primitive_span_composer():
     """The active-cohort carrier path uses the same primitive-span composer
-    as the subject span."""
-    src = _read('primitive_readout.py')
-    assert 'compose_carrier_to_x(' not in src, (
+    as the subject span. Post-5.5 the composer call lives in
+    ``model_span_spine.resolve_request_spans`` which ``primitive_readout``
+    drives via the perimeter wrapper."""
+    readout_src = _read('primitive_readout.py')
+    assert 'compose_carrier_to_x(' not in readout_src, (
         'primitive_readout.py should not invoke compose_carrier_to_x for '
         'active-cohort carrier readout.'
     )
-    assert 'compose_primitive_span(' in src, (
-        'primitive_readout.py should use the shared primitive-span composer '
+    spine_src = _read('model_span_spine.py')
+    assert 'compose_primitive_span(' in spine_src, (
+        'model_span_spine.py should use the shared primitive-span composer '
         'for active-cohort carrier and subject spans.'
+    )
+    assert 'resolve_request_spans' in readout_src, (
+        'primitive_readout.py should drive the spine composer via '
+        'resolve_request_spans.'
     )
 
 

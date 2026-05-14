@@ -52,6 +52,7 @@ from evidence_merge import (
 )
 
 from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
+from runner.request_envelope import build_request_envelope_plan
 
 
 # ─── Graph fixtures ──────────────────────────────────────────────────
@@ -782,6 +783,17 @@ def test_active_cohort_only_superset_degrades_visibly():
                 retrieved_at=sd,
                 n=100, k=y,
             ))
+    envelope_plan = build_request_envelope_plan(
+        graph=graph,
+        query_from_node='node-x',
+        query_to_node='node-y',
+        anchor_node_id='node-a',
+        anchor_from=date.fromisoformat(_ANCHOR_FROM),
+        anchor_to=date.fromisoformat(_ANCHOR_TO),
+        is_window=False,
+        graph_preference='best_available',
+        scenario_id='test-active-cohort-only-superset',
+    )
 
     rows = compute_cohort_maturity_rows_v3(
         frames=frames, graph=graph,
@@ -796,6 +808,7 @@ def test_active_cohort_only_superset_degrades_visibly():
         is_multi_hop=False,
         scenario_id='test-active-cohort-only-superset',
         evidence_candidates=cohort_candidates,
+        envelope_plan=envelope_plan,
     )
     numeric = _numeric_rows(rows)
     assert numeric, 'pipeline returned no τ-indexed rows'

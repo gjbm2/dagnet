@@ -29,8 +29,7 @@ from .primitive_evidence import RequestPrimitiveRegistry
 from .primitives import ConditionedTransitionPrimitive
 from .subject_span_composer import ComposedPrimitiveSpan
 from .generalised_span_model_shadow import SpanShadowOperator, SpanShadowPlan
-from .span_operator_supply import PrimitiveDrawSurface, draw_model_primitive_operators
-from .span_runtime_adapter import RuntimeRootMass, evaluate_with_operators
+from . import model_span_spine
 from .primitive_readout import (
     ComposedUnconditionedOverlay,
     _resolved_to_timing_transition,
@@ -1507,7 +1506,6 @@ def _build_span_resolutions(
             transition=transition,
             primitive_scope=primitive_scope,
             resolved_model=edge_resolved,
-            evidence_set=None,
         )
         if mark_target:
             kwargs['is_target'] = is_target
@@ -1542,8 +1540,7 @@ def build_resolved_cf_runtime(
     plan's `carrier_arrival_map` is rooted on the cohort A-anchor range
     (per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` invariant 5)
     and its `subject_arrival_map` is rooted on the carrier's X-arrival
-    days. When a caller does not supply a plan, one is built inline so
-    legacy/test entry points still work.
+    days.
 
     Note: the `target_subject_metadata` parameter that previously gated
     in-runtime widening was removed when fetch-envelope construction
@@ -1582,7 +1579,7 @@ def build_resolved_cf_runtime(
         mark_target=True,
     )
 
-    carrier_resolutions = None
+    carrier_resolutions = []
     carrier_skip = None
     if (not is_window) and anchor_node_id and str(anchor_node_id) != str(query_from_node):
         carrier_resolutions, carrier_skip = _build_span_resolutions(
@@ -1609,10 +1606,9 @@ def build_resolved_cf_runtime(
     #
     # The carrier map's roots are the cohort A-anchor range; the subject
     # map's roots in active mode are the carrier's X-arrival days. The
-    # `RequestEnvelopePlan` already builds both maps with these roots
-    # (see `runner.request_envelope.build_request_envelope_plan`); the
-    # runtime consumes them rather than rebuilding. When a caller does not
-    # pass a plan (legacy/test entry points), one is built inline below.
+    # `RequestEnvelopePlan` builds both maps with these roots (see
+    # `runner.request_envelope.build_request_envelope_plan`); the runtime
+    # consumes them rather than rebuilding.
     #
     # Pre-fix the runtime built its own carrier map with root day support
     # taken from the subject target's primitive scope, which excluded
@@ -1632,35 +1628,9 @@ def build_resolved_cf_runtime(
     if is_active:
         # Active cohort: maps come from the request envelope plan whose
         # carrier roots are the cohort A-anchor range and whose subject
-        # roots are the carrier's X-arrival days. Build inline if the
-        # caller did not supply a plan.
-        if envelope_plan is None:
-            try:
-                from .request_envelope import build_request_envelope_plan
-                envelope_plan = build_request_envelope_plan(
-                    graph=graph,
-                    query_from_node=str(query_from_node),
-                    query_to_node=str(query_to_node),
-                    anchor_node_id=str(anchor_node_id),
-                    anchor_from=_date.fromisoformat(str(anchor_from)[:10]),
-                    anchor_to=_date.fromisoformat(str(anchor_to)[:10]),
-                    is_window=False,
-                    graph_preference=str(
-                        getattr(resolved, 'source', None) or 'best_available'
-                    ),
-                    as_at=as_at,
-                    scenario_id=scenario_id,
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(
-                    f"[cf_runtime] WARNING: inline envelope plan construction "
-                    f"failed ({exc!r}); active cohort will degrade",
-                    flush=True,
-                )
-                envelope_plan = None
-        if envelope_plan is not None:
-            carrier_arrival_map = getattr(envelope_plan, 'carrier_arrival_map', None)
-            subject_arrival_map = getattr(envelope_plan, 'subject_arrival_map', None)
+        # roots are the carrier's X-arrival days.
+        carrier_arrival_map = envelope_plan.carrier_arrival_map
+        subject_arrival_map = envelope_plan.subject_arrival_map
     elif subject_resolutions:
         # Window mode and cohort(A = X): no carrier; subject map is
         # X-rooted identity over the public window. The envelope plan
@@ -1859,141 +1829,12 @@ def _composed_pair_request_cdf_draws(
 
 
 # =====================================================================
-# Strict-span algebra — design spine
-# ---------------------------------------------------------------------
-# Preserved here so the algebraic structure of subject/carrier span
-# construction isn't lost across edits.
-#
-# Two distinct clock ideas:
-#   T1        = primitive conditioning root; used to weight evidence rows
-#   span_root = composition / readout origin for a whole carrier or
-#               subject span
-#
-# Query setup:
-#   window(X-Z):
-#     carrier_prims = empty
-#     subject_prims = edges along X -> Z
-#     for subject prim U->V:
-#         T1 = U                       # local primitive clock
-#         evidence is local U->V:
-#             n = arrivals at U
-#             k = arrivals at V
-#     subject_span_root = X            # compose local operators into X->Z
-#
-#   cohort(A, X-E):
-#     carrier_prims = edges along A -> X
-#     subject_prims = edges along X -> E
-#     for carrier prim U->V:
-#         T1 = A                       # A-rooted carrier clock
-#         evidence weighted by arrival A -> U
-#     for subject prim U->V:
-#         T1 = X                       # X-rooted subject clock
-#         evidence weighted by arrival X -> U
-#     carrier_span_root = A            # compose A->X
-#     subject_span_root = X            # compose X->E
-#
-# Conditioning layer (upstream — primitive_readout / primitive_conditioning):
-#   for prim U->V in carrier_prims + subject_prims:
-#       arrival_map = build_arrival_map(root=T1[prim], target=U)
-#                     # arrival-day weights at U;
-#                     # root == U -> identity / delta at t=0;
-#                     # root != U -> propagated arrival weights from
-#                     #              composed root->U timing.
-#                     # Normalised conditioning support; reach is
-#                     # a separate surface (not in the map).
-#       rows  = evidence(U->V, weighted_by=arrival_map)
-#       prim.reach = fit_reach(rows)   # local U->V transition probability
-#       prim.cdf   = fit_timing(rows)  # local U->V transition timing
-#
-# Composition layer (substrate ``compose_primitive_span`` plus the
-# per-draw chain build below):
-#   composed_carrier = compose(carrier_prims, root=A)
-#                      # empty / identity for window() and cohort(A=X)
-#   composed_subject = compose(subject_prims, root=X)
-#                      # serial composition of local U->V operators
-#
-# Key point for window(X-Y-Z): only the displayed denominator / window
-# population is fixed at X. The Y->Z primitive still has local n=Y, k=Z;
-# composition propagates X-rooted mass through Y to Z. Local conditioning
-# at the primitive layer + X-rooted span at the composition layer — both
-# honest, no double-bookkeeping.
-#
-# T1 is per-primitive; span_root is per-span. Window vs cohort differ
-# only in T1 (window: each primitive conditioned on its own local source;
-# cohort: each primitive in a span conditioned with reference to the
-# span's chain root). span_root is always the span's chain root,
-# regardless of mode.
-#
-# Helper-layer use of the core (this file):
-#   _build_span_per_draw_chain     - per-draw operator chain from a
-#                                    composed span; role-neutral and
-#                                    mode-neutral. Zero-edge span ->
-#                                    empty chain (operator-monoid
-#                                    identity).
-#   _strict_span_model_rate_draws  - two streams on a root-mass impulse:
-#                                    numerator   = evaluate(carrier_chain
-#                                                  + subject_chain, ...)
-#                                    denominator = evaluate(carrier_chain,
-#                                                  ...)
-#                                    rate = numerator / denominator.
-#                                    Identity carrier collapses both:
-#                                    denominator = root cumulative = 1
-#                                    -> rate = numerator.
-#   _strict_span_request_cdf_draws - same chain shape with reach = 1 per
-#                                    operator (conditioned spans already
-#                                    carry primitive probability). Empty
-#                                    carrier -> subject CDF unchanged.
-# =====================================================================
-
-
-def _build_span_per_draw_chain(
-    span: Optional[ComposedPrimitiveSpan],
-    *,
-    S: int,
-    days: int,
-    edge_id: str,
-    reach_draws: Optional[np.ndarray] = None,
-) -> tuple:
-    """Per-draw operator chain for a composed span — works for subject or
-    carrier with no role-flag.
-
-    Mode degenerates by data: a zero-edge composition (x == end on the
-    walk, e.g. identity carrier in window() / cohort(A=X)) yields an empty
-    operator chain per draw, and algebraic composition with an empty prefix
-    is the identity element of the operator-chain monoid. An N-edge
-    composition yields one collapsed operator per draw (the composed CDF
-    as a single delay kernel, scaled by the per-draw reach factor).
-
-    ``reach_draws`` defaults to the span's natural reach
-    (``span.span_p_draws``) — each operator carries its primitive's natural
-    reach (algebraic default). Override with ``ones(S)`` only when emitting
-    a conditioned CDF where the conditioning has already absorbed primitive
-    probability into the CDF shape (request-CDF / completeness emission).
-
-    Returns ``None`` when ``span`` is absent (early-skip propagation) —
-    a signal distinct from identity (which is a zero-edge span emitting
-    an empty per-draw chain).
-    """
-    if span is None:
-        return None
-    cdf = span.cdf_draws
-    if cdf.shape[0] == 0:
-        return tuple(() for _ in range(S))
-    if cdf.shape[0] != S:
-        return None
-    if reach_draws is None:
-        reach_draws = np.asarray(span.span_p_draws, dtype=float)
-    cdf_padded = _pad_draw_cdfs(cdf, days)
-    ops = draw_model_primitive_operators(
-        PrimitiveDrawSurface(
-            edge_id=edge_id,
-            p_draws=reach_draws,
-            conditional_cdf_draws=cdf_padded,
-            timing_family="latent",
-        ),
-        days=days,
-    )
-    return tuple((op,) for op in ops)
+# Model-span algebra lives in ``model_span_spine``. See that module's
+# docstring for the full design spine (clocks, conditioning roots, span
+# composition, readout). The thin wrappers below preserve the
+# Optional-returning call signature used by existing cf-v3 callers:
+# spine inputs are guaranteed valid composed spans; the wrapper layer
+# interprets absent spans into the legacy ``None`` signal.
 
 
 def _strict_span_model_rate_draws(
@@ -2002,71 +1843,15 @@ def _strict_span_model_rate_draws(
     *,
     horizon: int,
 ) -> Optional[np.ndarray]:
-    """Model-only rate draws via the promoted span core.
+    """Wrapper — delegates to ``model_span_spine.evaluate_model_rate_draws``.
 
-    ``predictive`` F-mode and opt-in ``epistemic`` model-curve overlays differ
-    only by the unconditioned primitive surfaces supplied by the runtime. Both
-    read through this same algebraic span path. Identity carrier flows through
-    the same code: its per-draw chain is empty, composition with an empty
-    prefix is the identity, denominator collapses to the root mass cumulative
-    (1.0 for all τ), and rate = numerator / 1.0 = numerator. E+F evidence
-    rows stay on the selected-Cohort reducer because they project a different
-    object.
+    Returns ``None`` when either span is absent (early-skip propagation)
+    rather than raising, so existing callers keep their fallback shape.
     """
-    if subject is None:
+    if subject is None or carrier is None:
         return None
-    horizon_len = int(horizon) + 1
-    S = int(np.asarray(subject.cdf_draws).shape[0])
-    subject_chain = _build_span_per_draw_chain(
-        subject, S=S, days=horizon_len,
-        edge_id="strict-span-subject",
-    )
-    carrier_chain = _build_span_per_draw_chain(
-        carrier, S=S, days=horizon_len,
-        edge_id="strict-span-carrier",
-    )
-    if subject_chain is None or carrier_chain is None:
-        return None
-
-    root_mass = RuntimeRootMass(
-        cohort_ids=("model-curve",),
-        root_days=np.asarray([0], dtype=int),
-        root_counts=np.asarray([1.0], dtype=float),
-        root_support=np.asarray([1.0], dtype=float),
-    )
-    rate_draws = np.zeros((S, horizon_len), dtype=float)
-    for s in range(S):
-        numerator = evaluate_with_operators(
-            root_mass=root_mass,
-            operators=carrier_chain[s] + subject_chain[s],
-            days=horizon_len,
-            max_tau=horizon,
-        ).value_by_cohort_tau[0]
-        denominator = evaluate_with_operators(
-            root_mass=root_mass,
-            operators=carrier_chain[s],
-            days=horizon_len,
-            max_tau=horizon,
-        ).value_by_cohort_tau[0]
-        rate_draws[s, :] = np.where(
-            denominator > 1e-9,
-            numerator / np.maximum(denominator, 1e-9),
-            0.0,
-        )
-    return rate_draws
-
-
-def _pad_draw_cdfs(draw_cdfs: np.ndarray, horizon_len: int) -> np.ndarray:
-    values = np.asarray(draw_cdfs, dtype=float)
-    if values.shape[1] >= int(horizon_len):
-        return values[:, : int(horizon_len)]
-    last = values[:, -1:]
-    return np.concatenate(
-        [
-            values,
-            np.broadcast_to(last, (values.shape[0], int(horizon_len) - values.shape[1])),
-        ],
-        axis=1,
+    return model_span_spine.evaluate_model_rate_draws(
+        subject, carrier, horizon=horizon,
     )
 
 
@@ -2076,51 +1861,15 @@ def _strict_span_request_cdf_draws(
     *,
     horizon: int,
 ) -> Optional[np.ndarray]:
-    """Conditioned request-rooted CDF draws via the promoted span core.
+    """Wrapper — delegates to ``model_span_spine.evaluate_request_cdf_draws``.
 
-    Builds one operator chain per draw: carrier (when active) then subject,
-    each as a latent operator with p=1 since the conditioned spans already
-    incorporate primitive probability. Identity carrier (zero-edge composed
-    carrier) yields an empty per-draw chain — composition with an empty
-    prefix is the algebraic identity, so the result for identity is the
-    subject CDF unchanged, with no `if carrier is None` branch in the body.
-    Returns ``(S, horizon+1)`` cumulative request-rooted CDF, or ``None``
-    when the draw shapes disagree.
+    Returns ``None`` when either span is absent (early-skip propagation).
     """
-    if subject is None:
+    if subject is None or carrier is None:
         return None
-    horizon_len = int(horizon) + 1
-    S = int(np.asarray(subject.cdf_draws).shape[0])
-    unit_p = np.ones(S, dtype=float)
-    subject_chain = _build_span_per_draw_chain(
-        subject, S=S, days=horizon_len,
-        edge_id="strict-span-request-subject",
-        reach_draws=unit_p,
+    return model_span_spine.evaluate_request_cdf_draws(
+        subject, carrier, horizon=horizon,
     )
-    carrier_chain = _build_span_per_draw_chain(
-        carrier, S=S, days=horizon_len,
-        edge_id="strict-span-request-carrier",
-        reach_draws=unit_p,
-    )
-    if subject_chain is None or carrier_chain is None:
-        return None
-
-    root_mass = RuntimeRootMass(
-        cohort_ids=("request",),
-        root_days=np.asarray([0], dtype=int),
-        root_counts=np.asarray([1.0], dtype=float),
-        root_support=np.asarray([1.0], dtype=float),
-    )
-    cdf_draws = np.zeros((S, horizon_len), dtype=float)
-    for s in range(S):
-        surface = evaluate_with_operators(
-            root_mass=root_mass,
-            operators=carrier_chain[s] + subject_chain[s],
-            days=horizon_len,
-            max_tau=horizon,
-        )
-        cdf_draws[s, :] = surface.value_by_cohort_tau[0]
-    return np.clip(cdf_draws, 0.0, 1.0)
 
 
 def _runtime_request_cdf_draws(
