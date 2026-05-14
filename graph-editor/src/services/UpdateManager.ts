@@ -2058,7 +2058,16 @@ export class UpdateManager {
         stdev?: number;
       };
     }>,
-    opts?: { writeHorizonsToGraph?: boolean }
+    opts?: {
+      writeHorizonsToGraph?: boolean;
+      /** Caller scope. 'fe_topo' (default) is allowed to mutate the
+       *  analytic source ledger (`model_vars[analytic]`); 'cf' is NOT —
+       *  per the first-principles rule that only FE topo and file-fetch
+       *  may write `model_vars`. CF only writes current-answer scalars
+       *  (`p.mean` via blendedMean, `p.stdev`, `p.latency.completeness`,
+       *  `p.latency.completeness_stdev`, `p.evidence.*`). */
+      scope?: 'fe_topo' | 'cf';
+    }
   ): any {
     console.log('[UpdateManager] applyBatchLAGValues called:', {
       edgeUpdateCount: edgeUpdates?.length ?? 0,
@@ -2082,6 +2091,7 @@ export class UpdateManager {
     const edgesToRebalance: string[] = [];
 
     const writeHorizonsToGraph = opts?.writeHorizonsToGraph === true;
+    const scope = opts?.scope ?? 'fe_topo';
 
     // STEP 2: Apply ALL latency values and mean changes
     for (const update of edgeUpdates) {
@@ -2181,74 +2191,70 @@ export class UpdateManager {
         }
       }
 
-      if (analyticEntry) {
-        // Promoted-block writes (base edge with analytic source ledger):
-        // redirected to model_vars[analytic].latency.* and
-        // model_vars[analytic].probability.mean. applyPromotion fans
-        // them out at the end of the apply loop.
-        //
-        // Atomic replacement: producer's `undefined` for a promoted-block
-        // field means "this edge has no value here — clear any stale
-        // persisted scalar". Per-field `if (... !== undefined)` guards
-        // previously kept stale values so non-latency edges inherited
-        // pre-fix bogus path_mu/path_sigma/etc. forever.
-        // TEMP diagnostic: trace path_mu/path_sigma write into analytic entry.
-        console.log('[APPLY_BATCH_LAG_ANALYTIC]', {
-          edgeId: update.edgeId,
-          updLat_path_mu: updLat.path_mu,
-          updLat_path_sigma: updLat.path_sigma,
-          updLat_path_t95: updLat.path_t95,
-          updLat_path_mu_sd: updLat.path_mu_sd,
-          updLat_mu: updLat.mu,
-          updLat_sigma: updLat.sigma,
-          al_path_mu_before: analyticEntry.latency.path_mu,
-          al_path_sigma_before: analyticEntry.latency.path_sigma,
-        });
-        const al = analyticEntry.latency;
-        al.mu = updLat.mu;
-        al.sigma = updLat.sigma;
-        al.onset_delta_days = updLat.promoted_onset_delta_days;
-        al.path_mu = updLat.path_mu;
-        al.path_sigma = updLat.path_sigma;
-        al.path_t95 = updLat.path_t95;
-        al.path_onset_delta_days = updLat.path_onset_delta_days;
-        // Heuristic dispersion SDs (edge-level + path-level) — promoted via applyPromotion.
-        al.mu_sd = updLat.mu_sd;
-        al.sigma_sd = updLat.sigma_sd;
-        al.onset_sd = updLat.onset_sd;
-        al.onset_mu_corr = updLat.onset_mu_corr;
-        al.path_mu_sd = updLat.path_mu_sd;
-        al.path_sigma_sd = updLat.path_sigma_sd;
-        al.path_onset_sd = updLat.path_onset_sd;
-        // Promoted probability surface (§3.2): forecast.mean lands in
-        // `model_vars[analytic].probability.mean`. applyPromotion fans
-        // this out to `p.forecast.{mean, stdev, source}`.
-        if (update.forecast?.mean !== undefined) {
-          analyticEntry.probability.mean = update.forecast.mean;
-        }
-      } else {
-        // No analytic entry on this edge (tests / non-fetch callers
-        // that bypass FE topo Step 1) OR conditional probability target
-        // (`conditional_p[i].p` — Stage 5 will audit). Keep legacy direct
-        // writes so the fields land somewhere; promotion-via-model_vars
-        // simply doesn't apply here.
-        //
-        // Atomic replacement (see analyticEntry branch above) for the
-        // promoted-block latency fields.
-        targetP.latency.mu = updLat.mu;
-        targetP.latency.sigma = updLat.sigma;
-        targetP.latency.promoted_onset_delta_days = updLat.promoted_onset_delta_days;
-        if (writeHorizonsToGraph
-            && updLat.promoted_onset_delta_days !== undefined
-            && targetP.latency.onset_delta_days_overridden !== true) {
-          targetP.latency.onset_delta_days = updLat.promoted_onset_delta_days;
-        }
-        targetP.latency.path_mu = updLat.path_mu;
-        targetP.latency.path_sigma = updLat.path_sigma;
-        targetP.latency.path_onset_delta_days = updLat.path_onset_delta_days;
-        if (update.forecast?.mean !== undefined) {
-          if (!targetP.forecast) targetP.forecast = {};
-          targetP.forecast.mean = update.forecast.mean;
+      // Source-ledger + promoted-block writes are FE-topo-only.
+      // First principles: `model_vars[*]` may only be written by FE topo
+      // (analytic) or file-fetch (bayesian); CF must not touch them.
+      // CF's update payload omits μ/σ/onset/path_* fields, so letting
+      // the atomic-replacement writes below run would silently wipe
+      // analytic latency on every CF apply.
+      if (scope === 'fe_topo') {
+        if (analyticEntry) {
+          // Promoted-block writes (base edge with analytic source ledger):
+          // redirected to model_vars[analytic].latency.* and
+          // model_vars[analytic].probability.mean. applyPromotion fans
+          // them out at the end of the apply loop.
+          //
+          // Atomic replacement: producer's `undefined` for a promoted-block
+          // field means "this edge has no value here — clear any stale
+          // persisted scalar". Per-field `if (... !== undefined)` guards
+          // previously kept stale values so non-latency edges inherited
+          // pre-fix bogus path_mu/path_sigma/etc. forever.
+          const al = analyticEntry.latency;
+          al.mu = updLat.mu;
+          al.sigma = updLat.sigma;
+          al.onset_delta_days = updLat.promoted_onset_delta_days;
+          al.path_mu = updLat.path_mu;
+          al.path_sigma = updLat.path_sigma;
+          al.path_t95 = updLat.path_t95;
+          al.path_onset_delta_days = updLat.path_onset_delta_days;
+          // Heuristic dispersion SDs (edge-level + path-level) — promoted via applyPromotion.
+          al.mu_sd = updLat.mu_sd;
+          al.sigma_sd = updLat.sigma_sd;
+          al.onset_sd = updLat.onset_sd;
+          al.onset_mu_corr = updLat.onset_mu_corr;
+          al.path_mu_sd = updLat.path_mu_sd;
+          al.path_sigma_sd = updLat.path_sigma_sd;
+          al.path_onset_sd = updLat.path_onset_sd;
+          // Promoted probability surface (§3.2): forecast.mean lands in
+          // `model_vars[analytic].probability.mean`. applyPromotion fans
+          // this out to `p.forecast.{mean, stdev, source}`.
+          if (update.forecast?.mean !== undefined) {
+            analyticEntry.probability.mean = update.forecast.mean;
+          }
+        } else {
+          // No analytic entry on this edge (tests / non-fetch callers
+          // that bypass FE topo Step 1) OR conditional probability target
+          // (`conditional_p[i].p` — Stage 5 will audit). Keep legacy direct
+          // writes so the fields land somewhere; promotion-via-model_vars
+          // simply doesn't apply here.
+          //
+          // Atomic replacement (see analyticEntry branch above) for the
+          // promoted-block latency fields.
+          targetP.latency.mu = updLat.mu;
+          targetP.latency.sigma = updLat.sigma;
+          targetP.latency.promoted_onset_delta_days = updLat.promoted_onset_delta_days;
+          if (writeHorizonsToGraph
+              && updLat.promoted_onset_delta_days !== undefined
+              && targetP.latency.onset_delta_days_overridden !== true) {
+            targetP.latency.onset_delta_days = updLat.promoted_onset_delta_days;
+          }
+          targetP.latency.path_mu = updLat.path_mu;
+          targetP.latency.path_sigma = updLat.path_sigma;
+          targetP.latency.path_onset_delta_days = updLat.path_onset_delta_days;
+          if (update.forecast?.mean !== undefined) {
+            if (!targetP.forecast) targetP.forecast = {};
+            targetP.forecast.mean = update.forecast.mean;
+          }
         }
       }
       

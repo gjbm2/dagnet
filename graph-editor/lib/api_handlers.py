@@ -11,6 +11,8 @@ import math
 import os
 from typing import Dict, Any, Optional, List
 
+from perf_profile import maybe_profile
+
 _COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
 
 
@@ -595,6 +597,7 @@ def handle_parse_query(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+@maybe_profile("runner-analyze")
 def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Handle runner/analyze endpoint.
@@ -1953,6 +1956,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "scenarios": per_scenario_results}
 
 
+@maybe_profile("conditioned-forecast")
 def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
     """Conditioned forecast — graph enrichment endpoint (doc 45).
 

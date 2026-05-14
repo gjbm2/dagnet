@@ -381,5 +381,10 @@ export function applyConditionedForecastToGraph(
 
   if (edgeUpdates.length === 0) return graph;
 
-  return updateManager.applyBatchLAGValues(graph, edgeUpdates);
+  // scope:'cf' tells applyBatchLAGValues NOT to touch model_vars[*].
+  // CF only owns current-answer scalars (`p.mean` via blendedMean,
+  // `p.stdev`, `p.latency.completeness`, `p.latency.completeness_stdev`,
+  // `p.evidence.*`). Per first principles only FE topo (analytic) and
+  // file-fetch (bayesian) may mutate the source ledger.
+  return updateManager.applyBatchLAGValues(graph, edgeUpdates, { scope: 'cf' });
 }

@@ -1322,6 +1322,12 @@ _NO_LAG_BD = "from(cf-fix-no-lag-b).to(cf-fix-no-lag-d)"
 _MIRROR_4STEP = "synth-mirror-4step"
 _M4_REGISTERED_TO_SUCCESS = "from(m4-registered).to(m4-success)"
 _M4_REGISTERED_TO_SUCCESS_EDGE = "m4-registered-to-success"
+# First latency edge with a non-latent multi-hop upstream chain
+# (m4-landing → m4-created → m4-delegated all have latency_parameter=False).
+# Carrier collapses to identity by construction; window and cohort
+# observed-prefix and E+F rate trajectories must agree byte-for-byte.
+_M4_DELEGATED_TO_REGISTERED = "from(m4-delegated).to(m4-registered)"
+_M4_DELEGATED_TO_REGISTERED_EDGE = "m4-delegated-to-registered"
 _MIRROR_4STEP_WIDE = "synth-mirror-4step-wide"
 _M4_WIDE_REGISTERED_TO_SUCCESS = "from(m4-registered).to(m4-success)"
 
@@ -2327,6 +2333,165 @@ def test_multihop_non_latent_upstream_collapse():
         _numeric_curve(cohort),
         abs_tol=_P_MEAN_ABS_TOL,
         label=f"{_NO_LAG_BD} model_midpoint",
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Active-cohort row pipeline derives observed-prefix mass from the "
+        "carrier-reclock surface (`SelectedAClockEvidence` + "
+        "`_join_conditioned_carrier_backmap`) instead of reading realised "
+        "X-day counts directly. Violates "
+        "`COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` (cohort "
+        "Denominator-side Observed-prefix row: \"Use observed obs_x / "
+        "x_frozen\") and CF invariant 6 (identity carrier is data, not a "
+        "route). For a non-latent multi-hop upstream chain the carrier is "
+        "mathematically the identity transition (composed CDF is δ(0), "
+        "Pop C is structurally empty), so window and cohort modes must "
+        "produce identical observed-prefix-derived rows. They do not, "
+        "because `_build_selected_cohort_projection_bases` "
+        "(`cohort_forecast_v3.py:1670-1693`) forks on `is_active_carrier` "
+        "(reading `a_pop` from `root_window_carrier_n` for active vs "
+        "`x_frozen` for identity), and the reducer at "
+        "`cohort_forecast_v3.py:4953-4966` runs a parallel "
+        "Pop-C-residual formula for active mode whose finite-window "
+        "boundary normalisation in "
+        "`_PriorCarrierBackmap.root_day_shares_on` "
+        "(`cohort_forecast_v3.py:2412-2436`) leaks mass at the cohort-"
+        "window edges. Flips green when the case-fork is removed and "
+        "the row pipeline degenerates algebraically — one formula whose "
+        "carrier-reach factor structurally vanishes under δ(0). See "
+        "`docs/current/cohort-active-path-observed-prefix-defect.md`."
+    ),
+)
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_MIRROR_4STEP, enriched=True)
+def test_first_latency_edge_with_nonlatent_chain_observed_collapses_to_window():
+    """First latency edge with a non-latent multi-hop upstream chain
+    (`synth-mirror-4step`): window and cohort modes must agree on
+    observed-prefix evidence (`evidence_x`, `evidence_y`), the E+F
+    selected-cohort trajectory (`rate`, `midpoint`), the model overlay
+    (`model_midpoint`), and the public scalar (`p_infinity_mean`).
+
+    Topology:
+        m4-landing → m4-created → m4-delegated   (all latency_parameter=False)
+        m4-delegated → m4-registered             (FIRST LATENCY EDGE, lp=True)
+        m4-registered → m4-success               (latent, lp=True)
+
+    Query: `from(m4-delegated).to(m4-registered)` — single-hop subject
+    span whose `A → X` carrier (m4-landing → m4-delegated) is a non-
+    latent chain.
+
+    Per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` ("Cohort
+    semantics: cohort(A, X-Y)" Denominator-side table) the observed-
+    prefix denominator is `obs_x / x_frozen` — realised arrivals at X,
+    not a model projection. Pop C (future arrivals at X) is the only
+    carrier-mass term; for a non-latent upstream chain Pop C is
+    structurally empty (mass arrives at X instantaneously, no
+    future-arrival term). Therefore the window and cohort modes must
+    produce identical observed-prefix-derived rows by construction.
+
+    The window oracle is authoritative: `evidence_x` is the literal
+    realised X-day count (no model surface involved). Cohort must
+    reproduce it.
+
+    Empirical reproduction (13-May-26): on `synth-mirror-4step` the
+    asymptotic `evidence_x` differs by ~5% (window 7125 vs cohort
+    7495.84), `evidence_y` by ~24% (673 vs 834.70), `rate` by ~18%
+    (0.0945 vs 0.1114), and `midpoint` by ~19% (0.1057 vs 0.1261).
+    The `model_midpoint` overlay agrees (0.1071 in both) because it
+    is binding-blind — same primitives, same conditioning, same Beta
+    posterior. The conditioning step is correct; the reclock/compose
+    step is not.
+
+    See `docs/current/cohort-active-path-observed-prefix-defect.md`.
+    """
+    window = _run_analyse_v3(
+        _MIRROR_4STEP,
+        f"{_M4_DELEGATED_TO_REGISTERED}.window(29-Jan-26:29-Apr-26)",
+    )
+    cohort = _run_analyse_v3(
+        _MIRROR_4STEP,
+        f"{_M4_DELEGATED_TO_REGISTERED}.cohort(29-Jan-26:29-Apr-26)",
+    )
+
+    # Baseline sanity: model_midpoint (unconditioned overlay) MUST
+    # agree under any correct implementation — same primitives, same
+    # conditioning. If it ever diverges, the defect is upstream of
+    # this test (in primitive conditioning or `model_resolver`), not
+    # in the row pipeline.
+    _assert_max_abs_diff(
+        _numeric_curve(window, field="model_midpoint"),
+        _numeric_curve(cohort, field="model_midpoint"),
+        abs_tol=_P_MEAN_ABS_TOL,
+        label=f"{_M4_DELEGATED_TO_REGISTERED} model_midpoint",
+    )
+
+    # Observed-prefix denominator: cohort `evidence_x` must equal the
+    # literal window `evidence_x` (= x_frozen accumulated per τ).
+    # 0.5 abs tol covers float-aggregation rounding only; the active
+    # path currently leaks hundreds of units of mass at the cohort-
+    # window boundary.
+    window_x = _numeric_curve(window, field="evidence_x")
+    cohort_x = _numeric_curve(cohort, field="evidence_x")
+    shared_x = _common_taus(window_x, cohort_x)
+    assert len(shared_x) >= 10, (
+        f"[{_M4_DELEGATED_TO_REGISTERED}] insufficient shared taus for "
+        f"evidence_x collapse ({len(shared_x)})"
+    )
+    _assert_max_abs_diff(
+        window_x,
+        cohort_x,
+        abs_tol=0.5,
+        label=f"{_M4_DELEGATED_TO_REGISTERED} evidence_x",
+    )
+
+    # Observed-prefix numerator: cohort `evidence_y` must equal the
+    # literal window `evidence_y` (= y_frozen accumulated per τ).
+    window_y = _numeric_curve(window, field="evidence_y")
+    cohort_y = _numeric_curve(cohort, field="evidence_y")
+    _assert_max_abs_diff(
+        window_y,
+        cohort_y,
+        abs_tol=0.5,
+        label=f"{_M4_DELEGATED_TO_REGISTERED} evidence_y",
+    )
+
+    # Displayed rate: `rate = evidence_y / evidence_x`. Equality
+    # follows from numerator/denominator equality, but pinned
+    # separately so a regression that shifts both surfaces
+    # proportionally is still caught.
+    _assert_max_abs_diff(
+        _numeric_curve(window, field="rate"),
+        _numeric_curve(cohort, field="rate"),
+        abs_tol=_P_MEAN_ABS_TOL,
+        label=f"{_M4_DELEGATED_TO_REGISTERED} rate",
+    )
+
+    # Selected-cohort E+F midpoint: the chart object the user sees.
+    # Under identity carrier it must collapse to the window E+F
+    # midpoint at every shared τ.
+    _assert_max_abs_diff(
+        _numeric_curve(window, field="midpoint"),
+        _numeric_curve(cohort, field="midpoint"),
+        abs_tol=_P_MEAN_ABS_TOL,
+        label=f"{_M4_DELEGATED_TO_REGISTERED} midpoint",
+    )
+
+    # Public scalar (`p_infinity_mean`): primitive-backed subject-span
+    # moment. Must match under correct degeneracy.
+    w_p = _first_row(window).get("p_infinity_mean")
+    c_p = _first_row(cohort).get("p_infinity_mean")
+    assert isinstance(w_p, (int, float)) and isinstance(c_p, (int, float)), (
+        f"[{_M4_DELEGATED_TO_REGISTERED}] missing p_infinity_mean "
+        f"(window={w_p!r}, cohort={c_p!r})"
+    )
+    assert abs(float(w_p) - float(c_p)) <= _P_MEAN_ABS_TOL, (
+        f"[{_M4_DELEGATED_TO_REGISTERED}] p_infinity_mean diverges: "
+        f"window={float(w_p):.6f} cohort={float(c_p):.6f}"
     )
 
 

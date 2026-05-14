@@ -28,6 +28,9 @@ from .prefix_arrival import PrefixArrivalMap
 from .primitive_evidence import RequestPrimitiveRegistry
 from .primitives import ConditionedTransitionPrimitive
 from .subject_span_composer import ComposedPrimitiveSpan
+from .generalised_span_model_shadow import SpanShadowOperator, SpanShadowPlan
+from .span_operator_supply import PrimitiveDrawSurface, draw_model_primitive_operators
+from .span_runtime_adapter import RuntimeRootMass, evaluate_with_operators
 from .primitive_readout import (
     ComposedUnconditionedOverlay,
     _resolved_to_timing_transition,
@@ -1050,6 +1053,8 @@ class ResolvedCFRuntime:
     unconditioned_overlays: Mapping[
         str, ComposedUnconditionedOverlay
     ] = field(default_factory=dict)
+    generalised_span_shadow_carrier_resolutions: Sequence[Any] = field(default_factory=tuple)
+    generalised_span_shadow_subject_resolutions: Sequence[Any] = field(default_factory=tuple)
 
     def project_public_moments(
         self,
@@ -1112,6 +1117,284 @@ class ResolvedCFRuntime:
                 else None
             ),
         }
+
+
+def _runtime_provenance_with_generalised_span_shadow(
+    runtime: ResolvedCFRuntime,
+    *,
+    max_tau: int,
+    emit_diagnostics: bool,
+    additional_plans: Sequence[SpanShadowPlan] = (),
+) -> Optional[Dict[str, Any]]:
+    runtime_provenance = runtime.project_runtime_provenance()
+    if not emit_diagnostics or runtime_provenance is None:
+        return runtime_provenance
+
+    runtime_provenance = dict(runtime_provenance)
+    from .generalised_span_model_shadow import build_generalised_span_model_shadow
+    runtime_provenance['generalised_span_model_shadow'] = (
+        build_generalised_span_model_shadow(
+            plans=_build_generalised_span_shadow_plans(
+                carrier_resolutions=runtime.generalised_span_shadow_carrier_resolutions,
+                subject_resolutions=runtime.generalised_span_shadow_subject_resolutions,
+                conditioned_primitive_map=runtime.conditioned_primitive_map,
+                composed_carrier=runtime.composed_carrier,
+                composed_subject=runtime.composed_subject,
+                max_tau=max_tau,
+            ) + tuple(additional_plans),
+            max_tau=max_tau,
+        )
+    )
+    return runtime_provenance
+
+
+def _build_generalised_span_shadow_plans(
+    *,
+    carrier_resolutions: Sequence[Any],
+    subject_resolutions: Sequence[Any],
+    conditioned_primitive_map: Mapping[str, ConditionedTransitionPrimitive],
+    composed_carrier: Optional[ComposedPrimitiveSpan],
+    composed_subject: ComposedPrimitiveSpan,
+    max_tau: int,
+) -> Tuple[SpanShadowPlan, ...]:
+    primitive_by_transition = {
+        (
+            str(primitive.transition.edge_id),
+            str(primitive.transition.source_node),
+            str(primitive.transition.destination_node),
+        ): primitive
+        for primitive in conditioned_primitive_map.values()
+    }
+    days = int(max_tau) + 1
+    carrier_operators = _shadow_operators_from_resolutions(
+        carrier_resolutions,
+        primitive_by_transition=primitive_by_transition,
+        days=days,
+    )
+    subject_operators = _shadow_operators_from_resolutions(
+        subject_resolutions,
+        primitive_by_transition=primitive_by_transition,
+        days=days,
+    )
+    carrier_expected_spans = (composed_carrier,)[:len(tuple(carrier_resolutions))]
+    subject_expected_spans = (composed_subject,)
+    request_expected_spans = carrier_expected_spans + subject_expected_spans
+    return (
+        SpanShadowPlan(
+            label='carrier',
+            root_day=0,
+            root_value=1.0,
+            root_support=1.0,
+            ordered_operators=carrier_operators,
+            expected_value_curve=_shadow_expected_curve_from_composed_spans(
+                carrier_expected_spans,
+                max_tau=max_tau,
+            ),
+            expected_support_curve=_shadow_expected_curve_from_composed_spans(
+                carrier_expected_spans,
+                max_tau=max_tau,
+            ),
+            metadata={'role': 'carrier'},
+        ),
+        SpanShadowPlan(
+            label='subject',
+            root_day=0,
+            root_value=1.0,
+            root_support=1.0,
+            ordered_operators=subject_operators,
+            expected_value_curve=_shadow_expected_curve_from_composed_spans(
+                subject_expected_spans,
+                max_tau=max_tau,
+            ),
+            expected_support_curve=_shadow_expected_curve_from_composed_spans(
+                subject_expected_spans,
+                max_tau=max_tau,
+            ),
+            metadata={'role': 'subject'},
+        ),
+        SpanShadowPlan(
+            label='request',
+            root_day=0,
+            root_value=1.0,
+            root_support=1.0,
+            ordered_operators=carrier_operators + subject_operators,
+            expected_value_curve=_shadow_expected_curve_from_composed_spans(
+                request_expected_spans,
+                max_tau=max_tau,
+            ),
+            expected_support_curve=_shadow_expected_curve_from_composed_spans(
+                request_expected_spans,
+                max_tau=max_tau,
+            ),
+            metadata={'role': 'request'},
+        ),
+    )
+
+
+def _shadow_operators_from_resolutions(
+    resolutions: Sequence[Any],
+    *,
+    primitive_by_transition: Mapping[
+        Tuple[str, str, str],
+        ConditionedTransitionPrimitive,
+    ],
+    days: int,
+) -> Tuple[SpanShadowOperator, ...]:
+    return tuple(
+        _shadow_operator_from_primitive(
+            primitive_by_transition[
+                (
+                    str(resolution.transition.edge_id),
+                    str(resolution.transition.source_node),
+                    str(resolution.transition.destination_node),
+                )
+            ],
+            days=days,
+        )
+        for resolution in resolutions
+    )
+
+
+def _shadow_operator_from_primitive(
+    primitive: ConditionedTransitionPrimitive,
+    *,
+    days: int,
+) -> SpanShadowOperator:
+    increments = np.mean(
+        np.asarray(primitive.probability_draws(), dtype=float)[:, None]
+        * np.diff(
+            np.asarray(primitive.timing_draws(), dtype=float),
+            axis=1,
+            prepend=0.0,
+        ),
+        axis=0,
+    )
+    source = np.arange(days)[:, None]
+    lag = np.arange(increments.shape[0])[None, :]
+    dest = source + lag
+    source_idx = np.broadcast_to(source, dest.shape)
+    in_bounds = dest < days
+
+    value = np.zeros((days, days), dtype=float)
+    np.add.at(
+        value,
+        (source_idx[in_bounds], dest[in_bounds]),
+        np.broadcast_to(increments, dest.shape)[in_bounds],
+    )
+    return SpanShadowOperator(
+        name=str(primitive.transition.edge_id),
+        value=value,
+        support=value,
+    )
+
+
+def _shadow_expected_curve_from_composed_spans(
+    composed_spans: Sequence[ComposedPrimitiveSpan],
+    *,
+    max_tau: int,
+) -> np.ndarray:
+    horizon = int(max_tau) + 1
+    reach = 1.0
+    chain_pmf = np.zeros(horizon, dtype=float)
+    chain_pmf[0] = 1.0
+    for composed_span in composed_spans:
+        cdf = np.asarray(composed_span.cdf_mean, dtype=float)
+        last = cdf[-1:]
+        padded = np.concatenate(
+            [
+                cdf[:horizon],
+                np.broadcast_to(last, (max(0, horizon - cdf.shape[0]),)),
+            ]
+        )[:horizon]
+        chain_pmf = np.convolve(chain_pmf, np.diff(padded, prepend=0.0))[:horizon]
+        reach *= float(composed_span.span_p_mean)
+    return reach * np.cumsum(chain_pmf)
+
+
+def _build_generalised_evidence_shadow_plans(
+    selected_a_clock_evidence: SelectedAClockEvidence,
+    *,
+    tau_solid_max: int,
+    max_tau: int,
+) -> Tuple[SpanShadowPlan, ...]:
+    buckets = selected_a_clock_evidence.aggregate_by_tau(
+        tau_solid_max=tau_solid_max,
+        max_tau=max_tau,
+    )
+    evidence_x = np.asarray(
+        [float(buckets.get(tau, {}).get('sum_x', 0.0)) for tau in range(max_tau + 1)],
+        dtype=float,
+    )
+    evidence_y = np.asarray(
+        [float(buckets.get(tau, {}).get('sum_y', 0.0)) for tau in range(max_tau + 1)],
+        dtype=float,
+    )
+    evidence_x_support = np.minimum(
+        1.0,
+        np.cumsum(np.asarray([
+            float(buckets.get(tau, {}).get('sum_carrier_coverage', 0.0))
+            for tau in range(max_tau + 1)
+        ], dtype=float)),
+    )
+    evidence_y_support = np.minimum(
+        1.0,
+        np.cumsum(np.asarray([
+            float(buckets.get(tau, {}).get('sum_subject_coverage', 0.0))
+            for tau in range(max_tau + 1)
+        ], dtype=float)),
+    )
+    return (
+        SpanShadowPlan(
+            label='evidence_x',
+            root_day=0,
+            root_value=1.0,
+            root_support=1.0,
+            ordered_operators=(
+                _shadow_operator_from_cumulative_curve(
+                    'evidence_x',
+                    evidence_x,
+                    support_curve=evidence_x_support,
+                    days=int(max_tau) + 1,
+                ),
+            ),
+            expected_value_curve=evidence_x,
+            expected_support_curve=evidence_x_support,
+            metadata={'role': 'evidence_x'},
+        ),
+        SpanShadowPlan(
+            label='evidence_y',
+            root_day=0,
+            root_value=1.0,
+            root_support=1.0,
+            ordered_operators=(
+                _shadow_operator_from_cumulative_curve(
+                    'evidence_y',
+                    evidence_y,
+                    support_curve=evidence_y_support,
+                    days=int(max_tau) + 1,
+                ),
+            ),
+            expected_value_curve=evidence_y,
+            expected_support_curve=evidence_y_support,
+            metadata={'role': 'evidence_y'},
+        ),
+    )
+
+
+def _shadow_operator_from_cumulative_curve(
+    name: str,
+    cumulative_curve: np.ndarray,
+    *,
+    support_curve: np.ndarray,
+    days: int,
+) -> SpanShadowOperator:
+    increments = np.diff(np.asarray(cumulative_curve, dtype=float), prepend=0.0)
+    support_increments = np.diff(np.asarray(support_curve, dtype=float), prepend=0.0)
+    value = np.zeros((days, days), dtype=float)
+    support = np.zeros((days, days), dtype=float)
+    value[0, :increments.shape[0]] = increments[:days]
+    support[0, :support_increments.shape[0]] = support_increments[:days]
+    return SpanShadowOperator(name=name, value=value, support=support)
 
 
 def _runtime_seed(scenario_id: Optional[str], role: str) -> int:
@@ -1247,6 +1530,7 @@ def build_resolved_cf_runtime(
     is_multi_hop: bool,
     anchor_node_id: Optional[str],
     resolved: Any,
+    max_tau: int,
     unconditioned_overlay_bases: Sequence[str] = ('predictive',),
     evidence_candidates: Optional[List[Any]] = None,
     envelope_plan: Optional[Any] = None,
@@ -1506,6 +1790,8 @@ def build_resolved_cf_runtime(
         skip_reason=result.skip_reason,
         unconditioned_overlays=dict(result.unconditioned_overlays),
         source_layer_transitions=source_layer_transitions,
+        generalised_span_shadow_carrier_resolutions=tuple(carrier_resolutions or ()),
+        generalised_span_shadow_subject_resolutions=tuple(subject_resolutions or ()),
     )
 
 
@@ -1570,54 +1856,170 @@ def _composed_pair_request_cdf_draws(
     return np.clip(convolved, 0.0, 1.0)
 
 
-def _composed_pair_per_tau_rate_draws(
+def _strict_span_model_rate_draws(
     subject: Optional[ComposedPrimitiveSpan],
     carrier: Optional[ComposedPrimitiveSpan],
     *,
     horizon: int,
 ) -> Optional[np.ndarray]:
-    """Per-(s, t) rate draws for a (subject, carrier) pair.
+    """Model-only rate draws via the promoted span core.
 
-    Displayed rate is ``Y_Y(τ) / X_X(τ)`` per
-    COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS §"Rate semantics":
-    numerator is arrivals at the subject end, denominator is arrivals at X.
-
-    Window mode (``carrier=None``): ``rate = subject_cdf · subject_p``;
-    carrier_cdf ≡ 1 collapses out.
-    Cohort mode: ``rate = (end_to_end_cdf · subject_p) / carrier_cdf``.
-    Where carrier_cdf is ~0 the rate is undefined; emit 0 there.
-
-    This is the primitive/span model-curve readout used by F-mode overlays.
-    It is not the cohort-maturity E+F trajectory authority; E+F rows use
-    ``_selected_cohort_group_rate_draws`` so selected Cohort observed
-    prefixes and frontier continuations remain part of the projected object.
+    ``predictive`` F-mode and opt-in ``epistemic`` model-curve overlays differ
+    only by the unconditioned primitive surfaces supplied by the runtime. Both
+    read through this same algebraic span path. E+F evidence rows stay on the
+    selected-Cohort reducer because they project a different object.
     """
-    if subject is None or subject.span_p_draws is None:
+    if subject is None or subject.span_p_draws is None or subject.cdf_draws is None:
         return None
-    cdf = _composed_pair_request_cdf_draws(subject, carrier, horizon=horizon)
-    if cdf is None:
-        return None
-    numer = cdf * subject.span_p_draws[:, None]
-    if carrier is None:
-        return numer
-    if not carrier.is_draw_coherent or carrier.cdf_draws is None:
-        return None
-    T = int(horizon) + 1
-    car = carrier.cdf_draws
-    if car.shape[1] >= T:
-        car = car[:, :T]
-    else:
-        last = car[:, -1:]
-        car = np.concatenate(
-            [
-                car,
-                np.broadcast_to(last, (car.shape[0], T - car.shape[1])),
-            ],
-            axis=1,
+    horizon_len = int(horizon) + 1
+    subject_cdf = _pad_draw_cdfs(subject.cdf_draws, horizon_len)
+    subject_ops = draw_model_primitive_operators(
+        PrimitiveDrawSurface(
+            edge_id="strict-span-subject",
+            p_draws=np.asarray(subject.span_p_draws, dtype=float),
+            conditional_cdf_draws=subject_cdf,
+            timing_family="latent",
+        ),
+        days=horizon_len,
+    )
+
+    carrier_ops = None
+    if carrier is not None:
+        if (
+            not carrier.is_draw_coherent
+            or carrier.cdf_draws is None
+            or carrier.cdf_draws.shape[0] != subject_cdf.shape[0]
+        ):
+            return None
+        carrier_ops = draw_model_primitive_operators(
+            PrimitiveDrawSurface(
+                edge_id="strict-span-carrier",
+                p_draws=np.ones(carrier.cdf_draws.shape[0], dtype=float),
+                conditional_cdf_draws=_pad_draw_cdfs(carrier.cdf_draws, horizon_len),
+                timing_family="latent",
+            ),
+            days=horizon_len,
         )
-    if car.shape[0] != numer.shape[0]:
+
+    root_mass = RuntimeRootMass(
+        cohort_ids=("model-curve",),
+        root_days=np.asarray([0], dtype=int),
+        root_counts=np.asarray([1.0], dtype=float),
+        root_support=np.asarray([1.0], dtype=float),
+    )
+    rate_draws = np.zeros((len(subject_ops), horizon_len), dtype=float)
+    for draw_index, subject_op in enumerate(subject_ops):
+        numerator_ops = (
+            (carrier_ops[draw_index], subject_op)
+            if carrier_ops is not None else (subject_op,)
+        )
+        numerator = evaluate_with_operators(
+            root_mass=root_mass,
+            operators=numerator_ops,
+            days=horizon_len,
+            max_tau=horizon,
+        ).value_by_cohort_tau[0]
+        if carrier_ops is None:
+            rate_draws[draw_index, :] = numerator
+            continue
+        denominator = evaluate_with_operators(
+            root_mass=root_mass,
+            operators=(carrier_ops[draw_index],),
+            days=horizon_len,
+            max_tau=horizon,
+        ).value_by_cohort_tau[0]
+        rate_draws[draw_index, :] = np.where(
+            denominator > 1e-9,
+            numerator / np.maximum(denominator, 1e-9),
+            0.0,
+        )
+    return rate_draws
+
+
+def _pad_draw_cdfs(draw_cdfs: np.ndarray, horizon_len: int) -> np.ndarray:
+    values = np.asarray(draw_cdfs, dtype=float)
+    if values.shape[1] >= int(horizon_len):
+        return values[:, : int(horizon_len)]
+    last = values[:, -1:]
+    return np.concatenate(
+        [
+            values,
+            np.broadcast_to(last, (values.shape[0], int(horizon_len) - values.shape[1])),
+        ],
+        axis=1,
+    )
+
+
+def _strict_span_request_cdf_draws(
+    subject: Optional[ComposedPrimitiveSpan],
+    carrier: Optional[ComposedPrimitiveSpan],
+    *,
+    horizon: int,
+) -> Optional[np.ndarray]:
+    """Conditioned request-rooted CDF draws via the promoted span core.
+
+    Builds one operator chain per draw: carrier (when active) then subject,
+    each as a latent operator with p=1 since the conditioned spans already
+    incorporate primitive probability. Returns ``(S, horizon+1)`` cumulative
+    request-rooted CDF, or ``None`` when either span is moments-only or the
+    draw shapes disagree.
+    """
+    if subject is None or not subject.is_draw_coherent or subject.cdf_draws is None:
         return None
-    return np.where(car > 1e-9, numer / np.maximum(car, 1e-9), 0.0)
+    horizon_len = int(horizon) + 1
+    subject_cdf = _pad_draw_cdfs(subject.cdf_draws, horizon_len)
+
+    carrier_cdf: Optional[np.ndarray] = None
+    if carrier is not None:
+        if not carrier.is_draw_coherent or carrier.cdf_draws is None:
+            return None
+        if carrier.cdf_draws.shape[0] != subject_cdf.shape[0]:
+            return None
+        carrier_cdf = _pad_draw_cdfs(carrier.cdf_draws, horizon_len)
+
+    n_draws = subject_cdf.shape[0]
+    unit_p = np.ones(n_draws, dtype=float)
+    subject_ops = draw_model_primitive_operators(
+        PrimitiveDrawSurface(
+            edge_id="strict-span-request-subject",
+            p_draws=unit_p,
+            conditional_cdf_draws=subject_cdf,
+            timing_family="latent",
+        ),
+        days=horizon_len,
+    )
+    carrier_ops = None
+    if carrier_cdf is not None:
+        carrier_ops = draw_model_primitive_operators(
+            PrimitiveDrawSurface(
+                edge_id="strict-span-request-carrier",
+                p_draws=unit_p,
+                conditional_cdf_draws=carrier_cdf,
+                timing_family="latent",
+            ),
+            days=horizon_len,
+        )
+
+    root_mass = RuntimeRootMass(
+        cohort_ids=("request",),
+        root_days=np.asarray([0], dtype=int),
+        root_counts=np.asarray([1.0], dtype=float),
+        root_support=np.asarray([1.0], dtype=float),
+    )
+    cdf_draws = np.zeros((n_draws, horizon_len), dtype=float)
+    for s, subject_op in enumerate(subject_ops):
+        ops = (
+            (carrier_ops[s], subject_op)
+            if carrier_ops is not None else (subject_op,)
+        )
+        surface = evaluate_with_operators(
+            root_mass=root_mass,
+            operators=ops,
+            days=horizon_len,
+            max_tau=horizon,
+        )
+        cdf_draws[s, :] = surface.value_by_cohort_tau[0]
+    return np.clip(cdf_draws, 0.0, 1.0)
 
 
 def _runtime_request_cdf_draws(
@@ -1626,7 +2028,7 @@ def _runtime_request_cdf_draws(
     horizon: int,
 ) -> Optional[np.ndarray]:
     """Convenience: request-rooted CDF for the conditioned posterior."""
-    return _composed_pair_request_cdf_draws(
+    return _strict_span_request_cdf_draws(
         runtime.composed_subject,
         runtime.composed_carrier,
         horizon=horizon,
@@ -4750,7 +5152,7 @@ def _selected_cohort_group_rate_draws(
     # survivor mix). Pop C uses conditional post-frontier increments below.
     if not identity_carrier:
         car_pdf = np.clip(np.diff(F_car, axis=1, prepend=0.0), 0.0, 1.0)
-        pair_cdf = _composed_pair_request_cdf_draws(
+        pair_cdf = _strict_span_request_cdf_draws(
             subject,
             carrier,
             horizon=T - 1,
@@ -5113,7 +5515,7 @@ def _project_runtime_rows(
         overlay = runtime.unconditioned_overlays.get(basis)
         if overlay is None:
             return None
-        return _composed_pair_per_tau_rate_draws(
+        return _strict_span_model_rate_draws(
             overlay.subject, overlay.carrier, horizon=max_tau,
         )
 
@@ -6115,6 +6517,7 @@ def compute_cohort_maturity_rows_v3(
         is_multi_hop=is_multi_hop,
         anchor_node_id=anchor_node_id,
         resolved=resolved,
+        max_tau=fe.max_tau,
         evidence_candidates=request_candidates,
         unconditioned_overlay_bases=(
             ('predictive', 'epistemic') if show_model_curve else ('predictive',)
@@ -6357,7 +6760,19 @@ def compute_cohort_maturity_rows_v3(
         conditioned=runtime.public_moments.p_mean is not None,
         cf_mode=_cf_mode,
         cf_reason=_cf_reason,
-        runtime_provenance=runtime.project_runtime_provenance(),
+        runtime_provenance=_runtime_provenance_with_generalised_span_shadow(
+            runtime,
+            max_tau=fe.max_tau,
+            emit_diagnostics=emit_diagnostics,
+            additional_plans=(
+                _build_generalised_evidence_shadow_plans(
+                    selected_a_clock_evidence,
+                    tau_solid_max=row_tau_solid_max,
+                    max_tau=fe.max_tau,
+                )
+                if emit_diagnostics else ()
+            ),
+        ),
     )
     if a_pop_provenance and rows:
         rows[0]['_a_pop_provenance'] = a_pop_provenance

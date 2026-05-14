@@ -274,62 +274,48 @@ export function promoteModelVars(
 // ── Apply promotion to edge ─────────────────────────────────────────────────
 
 /**
- * Clear all promoted surfaces on a ProbabilityParam (posterior unification
- * plan §4 Step 2). Used when the resolver has nothing to promote — leaves
- * the surfaces consistent with "no source selected" rather than letting
- * stale projections persist from a prior promotion.
+ * Project the active source's view onto the promoted surfaces of `p`.
  *
- * `p.forecast.mean` and `p.forecast.stdev` are NOT cleared here when the
- * forecast object exists from a non-promoted writer (the existing
- * comment in applyPromotion warns against overwriting upstream writes
- * with undefined). We only clear the source-label so downstream readers
- * can detect "no active source" and the Beta / latency-posterior
- * projections so they cannot be stale.
- */
-function clearPromotedSurfaces(p: ProbabilityParam): void {
-  if (p.forecast) {
-    (p.forecast as any).source = undefined;
-  }
-  // Strip the promoted Beta shape — no source means no projection.
-  if ((p as any).posterior !== undefined) {
-    (p as any).posterior = undefined;
-  }
-  // Strip the promoted latency posterior.
-  if (p.latency && (p.latency as any).posterior !== undefined) {
-    (p.latency as any).posterior = undefined;
-  }
-  // Strip promoted latency point + path-level projections and heuristic
-  // dispersion SDs. Mirrors the unconditional writes in applyPromotion so
-  // a "no entry resolved" branch can't leave stale path_* from a prior
-  // source.
-  if (p.latency) {
-    p.latency.path_mu = undefined;
-    p.latency.path_sigma = undefined;
-    p.latency.promoted_path_t95 = undefined;
-    p.latency.path_onset_delta_days = undefined;
-    p.latency.promoted_mu_sd = undefined;
-    p.latency.promoted_sigma_sd = undefined;
-    p.latency.promoted_onset_sd = undefined;
-    p.latency.promoted_onset_mu_corr = undefined;
-    p.latency.promoted_path_mu_sd = undefined;
-    p.latency.promoted_path_sigma_sd = undefined;
-    p.latency.promoted_path_onset_sd = undefined;
-  }
-}
-
-/**
- * Write promoted scalars onto an edge's ProbabilityParam and LatencyConfig,
- * plus the promoted posterior surfaces (`p.posterior` and
- * `p.latency.posterior`) — posterior unification plan §3, Step 2.
+ * First-principles contract:
+ *   1. Selector — pick the active source by edge preference (with graph
+ *      default fall-through).
+ *   2. ATOMIC projection — every field below is overwritten from the
+ *      active source's projection. When the source does not provide a
+ *      field, that field is set to `undefined`. There is no stale carry-
+ *      over from a previously-active source, ever.
+ *   3. COMPLETE projection — every promotion-owned field is written.
+ *      Consumers read these surfaces without resolving anything
+ *      themselves.
+ *   4. Single writer — `applyPromotion` is the only computer of every
+ *      field listed below. FE topo writes the source ledger
+ *      (`model_vars[*]`); CF and runtime cascades do not touch these
+ *      surfaces. Callers must invoke `applyPromotion` after any
+ *      `model_vars` mutation.
  *
- * Mutates the provided objects in place; intended to be called during the
- * graph update cycle after resolution.
+ * Promotion-owned fields:
  *
- * Invariant: after this call, `p.posterior` and `p.latency.posterior`
- * reflect the active selector exactly. They are never left stale from a
- * prior promotion. When no entry resolves, they are cleared.
+ *   On `p`:
+ *     - `forecast.mean`, `forecast.stdev`, `forecast.source`
+ *     - `posterior` (whole sub-object — promoted Beta surface)
  *
- * Returns the active source (or undefined if nothing was promoted).
+ *   On `p.latency` (when present, or initialised on demand when the
+ *   active source carries a latency posterior):
+ *     - `mu`, `sigma` (L5 lognormal scalars, sourced from the active
+ *       entry's `latency.mu` / `latency.sigma`)
+ *     - `path_mu`, `path_sigma`, `path_onset_delta_days`
+ *     - `promoted_t95`, `promoted_path_t95`,
+ *       `promoted_onset_delta_days`
+ *     - `promoted_mu_sd`, `promoted_sigma_sd`, `promoted_onset_sd`,
+ *       `promoted_onset_mu_corr`,
+ *       `promoted_path_mu_sd`, `promoted_path_sigma_sd`,
+ *       `promoted_path_onset_sd`
+ *     - `posterior` (whole sub-object — promoted lognormal surface)
+ *     - `onset_delta_days` — copied from the promoted value only when
+ *       the user has NOT set `onset_delta_days_overridden`. The flag
+ *       and the input value itself are user-owned, not promotion-owned.
+ *
+ * Returns the active source (or undefined if no entry resolved — in
+ * which case every promotion-owned field above is set to undefined).
  */
 export function applyPromotion(
   p: ProbabilityParam,
@@ -338,89 +324,50 @@ export function applyPromotion(
   const pref = effectivePreference(p.model_source_preference, graphPref);
   const entry = resolveActiveModelVars(p.model_vars, pref);
   const result = promoteModelVars(entry);
-  if (!result) {
-    // Posterior unification plan §4 Step 2(c) — no entry resolved.
-    // Clear the promoted surfaces so a previous promotion's projection
-    // does not survive across a model_vars mutation that dropped the
-    // source.
-    clearPromotedSurfaces(p);
-    return undefined;
-  }
+  const lat = result?.latency;
 
-  // Doc 73b §3.2 — narrow promoted probability surface
-  // { mean, stdev, source }. applyPromotion is the only computer of these
-  // three fields; CF and runtime cascades must not write them. `k` (a
-  // runtime-derived population helper) is preserved on the same struct
-  // but is written by a different path (FE topo inbound-n propagation)
-  // — see §12.2 row S4 for the field-set partition. Skip the mean/stdev
-  // writes when the resolved source carries no probability values
-  // (e.g. an analytic entry built from a parameter file that omits
-  // mean/stdev) so we don't overwrite a forecast value populated
-  // upstream by file→graph mapping with `undefined`.
+  // ── Promoted probability surface ────────────────────────────────────
   if (!p.forecast) p.forecast = {};
-  if (Number.isFinite(result.mean)) p.forecast.mean = result.mean;
-  if (Number.isFinite(result.stdev)) p.forecast.stdev = result.stdev;
-  p.forecast.source = result.activeSource;
+  p.forecast.mean = result?.mean;
+  p.forecast.stdev = result?.stdev;
+  p.forecast.source = result?.activeSource;
+  (p as any).posterior = result?.posterior;
 
-  // p.mean and p.stdev are L5 current-answer scalars written by the topo
-  // pass / CF (§3.3 / §3.3.4). applyPromotion does not touch them.
+  // ── Promoted latency surface ────────────────────────────────────────
+  // Initialise `p.latency` on demand when the active source carries a
+  // latency posterior. Otherwise only write/clear when the host object
+  // already exists (an edge with no latency setup never needs a latency
+  // object created just to hold undefined fields).
+  if (!p.latency && result?.latency_posterior) {
+    p.latency = {} as any;
+  }
+  if (p.latency) {
+    p.latency.mu = lat?.mu;
+    p.latency.sigma = lat?.sigma;
+    p.latency.promoted_t95 = lat?.t95;
+    p.latency.promoted_onset_delta_days = lat?.onset_delta_days;
+    p.latency.path_mu = lat?.path_mu;
+    p.latency.path_sigma = lat?.path_sigma;
+    p.latency.promoted_path_t95 = lat?.path_t95;
+    p.latency.path_onset_delta_days = lat?.path_onset_delta_days;
+    p.latency.promoted_mu_sd = lat?.mu_sd;
+    p.latency.promoted_sigma_sd = lat?.sigma_sd;
+    p.latency.promoted_onset_sd = lat?.onset_sd;
+    p.latency.promoted_onset_mu_corr = lat?.onset_mu_corr;
+    p.latency.promoted_path_mu_sd = lat?.path_mu_sd;
+    p.latency.promoted_path_sigma_sd = lat?.path_sigma_sd;
+    p.latency.promoted_path_onset_sd = lat?.path_onset_sd;
+    (p.latency as any).posterior = result?.latency_posterior;
 
-  if (result.latency && p.latency) {
-    p.latency.mu = result.latency.mu;
-    p.latency.sigma = result.latency.sigma;
-    // Doc 19: t95 and path_t95 write to promoted_* fields to avoid
-    // circular dependency (user-configured t95 is an analytic fit input).
-    p.latency.promoted_t95 = result.latency.t95;
-    if (result.latency.onset_delta_days !== undefined) {
-      p.latency.promoted_onset_delta_days = result.latency.onset_delta_days;
-      // Copy to input field unless user has locked it (same pattern as
-      // UpdateManager.applyBatchLAGValues:2170, fetchDataService:2199).
-      if (p.latency.onset_delta_days_overridden !== true) {
-        p.latency.onset_delta_days = result.latency.onset_delta_days;
-      }
+    // `onset_delta_days` is the user-input field. When unlocked, it
+    // tracks the promoted onset; when locked, it preserves the user's
+    // value. The flag and the locked-input value are user-owned.
+    if (p.latency.onset_delta_days_overridden !== true) {
+      p.latency.onset_delta_days = lat?.onset_delta_days;
     }
-    // Path-level latency + heuristic dispersion: write unconditionally
-    // (assigning undefined when the active source has no value) so that a
-    // model_source_preference switch cannot leave stale projections from
-    // the previously-active source. The previous `if (… !== undefined)`
-    // guard leaked FE path_* values when switching to Bayesian on upstream
-    // edges where the bayesian entry carries no path_*.
-    p.latency.path_mu = result.latency.path_mu;
-    p.latency.path_sigma = result.latency.path_sigma;
-    p.latency.promoted_path_t95 = result.latency.path_t95;
-    p.latency.path_onset_delta_days = result.latency.path_onset_delta_days;
-    p.latency.promoted_mu_sd = result.latency.mu_sd;
-    p.latency.promoted_sigma_sd = result.latency.sigma_sd;
-    p.latency.promoted_onset_sd = result.latency.onset_sd;
-    p.latency.promoted_onset_mu_corr = result.latency.onset_mu_corr;
-    p.latency.promoted_path_mu_sd = result.latency.path_mu_sd;
-    p.latency.promoted_path_sigma_sd = result.latency.path_sigma_sd;
-    p.latency.promoted_path_onset_sd = result.latency.path_onset_sd;
   }
 
-  // Posterior unification plan §3, Step 2(a)/(b) — write the promoted Beta
-  // surface and the promoted latency posterior surface, OR clear them when
-  // the resolved entry has no Beta / no latency posterior. The single-writer
-  // invariant is: `p.posterior` and `p.latency.posterior` reflect the active
-  // selector after this call.
-  if (result.posterior) {
-    (p as any).posterior = result.posterior;
-  } else if ((p as any).posterior !== undefined) {
-    (p as any).posterior = undefined;
-  }
-  // p.latency.posterior is fully derived from the source ledger — initialise
-  // p.latency on demand when the resolved entry carries a latency posterior
-  // (matches the pre-refactor direct-write behaviour where the projection
-  // helper initialised pBlock.latency = {} before writing). When the resolved
-  // entry has no latency posterior, only clear if p.latency already exists.
-  if (result.latency_posterior) {
-    if (!p.latency) p.latency = {} as any;
-    (p.latency as any).posterior = result.latency_posterior;
-  } else if (p.latency && (p.latency as any).posterior !== undefined) {
-    (p.latency as any).posterior = undefined;
-  }
-
-  return result.activeSource;
+  return result?.activeSource;
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────────

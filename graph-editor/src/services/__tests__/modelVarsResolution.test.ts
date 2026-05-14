@@ -473,13 +473,14 @@ describe('applyPromotion', () => {
     expect(p.latency?.promoted_onset_delta_days).toBe(2.5);
   });
 
-  it('initialises p.latency on demand to project the latency posterior surface', () => {
-    // Posterior unification plan §3 / Step 5: p.latency.posterior is fully
-    // derived from the active bayesian source. When the source carries a
-    // latency posterior, applyPromotion initialises p.latency = {} and
-    // writes p.latency.posterior. Promoted scalar fields (mu, sigma, t95,
-    // promoted_*) are not written because there is no pre-existing
-    // p.latency input that would gate them.
+  it('initialises p.latency on demand and projects EVERY promoted scalar', () => {
+    // Promotion's contract: complete + atomic projection. When the active
+    // bayesian source carries a latency posterior, applyPromotion
+    // initialises p.latency = {} and writes every promoted-surface field
+    // (L5 scalars, promoted_*, and the lognormal posterior sub-object).
+    // Consumers must be able to read the promoted surface without
+    // resolving anything themselves — leaving p.latency.mu / promoted_t95
+    // undefined when the source supplies them would force a fallback.
     const p: ProbabilityParam = {
       mean: 0,
       stdev: 0,
@@ -494,10 +495,11 @@ describe('applyPromotion', () => {
     expect((p.latency as any).posterior).toBeDefined();
     expect((p.latency as any).posterior.mu_mean).toBe(2.3);
     expect((p.latency as any).posterior.sigma_mean).toBe(0.7);
-    // Promoted scalar fields are skipped because p.latency was absent
-    // pre-promotion (no t95 input to promote_* alongside).
-    expect((p.latency as any).mu).toBeUndefined();
-    expect((p.latency as any).promoted_t95).toBeUndefined();
+    // L5 scalars are present whenever the source supplies them, even on
+    // an edge whose `p.latency` was absent before promotion.
+    expect((p.latency as any).mu).toBe(2.3);
+    expect((p.latency as any).sigma).toBe(0.7);
+    expect((p.latency as any).promoted_t95).toBeDefined();
   });
 });
 
