@@ -1552,6 +1552,8 @@ def build_resolved_cf_runtime(
 
     from .primitive_readout import (
         CarrierEdgeResolution,
+        ComposeOptions,
+        ConditioningPolicyOptions,
         SpanEdgeResolution,
         _build_request_arrival_map,
         _build_resolved_runtime_prefix_arrival_identity,
@@ -1664,6 +1666,7 @@ def build_resolved_cf_runtime(
     # `target_subject_metadata`. See
     # docs/current/snapshot-fetch-envelope-design.md.
 
+    conditioning_options = ConditioningPolicyOptions()
     result = compute_resolved_runtime_readout(
         graph=graph,
         population_root_node_id=population_root,
@@ -1672,6 +1675,8 @@ def build_resolved_cf_runtime(
         subject_edge_resolutions=subject_resolutions,
         carrier_edge_resolutions=carrier_resolutions,
         scenario_seed=_runtime_seed(scenario_id, 'resolved_cf_runtime'),
+        options=conditioning_options,
+        compose_options=ComposeOptions(draw_count=conditioning_options.draw_count),
         prior_source=getattr(resolved, 'source', None),
         unconditioned_overlay_bases=unconditioned_overlay_bases,
         request_evidence_candidates=evidence_candidates,
@@ -1692,7 +1697,13 @@ def build_resolved_cf_runtime(
     else:
         runtime_provenance = result.diagnostics
 
-    if not result.should_substitute:
+    readout_substitutes = bool(
+        result.eligible
+        and result.composed_subject is not None
+        and result.composed_carrier is not None
+        and result.p_mean_primitive is not None
+    )
+    if not readout_substitutes:
         moments = _PrimitiveRuntimeResult(
             p_mean=None,
             p_sd=None,
@@ -1756,7 +1767,7 @@ def build_resolved_cf_runtime(
         projection_provenance=projection_provenance,
         composed_subject=result.composed_subject,
         composed_carrier=result.composed_carrier,
-        eligible=bool(result.eligible and result.should_substitute),
+        eligible=readout_substitutes,
         skip_reason=result.skip_reason,
         unconditioned_overlays=dict(result.unconditioned_overlays),
         source_layer_transitions=source_layer_transitions,

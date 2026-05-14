@@ -126,10 +126,7 @@ from .span_operator_supply import (
     PrimitiveDrawSurface,
     draw_model_primitive_operators,
 )
-from .span_runtime_adapter import (
-    RuntimeRootMass,
-    evaluate_with_operators,
-)
+from .span_readout import PrefixSurface, SpanOperator, evaluate_span_readout
 from .subject_span_composer import (
     ComposedPrimitiveSpan,
     ComposeOptions,
@@ -181,6 +178,32 @@ class ResolvedSpans:
     subject_primitives: Tuple[ConditionedTransitionPrimitive, ...] = ()
 
 
+@dataclass(frozen=True)
+class RuntimeRootMass:
+    cohort_ids: tuple[str, ...]
+    root_days: np.ndarray
+    root_counts: np.ndarray
+    root_support: np.ndarray
+
+
+def evaluate_with_operators(
+    *,
+    root_mass: RuntimeRootMass,
+    operators: Sequence[SpanOperator],
+    days: int,
+    max_tau: int,
+) -> PrefixSurface:
+    return evaluate_span_readout(
+        cohort_ids=root_mass.cohort_ids,
+        root_days=root_mass.root_days,
+        root_counts=root_mass.root_counts,
+        root_supports=root_mass.root_support,
+        operators=tuple(operators),
+        days=days,
+        max_tau=max_tau,
+    )
+
+
 # ─── Composer-side spine: request → composed pair ─────────────
 
 
@@ -217,7 +240,7 @@ def resolve_request_spans(
     # primitive_readout (which imports ComposeOptions from the composer
     # transitively). Spine is the algebraic procedure; primitive_readout
     # owns the perimeter that wraps it.
-    from .primitive_readout import prepare_primitive
+    from .primitive_readout import _window_identity_arrival_weights, prepare_primitive
 
     registry = RequestPrimitiveRegistry(arrival_map=subject_arrival_map)
     conditioned_primitive_map: dict[str, ConditionedTransitionPrimitive] = {}
@@ -236,7 +259,7 @@ def resolve_request_spans(
             transition=c_res.transition,
             primitive_scope=c_res.primitive_scope,
             resolved_model=c_res.resolved_model,
-            arrival_map=carrier_arrival_map,
+            arrival_weights=carrier_arrival_map.nodes[c_res.transition.source_node],
             scenario_seed=scenario_seed,
             options=options,
             prior_source=prior_source,
@@ -268,12 +291,15 @@ def resolve_request_spans(
             transition=s_res.transition,
             primitive_scope=s_res.primitive_scope,
             resolved_model=s_res.resolved_model,
-            arrival_map=subject_arrival_map,
+            arrival_weights=(
+                _window_identity_arrival_weights(s_res.primitive_scope)
+                if is_window
+                else subject_arrival_map.nodes[s_res.transition.source_node]
+            ),
             scenario_seed=scenario_seed,
             options=options,
             prior_source=prior_source,
             request_candidates=request_evidence_candidates,
-            window_identity=is_window,
         )
         registry_key = registry.register(prepared.resolution)
         primitive = prepared.primitive
@@ -473,8 +499,7 @@ def build_per_draw_chain(
             p_draws=reach_draws,
             conditional_cdf_draws=cdf_padded,
             timing_family="latent",
-        ),
-        days=days,
+        )
     )
     return tuple((op,) for op in ops)
 
