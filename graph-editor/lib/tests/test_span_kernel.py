@@ -18,10 +18,15 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from runner.span_kernel import (
+    ConcreteEdge,
     _build_span_topology,
     compose_span_kernel,
     _shifted_lognormal_pdf,
     _edge_sub_probability_density,
+)
+from runner.timing_span import (
+    SpanDPTrace,
+    _run_dp_density_trace,
 )
 from runner.confidence_bands import _shifted_lognormal_cdf
 
@@ -384,3 +389,179 @@ class TestPdfConsistency:
         pdf = _shifted_lognormal_pdf(tau_grid, onset=3.0, mu=2.0, sigma=0.8)
         integral = np.sum(pdf)
         assert abs(integral - 1.0) < 0.02, f"PDF integral={integral}, expected ~1.0"
+
+
+# ─── Stage A — concrete-edge topology + trace-returning DP ────────────
+
+
+class TestConcreteEdgeTopology:
+    """The topology must expose every graph edge as a distinct ConcreteEdge
+    with a stable, structural edge_key, so coincident sibling edges no
+    longer collapse into a single endpoint-pair entry.
+    """
+
+    def test_linear_chain_has_one_concrete_edge_per_graph_edge(self):
+        graph = _make_graph(
+            ['x', 'y', 'z'],
+            [
+                _make_edge('x', 'y', 0.7, mu=1.0, sigma=0.6),
+                _make_edge('y', 'z', 0.6, mu=1.2, sigma=0.5),
+            ],
+        )
+        topo = _build_span_topology(graph, 'x', 'z')
+        assert topo is not None
+        assert len(topo.concrete_edges) == 2
+        keys = [ce.edge_key for ce in topo.concrete_edges]
+        assert keys == ['x->y#0', 'y->z#0']
+
+    def test_coincident_siblings_yield_two_distinct_concrete_edges(self):
+        graph = _make_graph(
+            ['u', 'v'],
+            [
+                _make_edge('u', 'v', 0.5, mu=1.0, sigma=0.4),
+                _make_edge('u', 'v', 0.3, mu=2.5, sigma=0.6),
+            ],
+        )
+        topo = _build_span_topology(graph, 'u', 'v')
+        assert topo is not None
+        assert len(topo.concrete_edges) == 2
+        keys = [ce.edge_key for ce in topo.concrete_edges]
+        assert keys == ['u->v#0', 'u->v#1']
+        # Both siblings appear at the destination's incoming edges, not
+        # collapsed into a single predecessor entry.
+        incoming = topo.incoming_concrete_edges['v']
+        assert len(incoming) == 2
+        assert {ce.edge_key for ce in incoming} == {'u->v#0', 'u->v#1'}
+
+    def test_branch_join_exposes_every_incoming_concrete_edge(self):
+        graph = _make_graph(
+            ['x', 'y1', 'y2', 'z'],
+            [
+                _make_edge('x', 'y1', 0.6, mu=1.0, sigma=0.5),
+                _make_edge('x', 'y2', 0.4, mu=1.2, sigma=0.5),
+                _make_edge('y1', 'z', 0.7, mu=1.0, sigma=0.5),
+                _make_edge('y2', 'z', 0.8, mu=1.0, sigma=0.5),
+            ],
+        )
+        topo = _build_span_topology(graph, 'x', 'z')
+        assert topo is not None
+        incoming_z = topo.incoming_concrete_edges['z']
+        assert len(incoming_z) == 2
+        from_ids_at_z = {ce.from_id for ce in incoming_z}
+        assert from_ids_at_z == {'y1', 'y2'}
+
+
+class TestRunDpDensityTrace:
+    """The trace-returning DP must retain per-node arrival density and
+    per-edge contribution, keyed by concrete edge so sibling edges remain
+    distinguishable. Identity that downstream readers depend on:
+    `cumsum(node_density[end])` equals the terminal CDF that
+    `_run_dp_density_grid` historically returned.
+    """
+
+    @staticmethod
+    def _density(p, mu, sigma, T):
+        tau_grid = np.arange(T, dtype=float)
+        return _edge_sub_probability_density(tau_grid, p, 0.0, mu, sigma)
+
+    def test_root_node_density_is_delta_at_tau_zero(self):
+        T = 200
+        graph = _make_graph(
+            ['x', 'y', 'z'],
+            [
+                _make_edge('x', 'y', 0.5, mu=1.0, sigma=0.5),
+                _make_edge('y', 'z', 0.5, mu=1.0, sigma=0.5),
+            ],
+        )
+        topo = _build_span_topology(graph, 'x', 'z')
+        densities = {
+            'x->y#0': self._density(0.5, 1.0, 0.5, T),
+            'y->z#0': self._density(0.5, 1.0, 0.5, T),
+        }
+        trace = _run_dp_density_trace(topo, densities, T)
+        root_density = trace.node_density_by_node['x']
+        assert root_density[0] == pytest.approx(1.0)
+        assert np.sum(root_density[1:]) == pytest.approx(0.0, abs=1e-12)
+
+    def test_intermediate_node_density_equals_sum_of_incoming_contributions(self):
+        T = 200
+        graph = _make_graph(
+            ['x', 'y1', 'y2', 'z'],
+            [
+                _make_edge('x', 'y1', 0.6, mu=1.0, sigma=0.5),
+                _make_edge('x', 'y2', 0.4, mu=1.5, sigma=0.5),
+                _make_edge('y1', 'z', 0.7, mu=1.0, sigma=0.5),
+                _make_edge('y2', 'z', 0.8, mu=1.0, sigma=0.5),
+            ],
+        )
+        topo = _build_span_topology(graph, 'x', 'z')
+        densities = {
+            'x->y1#0': self._density(0.6, 1.0, 0.5, T),
+            'x->y2#0': self._density(0.4, 1.5, 0.5, T),
+            'y1->z#0': self._density(0.7, 1.0, 0.5, T),
+            'y2->z#0': self._density(0.8, 1.0, 0.5, T),
+        }
+        trace = _run_dp_density_trace(topo, densities, T)
+        z_from_edges = (
+            trace.edge_contribution_by_edge['y1->z#0']
+            + trace.edge_contribution_by_edge['y2->z#0']
+        )
+        np.testing.assert_allclose(
+            trace.node_density_by_node['z'], z_from_edges, atol=1e-12,
+        )
+
+    def test_coincident_siblings_have_separate_per_edge_contributions(self):
+        T = 200
+        graph = _make_graph(
+            ['u', 'v'],
+            [
+                _make_edge('u', 'v', 0.5, mu=1.0, sigma=0.4),
+                _make_edge('u', 'v', 0.3, mu=2.5, sigma=0.6),
+            ],
+        )
+        topo = _build_span_topology(graph, 'u', 'v')
+        kernel_a = self._density(0.5, 1.0, 0.4, T)
+        kernel_b = self._density(0.3, 2.5, 0.6, T)
+        densities = {
+            'u->v#0': kernel_a,
+            'u->v#1': kernel_b,
+        }
+        trace = _run_dp_density_trace(topo, densities, T)
+        contrib_a = trace.edge_contribution_by_edge['u->v#0']
+        contrib_b = trace.edge_contribution_by_edge['u->v#1']
+        # Each sibling's contribution is its kernel convolved with δ(0),
+        # which equals the kernel itself.
+        np.testing.assert_allclose(contrib_a, kernel_a, atol=1e-12)
+        np.testing.assert_allclose(contrib_b, kernel_b, atol=1e-12)
+        np.testing.assert_allclose(
+            trace.node_density_by_node['v'],
+            kernel_a + kernel_b,
+            atol=1e-12,
+        )
+
+    def test_terminal_cumsum_matches_legacy_run_dp_density_grid(self):
+        from runner.timing_span import _run_dp_density_grid
+
+        T = 200
+        graph = _make_graph(
+            ['x', 'y', 'z'],
+            [
+                _make_edge('x', 'y', 0.6, mu=1.0, sigma=0.5),
+                _make_edge('y', 'z', 0.7, mu=1.2, sigma=0.5),
+            ],
+        )
+        topo = _build_span_topology(graph, 'x', 'z')
+        kernel_xy = self._density(0.6, 1.0, 0.5, T)
+        kernel_yz = self._density(0.7, 1.2, 0.5, T)
+        densities_by_edge_key = {
+            'x->y#0': kernel_xy,
+            'y->z#0': kernel_yz,
+        }
+        densities_by_pair = {
+            ('x', 'y'): kernel_xy,
+            ('y', 'z'): kernel_yz,
+        }
+        trace = _run_dp_density_trace(topo, densities_by_edge_key, T)
+        cdf_from_trace = np.cumsum(trace.node_density_by_node['z'])
+        cdf_from_grid = _run_dp_density_grid(topo, densities_by_pair, T)
+        np.testing.assert_allclose(cdf_from_trace, cdf_from_grid, atol=1e-12)

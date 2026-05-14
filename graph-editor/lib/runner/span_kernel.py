@@ -29,7 +29,7 @@ cumulative arrivals.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 import math
 
 import numpy as np
@@ -51,12 +51,35 @@ class SpanKernel:
         return float(self.K[tau])
 
 
+@dataclass(frozen=True)
+class ConcreteEdge:
+    """A graph edge with a stable concrete-edge identity.
+
+    `edge_key` distinguishes coincident sibling edges (two parallel edges
+    between the same endpoints); the `(from_id, to_id)` pair alone cannot.
+    The key is preferentially derived from the graph edge's `edge_id` /
+    `id` field; when absent, a deterministic synthetic key is used,
+    disambiguating siblings by appearance order.
+    """
+    edge_key: str
+    from_id: str
+    to_id: str
+    edge_data: Mapping[str, Any]
+
+
 @dataclass
 class SpanTopology:
     """Precomputed DAG topology for the x→y span.
 
     Extracted once from the graph, reused for point-estimate kernel and
     for per-MC-draw reconvolution.
+
+    Concrete-edge metadata: `concrete_edges` parallels `edge_list` with
+    one entry per graph edge, each carrying a stable `edge_key`. Coincident
+    sibling edges get distinct keys; downstream per-edge ledgers depend
+    on this to avoid collapsing siblings. `incoming_concrete_edges`
+    mirrors `reverse_adj` but preserves sibling identity at the
+    destination node.
     """
     x_node_id: str
     y_node_id: str
@@ -65,6 +88,8 @@ class SpanTopology:
     reverse_adj: Dict[str, List[str]]  # node → list of predecessors
     path_adj: Dict[str, List[Tuple[str, Dict]]]  # from → [(to, edge_data)]
     edge_list: List[Tuple[str, str, Dict]]  # (from_id, to_id, edge_data) for all on-path edges
+    concrete_edges: Tuple[ConcreteEdge, ...] = field(default_factory=tuple)
+    incoming_concrete_edges: Mapping[str, Tuple[ConcreteEdge, ...]] = field(default_factory=dict)
 
 
 def _shifted_lognormal_pdf(tau_grid: np.ndarray, onset: float, mu: float, sigma: float) -> np.ndarray:
@@ -242,6 +267,33 @@ def _build_span_topology(
     if len(topo_order) != len(on_path):
         return None
 
+    # Derive a stable, uniform per-edge concrete key from structural
+    # identity: source, destination, and sibling appearance order. This
+    # distinguishes coincident sibling edges by construction without
+    # branching on whether the graph data supplies an `edge_id`. Where
+    # callers need the graph edge_id for display, they read it from
+    # `ConcreteEdge.edge_data`.
+    from collections import defaultdict
+    sibling_counter: Dict[Tuple[str, str], int] = defaultdict(int)
+    concrete_edges_list: List[ConcreteEdge] = []
+    for from_id, to_id, e in edge_list:
+        pair = (from_id, to_id)
+        idx = sibling_counter[pair]
+        sibling_counter[pair] = idx + 1
+        edge_key = f"{from_id}->{to_id}#{idx}"
+        concrete_edges_list.append(
+            ConcreteEdge(
+                edge_key=edge_key,
+                from_id=from_id,
+                to_id=to_id,
+                edge_data=e,
+            )
+        )
+
+    incoming_concrete: Dict[str, List[ConcreteEdge]] = defaultdict(list)
+    for ce in concrete_edges_list:
+        incoming_concrete[ce.to_id].append(ce)
+
     return SpanTopology(
         x_node_id=x_node_id,
         y_node_id=y_node_id,
@@ -250,6 +302,11 @@ def _build_span_topology(
         reverse_adj=reverse_adj,
         path_adj=path_adj,
         edge_list=edge_list,
+        concrete_edges=tuple(concrete_edges_list),
+        incoming_concrete_edges={
+            node_id: tuple(edges)
+            for node_id, edges in incoming_concrete.items()
+        },
     )
 
 

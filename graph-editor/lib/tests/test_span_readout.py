@@ -174,3 +174,106 @@ def test_negative_operator_mass_is_not_hidden_by_the_core():
         )
     )
     assert surface.mass_at("C0", 0) == -10.0
+
+
+# ─── Stage C — exposure stream propagation ────────────────────────────
+
+
+def _triple_lag_op(name, lag, *, value_frac, support_frac, exposure_frac, days=8):
+    value = np.zeros((1, lag + 1))
+    support = np.zeros((1, lag + 1))
+    exposure = np.zeros((1, lag + 1))
+    value[0, lag] = value_frac
+    support[0, lag] = support_frac
+    exposure[0, lag] = exposure_frac
+    return SpanOperator(
+        name=name, value=value, support=support, exposure=exposure, family="evidence",
+    )
+
+
+def test_prefix_surface_exposes_exposure_by_cohort_tau():
+    """`evaluate_span_readout` must build an exposure stream parallel
+    to value and support, with the same shape and cumulative-projection
+    semantics."""
+    surface = evaluate_span_readout(
+        cohort_ids=("C0",),
+        root_days=np.asarray([0], dtype=int),
+        root_counts=np.asarray([100.0], dtype=float),
+        root_supports=np.asarray([100.0], dtype=float),
+        operators=(_triple_lag_op(
+            "edge", lag=1, value_frac=0.4, support_frac=0.4, exposure_frac=1.0,
+        ),),
+        days=8,
+        max_tau=4,
+    )
+    assert surface.exposure_by_cohort_tau.shape == surface.value_by_cohort_tau.shape
+    # value: 100 × 0.4 = 40 at τ=1; cumulative value at τ=1 is 40.
+    assert surface.mass_at("C0", 1) == 40.0
+    # exposure: 100 × 1.0 = 100 at τ=1; cumulative exposure at τ=1 is 100.
+    assert surface.exposure_at("C0", 1) == 100.0
+
+
+def test_absent_cell_drops_support_to_zero_but_exposure_holds_through_observed_cells():
+    """Phase 6 §4.8 covered-zero / absent distinction at terminal-zero
+    cells: when value collapses (mask=0), exposure can still reach
+    observed cells. This test fixes value > 0 and varies support /
+    exposure to demonstrate the algebraic distinction the third stream
+    preserves."""
+    absent_op = _triple_lag_op(
+        "absent-cell", lag=1,
+        value_frac=0.4,
+        support_frac=0.0,    # mask = 0 → support zeroed
+        exposure_frac=0.0,   # exposure_shape × mask also zeroed at absent cell
+    )
+    observed_op = _triple_lag_op(
+        "observed-cell", lag=1,
+        value_frac=0.4,
+        support_frac=0.4,
+        exposure_frac=1.0,
+    )
+
+    surface_absent = evaluate_span_readout(
+        cohort_ids=("C0",),
+        root_days=np.asarray([0], dtype=int),
+        root_counts=np.asarray([100.0], dtype=float),
+        root_supports=np.asarray([100.0], dtype=float),
+        operators=(absent_op,),
+        days=8,
+        max_tau=4,
+    )
+    surface_observed = evaluate_span_readout(
+        cohort_ids=("C0",),
+        root_days=np.asarray([0], dtype=int),
+        root_counts=np.asarray([100.0], dtype=float),
+        root_supports=np.asarray([100.0], dtype=float),
+        operators=(observed_op,),
+        days=8,
+        max_tau=4,
+    )
+
+    # Identical value (mass propagates the same way regardless of mask).
+    assert surface_absent.mass_at("C0", 1) == surface_observed.mass_at("C0", 1)
+    # Support diverges: absent cell zeros support; observed cell carries it.
+    assert surface_absent.coverage_at("C0", 1) == 0.0
+    assert surface_observed.coverage_at("C0", 1) > 0.0
+    # Exposure tracks the same distinction: 0 at the absent terminal,
+    # positive at the observed terminal.
+    assert surface_absent.exposure_at("C0", 1) == 0.0
+    assert surface_observed.exposure_at("C0", 1) > 0.0
+
+
+def test_root_exposures_defaults_to_root_supports():
+    """Phase 6 §4.8: the cohort itself is the observation at the chain
+    root, so the default exposure seed equals the support seed."""
+    surface = evaluate_span_readout(
+        cohort_ids=("C0",),
+        root_days=np.asarray([0], dtype=int),
+        root_counts=np.asarray([100.0], dtype=float),
+        root_supports=np.asarray([42.0], dtype=float),
+        operators=(),
+        days=4,
+        max_tau=2,
+    )
+    # No operators applied; the τ=0 column holds the seed cumulative.
+    assert surface.exposure_at("C0", 0) == 42.0
+    assert surface.coverage_at("C0", 0) == 42.0

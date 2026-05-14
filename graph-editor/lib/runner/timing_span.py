@@ -14,6 +14,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 import numpy as np
 
 from .span_kernel import (
+    ConcreteEdge,
     SpanTopology,
     _build_span_topology,
     _edge_sub_probability_density,
@@ -64,6 +65,25 @@ class TimingSpan:
         return self.topology_case == 'degraded'
 
 
+def _finite_float(value: Any, *, label: str) -> float:
+    result = float(value)
+    if not np.isfinite(result):
+        raise ValueError(f'{label} must be finite; got {value!r}')
+    return result
+
+
+def _required_primitive_float(
+    primitive: Any,
+    attr: str,
+    transition_key: str,
+) -> float:
+    value = getattr(primitive, attr)
+    return _finite_float(
+        value,
+        label=f'timing transition {transition_key}.{attr}',
+    )
+
+
 def compose_timing_span_from_densities(
     *,
     graph: Mapping[str, Any],
@@ -85,27 +105,10 @@ def compose_timing_span_from_densities(
     checked against it. When omitted, the finite-grid terminal mass is
     the reach, matching conditioned subject-span behaviour.
     """
-    if root_node_id == end_node_id:
-        return TimingSpan(
-            root_node_id=str(root_node_id),
-            end_node_id=str(end_node_id),
-            reach=1.0,
-            conditional_cdf=None,
-            density_cdf=None,
-            mc_cdf=None,
-            max_tau=max_tau,
-            topology_case='identity',
-            horizon_ratio=1.0,
-            composed_edges=0,
-            has_latency_edge=False,
-            transition_source='identity',
-            provenance={'note': 'root equals end'},
-        )
-
     topo = topology or _build_span_topology(
         dict(graph), str(root_node_id), str(end_node_id)
     )
-    if topo is None or not topo.edge_list:
+    if topo is None:
         return _degraded_timing(
             root_node_id=root_node_id,
             end_node_id=end_node_id,
@@ -174,8 +177,17 @@ def compose_timing_span_from_densities(
         )
 
     conditional_cdf = np.clip(density_cdf / reach, 0.0, 1.0)
-    if finite_reach > cdf_renorm_tolerance and expected_reach is None:
-        conditional_cdf = np.clip(density_cdf / finite_reach, 0.0, 1.0)
+    topology_case = 'identity' if not topo.edge_list else 'composed'
+    resolved_transition_source = (
+        'identity' if topology_case == 'identity' else transition_source
+    )
+    provenance = {
+        'binding_policy': 'timing_span.density.v1',
+        'topology_node_count': len(topo.on_path),
+        'topology_edge_count': len(topo.edge_list),
+    }
+    if topology_case == 'identity':
+        provenance['note'] = 'root equals end'
 
     return TimingSpan(
         root_node_id=topo.x_node_id,
@@ -185,16 +197,12 @@ def compose_timing_span_from_densities(
         density_cdf=density_cdf,
         mc_cdf=None,
         max_tau=max_tau,
-        topology_case='composed',
+        topology_case=topology_case,
         horizon_ratio=horizon_ratio,
         composed_edges=len(topo.edge_list),
         has_latency_edge=_has_latency_density(aligned),
-        transition_source=transition_source,
-        provenance={
-            'binding_policy': 'timing_span.density.v1',
-            'topology_node_count': len(topo.on_path),
-            'topology_edge_count': len(topo.edge_list),
-        },
+        transition_source=resolved_transition_source,
+        provenance=provenance,
     )
 
 
@@ -216,18 +224,8 @@ def compose_timing_span_from_transition_primitives(
     timing algebra independent of the concrete carrier-composition
     dataclass while preserving the current pre-conditioning provider.
     """
-    if root_node_id == end_node_id:
-        return compose_timing_span_from_densities(
-            graph=graph,
-            root_node_id=root_node_id,
-            end_node_id=end_node_id,
-            densities={},
-            max_tau=max_tau,
-            transition_source='identity',
-        )
-
     topo = _build_span_topology(dict(graph), str(root_node_id), str(end_node_id))
-    if topo is None or not topo.edge_list:
+    if topo is None:
         return _degraded_timing(
             root_node_id=root_node_id,
             end_node_id=end_node_id,
@@ -253,16 +251,16 @@ def compose_timing_span_from_transition_primitives(
                 note=f'missing transition {from_id}->{to_id}',
                 topology=topo,
             )
-        p = float(getattr(primitive, 'p', 0.0) or 0.0)
-        mu = float(getattr(primitive, 'mu', 0.0) or 0.0)
-        latency_parameter = getattr(primitive, 'latency_parameter', None)
+        transition_key = f'{from_id}->{to_id}'
+        p = _required_primitive_float(primitive, 'p', transition_key)
+        mu = _required_primitive_float(primitive, 'mu', transition_key)
+        sigma = _required_primitive_float(primitive, 'sigma', transition_key)
+        onset = _required_primitive_float(primitive, 'onset', transition_key)
+        latency_parameter = primitive.latency_parameter
         if latency_parameter is False:
             mu = 0.0
             sigma = 0.0
             onset = 0.0
-        else:
-            sigma = float(getattr(primitive, 'sigma', 0.0) or 0.0)
-            onset = float(getattr(primitive, 'onset', 0.0) or 0.0)
         densities[(from_id, to_id)] = _edge_sub_probability_density(
             tau_grid,
             p,
@@ -273,12 +271,12 @@ def compose_timing_span_from_transition_primitives(
         edge_probabilities[(from_id, to_id)] = p
         edge_params[(from_id, to_id)] = (p, mu, sigma, onset)
         edge_sds[(from_id, to_id)] = (
-            float(getattr(primitive, 'p_sd', 0.0) or 0.0),
-            float(getattr(primitive, 'mu_sd', 0.0) or 0.0),
-            float(getattr(primitive, 'sigma_sd', 0.0) or 0.0),
-            float(getattr(primitive, 'onset_sd', 0.0) or 0.0),
+            _required_primitive_float(primitive, 'p_sd', transition_key),
+            _required_primitive_float(primitive, 'mu_sd', transition_key),
+            _required_primitive_float(primitive, 'sigma_sd', transition_key),
+            _required_primitive_float(primitive, 'onset_sd', transition_key),
         )
-        sources.add(str(getattr(primitive, 'source', 'unknown')))
+        sources.add(str(primitive.source))
 
     expected_reach = _topological_reach(topo, edge_probabilities)
     transition_source = (
@@ -348,37 +346,59 @@ def resolve_timing_transitions_from_graph(
         )
         if resolved is None:
             return None
-        p_mean = float(resolved.p_mean) if resolved.p_mean else 0.0
-        if p_mean <= 0.0:
-            a = float(getattr(resolved, 'alpha', 0.0) or 0.0)
-            b = float(getattr(resolved, 'beta', 0.0) or 0.0)
-            if (a + b) > 0.0:
-                p_mean = a / (a + b)
+        p_mean = _finite_float(
+            resolved.p_mean,
+            label=f'resolved p_mean for {from_id}->{to_id}',
+        )
         if not np.isfinite(p_mean) or p_mean <= 0.0:
             return None
         lat = resolved.latency
+        mu = _finite_float(
+            lat.mu,
+            label=f'latency mu for {from_id}->{to_id}',
+        )
+        sigma = _finite_float(
+            lat.sigma,
+            label=f'latency sigma for {from_id}->{to_id}',
+        )
+        onset = _finite_float(
+            lat.onset_delta_days,
+            label=f'latency onset for {from_id}->{to_id}',
+        )
+        if sigma < 0.0:
+            return None
+        if lat.latency_parameter is False:
+            mu = 0.0
+            sigma = 0.0
+            onset = 0.0
         transitions[(from_id, to_id)] = TimingTransitionPrimitive(
             p=p_mean,
-            mu=float(lat.mu) if lat.mu is not None else 0.0,
-            sigma=(
-                float(lat.sigma)
-                if (lat.sigma is not None and lat.sigma >= 0)
-                else 0.0
+            mu=mu,
+            sigma=sigma,
+            onset=onset,
+            latency_parameter=lat.latency_parameter,
+            p_sd=_finite_float(
+                resolved.p_sd,
+                label=f'resolved p_sd for {from_id}->{to_id}',
             ),
-            onset=(
-                float(lat.onset_delta_days)
-                if lat.onset_delta_days is not None else 0.0
+            mu_sd=_finite_float(
+                lat.mu_sd,
+                label=f'latency mu_sd for {from_id}->{to_id}',
             ),
-            p_sd=float(resolved.p_sd or 0.0),
-            mu_sd=float(lat.mu_sd or 0.0),
-            sigma_sd=float(lat.sigma_sd or 0.0),
-            onset_sd=float(lat.onset_sd or 0.0),
+            sigma_sd=_finite_float(
+                lat.sigma_sd,
+                label=f'latency sigma_sd for {from_id}->{to_id}',
+            ),
+            onset_sd=_finite_float(
+                lat.onset_sd,
+                label=f'latency onset_sd for {from_id}->{to_id}',
+            ),
             source=(
                 f'prior_{resolved.source}'
                 if resolved.source else 'prior_unresolved'
             ),
         )
-    return transitions or None
+    return transitions
 
 
 def compose_timing_span_from_graph(
@@ -393,17 +413,8 @@ def compose_timing_span_from_graph(
     rng: Optional[np.random.Generator] = None,
 ) -> TimingSpan:
     """Resolve source-layer transitions and compose timing in one call."""
-    if root_node_id == end_node_id:
-        return compose_timing_span_from_densities(
-            graph=graph,
-            root_node_id=root_node_id,
-            end_node_id=end_node_id,
-            densities={},
-            max_tau=max_tau,
-            transition_source='identity',
-        )
     topo = _build_span_topology(dict(graph), str(root_node_id), str(end_node_id))
-    if topo is None or not topo.edge_list:
+    if topo is None:
         return _degraded_timing(
             root_node_id=root_node_id,
             end_node_id=end_node_id,
@@ -437,31 +448,76 @@ def compose_timing_span_from_graph(
     )
 
 
+@dataclass(frozen=True)
+class SpanDPTrace:
+    """Per-node and per-edge ledger produced by the forward DAG DP.
+
+    Both surfaces are densities (NOT cumulative): `node_density_by_node[u]`
+    is the per-day arrival mass at node `u`, with δ(0) at the topology
+    root; `edge_contribution_by_edge[e]` is the per-day mass flowing
+    through concrete edge `e`, i.e. `convolve(node_density[U], kernel[e])`.
+
+    The terminal CDF is `cumsum(node_density_by_node[end])`; the
+    cumulative is a projection, not part of the DP state.
+    """
+    node_density_by_node: Mapping[str, np.ndarray]
+    edge_contribution_by_edge: Mapping[str, np.ndarray]
+
+
+def _run_dp_density_trace(
+    topo: SpanTopology,
+    densities_by_edge_key: Mapping[str, np.ndarray],
+    T: int,
+) -> SpanDPTrace:
+    """Forward DAG DP that retains per-node arrival density and per-edge
+    contribution. Densities are keyed by concrete edge key, so coincident
+    sibling edges are separate entries in the trace.
+
+    The DP shape is uniform: pre-initialise every on-path node's density
+    to a zero array, seed the root with δ(0) as part of initialisation,
+    then iterate the topological order accumulating
+    `convolve(node_density[U], kernel[e])` into the destination node's
+    density for every incoming concrete edge.
+    """
+    node_density: Dict[str, np.ndarray] = {
+        node: np.zeros(T, dtype=np.float64) for node in topo.on_path
+    }
+    node_density[topo.x_node_id][0] = 1.0
+    edge_contribution: Dict[str, np.ndarray] = {}
+
+    for node in topo.topo_order:
+        for ce in topo.incoming_concrete_edges.get(node, ()):
+            f_edge = densities_by_edge_key[ce.edge_key]
+            contribution = np.convolve(node_density[ce.from_id], f_edge)[:T]
+            edge_contribution[ce.edge_key] = contribution
+            node_density[node] += contribution
+
+    return SpanDPTrace(
+        node_density_by_node=node_density,
+        edge_contribution_by_edge=edge_contribution,
+    )
+
+
 def _run_dp_density_grid(
     topo: SpanTopology,
     densities: Mapping[Tuple[str, str], np.ndarray],
     T: int,
 ) -> np.ndarray:
-    g: Dict[str, np.ndarray] = {}
-    g[topo.x_node_id] = np.zeros(T, dtype=np.float64)
-    g[topo.x_node_id][0] = 1.0
+    """Terminal-CDF wrapper around `_run_dp_density_trace`.
 
-    for node in topo.topo_order:
-        if node == topo.x_node_id:
-            continue
-        node_density = np.zeros(T, dtype=np.float64)
-        for from_id in topo.reverse_adj.get(node, []):
-            if from_id not in topo.on_path or from_id not in g:
-                continue
-            f_edge = densities.get((from_id, node))
-            if f_edge is None or f_edge.shape[0] == 0:
-                continue
-            node_density += np.convolve(g[from_id], f_edge)[:T]
-        g[node] = node_density
-
-    if topo.y_node_id not in g:
-        return np.zeros(T, dtype=np.float64)
-    return np.cumsum(g[topo.y_node_id])
+    Legacy callers supply densities keyed by `(from_id, to_id)`; this
+    adapter rebases them onto concrete edge keys (replicating the same
+    density across coincident sibling edges, matching pre-trace
+    behaviour for callers that have not yet migrated to per-edge keys)
+    and returns `cumsum(node_density[end])`.
+    """
+    zero = np.zeros(T, dtype=np.float64)
+    densities_by_edge_key = {
+        ce.edge_key: densities.get((ce.from_id, ce.to_id), zero)
+        for ce in topo.concrete_edges
+    }
+    trace = _run_dp_density_trace(topo, densities_by_edge_key, T)
+    return np.cumsum(trace.node_density_by_node[topo.y_node_id])
 
 
 def _topological_reach(

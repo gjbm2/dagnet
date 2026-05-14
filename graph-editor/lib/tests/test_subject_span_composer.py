@@ -443,3 +443,286 @@ def test_composer_does_not_import_trajectory_engine():
     assert 'from .forecast_runtime' not in src
     assert 'from .cohort_forecast_v3' not in src
     assert 'from .carrier_composition' not in src
+
+
+# ─── Stage B — per-node / per-edge value ledgers on ComposedPrimitiveSpan
+
+
+def test_composer_exposes_per_node_density_with_delta_at_root():
+    """The composer must retain the per-node arrival density surface
+    computed inside the DP. At the topology root this is δ(0) for every
+    draw, regardless of how many edges live downstream."""
+    graph = _make_graph([('e-x-y', 'X', 'Y'), ('e-y-z', 'Y', 'Z')])
+    primitives = {
+        'e-x-y': _build_prior_only_primitive(
+            from_id='X', to_id='Y', edge_id='e-x-y', alpha=4.0, beta=6.0,
+        ),
+        'e-y-z': _build_prior_only_primitive(
+            from_id='Y', to_id='Z', edge_id='e-y-z', alpha=5.0, beta=5.0,
+        ),
+    }
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='Z',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory(primitives),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    assert 'X' in composed.node_density_draws
+    root_density = composed.node_density_draws['X']
+    assert root_density.shape == (composed.draw_count, composed.max_tau + 1)
+    # δ(0) at the root: tau=0 column is all ones, all other columns zero.
+    np.testing.assert_array_equal(
+        root_density[:, 0], np.ones(composed.draw_count),
+    )
+    assert np.sum(root_density[:, 1:]) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_intermediate_node_density_equals_sum_of_incoming_edge_contributions():
+    """For a branch/join (X -> {Y1, Y2} -> Z), the per-draw density at
+    Z must equal the sum of per-edge contributions for edges Y1->Z and
+    Y2->Z. Holds for every draw — the DP composes value through the
+    same convolution that produced the per-edge contribution surfaces.
+    """
+    graph = _make_graph([
+        ('e-x-y1', 'X', 'Y1'),
+        ('e-x-y2', 'X', 'Y2'),
+        ('e-y1-z', 'Y1', 'Z'),
+        ('e-y2-z', 'Y2', 'Z'),
+    ])
+    primitives = {
+        'e-x-y1': _build_prior_only_primitive(
+            from_id='X', to_id='Y1', edge_id='e-x-y1', alpha=3.0, beta=5.0,
+        ),
+        'e-x-y2': _build_prior_only_primitive(
+            from_id='X', to_id='Y2', edge_id='e-x-y2', alpha=4.0, beta=4.0,
+        ),
+        'e-y1-z': _build_prior_only_primitive(
+            from_id='Y1', to_id='Z', edge_id='e-y1-z', alpha=6.0, beta=4.0,
+        ),
+        'e-y2-z': _build_prior_only_primitive(
+            from_id='Y2', to_id='Z', edge_id='e-y2-z', alpha=5.0, beta=5.0,
+        ),
+    }
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='Z',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory(primitives),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    z_from_edges = (
+        composed.edge_contribution_draws['Y1->Z#0']
+        + composed.edge_contribution_draws['Y2->Z#0']
+    )
+    np.testing.assert_allclose(
+        composed.node_density_draws['Z'], z_from_edges, atol=1e-12,
+    )
+
+
+def test_coincident_sibling_edges_yield_separate_edge_contributions():
+    """Two parallel edges between the same endpoints must appear as
+    distinct concrete edges in the composed span — their per-edge
+    contributions are separately recoverable, and the destination node
+    density equals their sum. This is the failure mode `(from, to)`-keyed
+    edge maps historically had."""
+    graph = _make_graph([
+        ('e-u-v-a', 'U', 'V'),
+        ('e-u-v-b', 'U', 'V'),
+    ])
+    primitives = {
+        'e-u-v-a': _build_prior_only_primitive(
+            from_id='U', to_id='V', edge_id='e-u-v-a', alpha=4.0, beta=6.0,
+        ),
+        'e-u-v-b': _build_prior_only_primitive(
+            from_id='U', to_id='V', edge_id='e-u-v-b', alpha=3.0, beta=7.0,
+        ),
+    }
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='U',
+        end_node_id='V',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory(primitives),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    assert composed.primitive_count == 2
+    # Two distinct concrete-edge keys, not one collapsed entry.
+    assert len(composed.edge_contribution_draws) == 2
+    sibling_keys = set(composed.edge_contribution_draws.keys())
+    assert len(sibling_keys) == 2
+    # Sum of sibling contributions equals node density at V.
+    contributions = list(composed.edge_contribution_draws.values())
+    np.testing.assert_allclose(
+        composed.node_density_draws['V'],
+        contributions[0] + contributions[1],
+        atol=1e-12,
+    )
+
+
+def test_identity_span_carries_root_delta_in_node_density_draws():
+    """A zero-edge span (x == end, e.g. window mode or cohort(A=X)) must
+    still expose the per-node ledger with a δ(0) at the root replicated
+    across draws and no edge contributions."""
+    graph = _make_graph([('e-throwaway', 'X', 'Z')])  # an unrelated edge
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='X',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory({}),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    assert composed.primitive_count == 0
+    assert composed.concrete_edges == ()
+    assert composed.edge_contribution_draws == {}
+    root_density = composed.node_density_draws['X']
+    assert root_density.shape == (composed.draw_count, composed.max_tau + 1)
+    np.testing.assert_array_equal(
+        root_density[:, 0], np.ones(composed.draw_count),
+    )
+    assert np.sum(root_density[:, 1:]) == pytest.approx(0.0, abs=1e-12)
+
+
+# ─── Stage D — per-node / per-edge support and exposure ledgers ──────
+
+
+def test_composer_exposes_support_and_exposure_streams_under_unit_mask():
+    """With the default unit observation mask, the support stream equals
+    the value stream (mask × value = value) and the exposure stream
+    propagates the unit-reach PMF (Δcdf, no edge-probability factor).
+    Both surfaces share the same topology as value."""
+    graph = _make_graph([('e-x-y', 'X', 'Y'), ('e-y-z', 'Y', 'Z')])
+    primitives = {
+        'e-x-y': _build_prior_only_primitive(
+            from_id='X', to_id='Y', edge_id='e-x-y', alpha=4.0, beta=6.0,
+        ),
+        'e-y-z': _build_prior_only_primitive(
+            from_id='Y', to_id='Z', edge_id='e-y-z', alpha=5.0, beta=5.0,
+        ),
+    }
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='Z',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory(primitives),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    # Support equals value at every node under unit mask.
+    for node_id, density in composed.node_density_draws.items():
+        np.testing.assert_allclose(
+            composed.node_support_draws[node_id], density, atol=1e-12,
+        )
+    for edge_key, contrib in composed.edge_contribution_draws.items():
+        np.testing.assert_allclose(
+            composed.edge_support_contribution_draws[edge_key], contrib,
+            atol=1e-12,
+        )
+
+    # Exposure carries the unit-reach PMF: at the terminal, the
+    # cumulative exposure across τ saturates at 1 (the per-draw PMFs
+    # composed through the chain integrate to the path's reach pattern
+    # without the p factor). For each draw the τ-cumulative reaches
+    # exactly `1 - ε` (no edge probability weighting).
+    z_exposure_cum = np.cumsum(composed.node_exposure_draws['Z'], axis=1)
+    # Each draw's exposure cumsum at τ → T-1 should equal the path's
+    # reach with all p's set to 1 — exactly 1 for a fully connected
+    # 2-edge linear path.
+    assert np.allclose(z_exposure_cum[:, -1], 1.0, atol=1e-3)
+    # Value cumsum at τ → T-1 should equal the per-draw reach (≤ 1).
+    z_value_cum = np.cumsum(composed.node_density_draws['Z'], axis=1)
+    assert np.all(z_value_cum[:, -1] <= 1.0 + 1e-12)
+    assert np.all(z_value_cum[:, -1] <= z_exposure_cum[:, -1] + 1e-12)
+
+
+def test_identity_span_carries_root_delta_in_all_three_streams():
+    """Identity span (x == end) seeds δ(0) at the root for value,
+    support, and exposure alike — per Phase 6 §4.8 the cohort itself
+    IS the observation at the chain root."""
+    graph = _make_graph([('e-throwaway', 'X', 'Z')])
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='X',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory({}),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    expected = np.zeros((composed.draw_count, composed.max_tau + 1))
+    expected[:, 0] = 1.0
+    np.testing.assert_array_equal(composed.node_density_draws['X'], expected)
+    np.testing.assert_array_equal(composed.node_support_draws['X'], expected)
+    np.testing.assert_array_equal(composed.node_exposure_draws['X'], expected)
+    assert composed.edge_support_contribution_draws == {}
+    assert composed.edge_exposure_contribution_draws == {}
+
+
+def test_coincident_siblings_distinguish_in_all_three_streams():
+    """Sibling edges between the same endpoints have distinct per-edge
+    contributions in value, support, and exposure alike — the streams
+    share concrete-edge identity."""
+    graph = _make_graph([
+        ('e-u-v-a', 'U', 'V'),
+        ('e-u-v-b', 'U', 'V'),
+    ])
+    primitives = {
+        'e-u-v-a': _build_prior_only_primitive(
+            from_id='U', to_id='V', edge_id='e-u-v-a', alpha=4.0, beta=6.0,
+        ),
+        'e-u-v-b': _build_prior_only_primitive(
+            from_id='U', to_id='V', edge_id='e-u-v-b', alpha=3.0, beta=7.0,
+        ),
+    }
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='U',
+        end_node_id='V',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory(primitives),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    assert len(composed.edge_support_contribution_draws) == 2
+    assert len(composed.edge_exposure_contribution_draws) == 2
+    value_keys = set(composed.edge_contribution_draws.keys())
+    support_keys = set(composed.edge_support_contribution_draws.keys())
+    exposure_keys = set(composed.edge_exposure_contribution_draws.keys())
+    assert value_keys == support_keys == exposure_keys
+
+
+def test_composed_provenance_includes_concrete_edge_keys():
+    """Provenance must record each composed primitive's concrete edge_key
+    so downstream callers can correlate per-edge ledgers with the edges
+    they came from."""
+    graph = _make_graph([('e-x-y', 'X', 'Y'), ('e-y-z', 'Y', 'Z')])
+    primitives = {
+        'e-x-y': _build_prior_only_primitive(
+            from_id='X', to_id='Y', edge_id='e-x-y',
+        ),
+        'e-y-z': _build_prior_only_primitive(
+            from_id='Y', to_id='Z', edge_id='e-y-z',
+        ),
+    }
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='Z',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory(primitives),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    primitive_summaries = composed.provenance['primitives']
+    assert all('edge_key' in ps for ps in primitive_summaries)
+    edge_keys = {ps['edge_key'] for ps in primitive_summaries}
+    # Structural edge_keys are `f"{from}->{to}#{idx}"` by construction.
+    assert edge_keys == {'X->Y#0', 'Y->Z#0'}

@@ -141,6 +141,17 @@ __all__ = [
     "evaluate_model_rate_draws",
     "evaluate_request_cdf_draws",
     "resolve_request_spans",
+    # Engine readout helpers over the per-node / per-edge ledgers
+    # retained by `ComposedPrimitiveSpan` (Phase 6 §5 / proposal §5).
+    "read_node_mass_draws",
+    "read_node_support_draws",
+    "read_node_exposure_draws",
+    "read_edge_contribution_draws",
+    "read_edge_support_contribution_draws",
+    "read_edge_exposure_contribution_draws",
+    "project_coverage_draws",
+    "project_cumulative_exposure_draws",
+    "seed_subject_from_carrier",
 ]
 
 
@@ -594,3 +605,133 @@ def evaluate_request_cdf_draws(
         )
         cdf_draws[s, :] = surface.value_by_cohort_tau[0]
     return cdf_draws
+
+
+# ─── Engine readout helpers (Phase 6 §5 / proposal §5) ────────────────
+
+
+def read_node_mass_draws(
+    span: ComposedPrimitiveSpan, node_id: str,
+) -> np.ndarray:
+    """Per-(draw, τ) arrival-mass density at the named node.
+
+    δ at τ=0 at the topology root; sum-of-incoming-edge-contributions at
+    every other on-path node. The legacy terminal `cdf_draws` is the
+    per-draw cumulative of `read_node_mass_draws(end_node)` divided by
+    the per-draw asymptotic reach.
+    """
+    return span.node_density_draws[node_id]
+
+
+def read_node_support_draws(
+    span: ComposedPrimitiveSpan, node_id: str,
+) -> np.ndarray:
+    """Per-(draw, τ) support density at the named node (value-weighted
+    support stream of Phase 6 §4.8: ``cumulative_support /
+    cumulative_value`` is the coverage projection)."""
+    return span.node_support_draws[node_id]
+
+
+def read_node_exposure_draws(
+    span: ComposedPrimitiveSpan, node_id: str,
+) -> np.ndarray:
+    """Per-(draw, τ) exposure density at the named node (Phase 6 §4.8
+    exposure stream — preserves the covered-zero / absent distinction at
+    cumulative-zero cells where the value-weighted ratio is undefined)."""
+    return span.node_exposure_draws[node_id]
+
+
+def read_edge_contribution_draws(
+    span: ComposedPrimitiveSpan, edge_key: str,
+) -> np.ndarray:
+    """Per-(draw, τ) value contribution flowing through the named
+    concrete edge. Coincident sibling edges have distinct entries."""
+    return span.edge_contribution_draws[edge_key]
+
+
+def read_edge_support_contribution_draws(
+    span: ComposedPrimitiveSpan, edge_key: str,
+) -> np.ndarray:
+    """Per-(draw, τ) support contribution through the named concrete edge."""
+    return span.edge_support_contribution_draws[edge_key]
+
+
+def read_edge_exposure_contribution_draws(
+    span: ComposedPrimitiveSpan, edge_key: str,
+) -> np.ndarray:
+    """Per-(draw, τ) exposure contribution through the named concrete edge."""
+    return span.edge_exposure_contribution_draws[edge_key]
+
+
+def project_coverage_draws(
+    value_draws: np.ndarray, support_draws: np.ndarray,
+) -> np.ndarray:
+    """Per-(draw, τ) coverage as Phase 6 §4.8's ratio:
+
+        coverage(s, τ) = cumulative_support(s, τ) / cumulative_value(s, τ)
+
+    The 0/0 cell — wavefront has not reached τ in this draw — emits 0
+    per the Phase 6 0/0 policy. Anywhere cumulative value is strictly
+    positive the division is unguarded.
+    """
+    cumulative_value = np.cumsum(value_draws, axis=-1)
+    cumulative_support = np.cumsum(support_draws, axis=-1)
+    return np.divide(
+        cumulative_support, cumulative_value,
+        out=np.zeros_like(cumulative_value),
+        where=cumulative_value > 0.0,
+    )
+
+
+def project_cumulative_exposure_draws(
+    exposure_draws: np.ndarray,
+) -> np.ndarray:
+    """Per-(draw, τ) cumulative exposure. Positive whenever the
+    wavefront has reached any observed cell in this draw — even if the
+    value-weighted support stream is zero (the covered-zero case)."""
+    return np.cumsum(exposure_draws, axis=-1)
+
+
+def seed_subject_from_carrier(
+    *,
+    carrier: ComposedPrimitiveSpan,
+    x_node_id: str,
+    anchor_days: Sequence[int],
+    anchor_counts: Sequence[float],
+    days: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Active-cohort handoff: carrier output at X becomes the subject's
+    root seed.
+
+    For each anchor day `c` with observed cohort count `N_c`, the
+    carrier's per-(draw, day-since-A) arrival density at X is shifted by
+    `c` and scaled by `N_c`. Contributions from multiple anchors are
+    summed into the (draw, source-day-at-X) seed surface. Returns the
+    three seed streams (value, support, exposure) the subject readout
+    consumes alongside the per-(draw, day_at_X) surface as ``(S, days)``
+    arrays.
+
+    Anchor days outside ``[0, days)`` are out of horizon and silently
+    contribute zero. This is a perimeter horizon check on caller input,
+    not a case fork inside the algebra.
+    """
+    S = carrier.draw_count
+    g_value = carrier.node_density_draws[x_node_id]
+    g_support = carrier.node_support_draws[x_node_id]
+    g_exposure = carrier.node_exposure_draws[x_node_id]
+    T_carrier = g_value.shape[1]
+    value_seed = np.zeros((S, days), dtype=np.float64)
+    support_seed = np.zeros((S, days), dtype=np.float64)
+    exposure_seed = np.zeros((S, days), dtype=np.float64)
+    for c_raw, n_raw in zip(anchor_days, anchor_counts):
+        c = int(c_raw)
+        if c < 0 or c >= days:
+            continue
+        n_c = float(n_raw)
+        src_end = min(T_carrier, days - c)
+        if src_end <= 0:
+            continue
+        value_seed[:, c:c + src_end] += n_c * g_value[:, :src_end]
+        support_seed[:, c:c + src_end] += n_c * g_support[:, :src_end]
+        exposure_seed[:, c:c + src_end] += n_c * g_exposure[:, :src_end]
+    return value_seed, support_seed, exposure_seed
