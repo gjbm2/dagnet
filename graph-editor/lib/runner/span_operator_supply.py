@@ -3,6 +3,12 @@
 Two input kinds: raw arrays (delay kernels, CDFs, n/k rows) and primitive
 surfaces (one edge's reach + timing data, mean or per-draw). Primitive
 builders dispatch on ``timing_family`` via one helper.
+
+All constructors emit the canonical ``(rows, kernel_length)`` form expected
+by the span readout: ``rows == 1`` for shift-invariant operators,
+``rows == days`` for source-day-specific operators. Representation
+choice and any conversion logic lives here at the perimeter; the
+evaluator itself is shape-agnostic.
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ from .span_readout import SpanOperator
 
 
 def identity_operator(name: str, *, days: int, family: str = "identity") -> SpanOperator:
-    kernel = np.array([1.0], dtype=float)
+    kernel = np.array([[1.0]], dtype=float)
     return SpanOperator(name=name, value=kernel, support=kernel.copy(), family=family)
 
 
@@ -28,8 +34,8 @@ def delay_operator(
     family: str,
     support_increments: Sequence[float],
 ) -> SpanOperator:
-    increment_values = np.asarray(increments, dtype=float)[:days]
-    support_values = np.asarray(support_increments, dtype=float)[:days]
+    increment_values = np.asarray(increments, dtype=float).reshape(1, -1)
+    support_values = np.asarray(support_increments, dtype=float).reshape(1, -1)
     return SpanOperator(
         name=name,
         value=increment_values,
@@ -103,20 +109,14 @@ def source_day_specific_evidence_operator(
     days: int,
     family: str = "evidence_source_day_specific",
 ) -> SpanOperator:
-    source = np.asarray(source_days, dtype=int)[:, None]
-    destination = source + np.arange(n_by_source_age.shape[1])[None, :]
-    source_indices = np.broadcast_to(source, destination.shape)
-    in_bounds = destination < days
+    source = np.asarray(source_days, dtype=int)
+    kernel_length = n_by_source_age.shape[1]
     increments = np.diff(k_by_source_age / n_by_source_age, axis=1, prepend=0.0)
     support_increments = (n_by_source_age != 0.0).astype(float)
-    value = np.zeros((days, days), dtype=float)
-    support = np.zeros((days, days), dtype=float)
-    np.add.at(value, (source_indices[in_bounds], destination[in_bounds]), increments[in_bounds])
-    np.add.at(
-        support,
-        (source_indices[in_bounds], destination[in_bounds]),
-        support_increments[in_bounds],
-    )
+    value = np.zeros((days, kernel_length), dtype=float)
+    support = np.zeros((days, kernel_length), dtype=float)
+    value[source] = increments
+    support[source] = support_increments
     return SpanOperator(name=name, value=value, support=support, family=family)
 
 

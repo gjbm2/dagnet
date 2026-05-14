@@ -269,6 +269,7 @@ def _run_full_suite() -> list[dict]:
     args = argparse.Namespace(
         graph=graph_filter,
         include=None,
+        exclude=None,
         preflight_only=False,
         chains=3, draws=1000, tune=500, max_parallel=None,
     )

@@ -106,6 +106,10 @@ def test_shadow_engine_matches_promoted_core_for_saturating_support():
         evaluate_span_readout,
     )
 
+    from runner.generalised_span_model_shadow import (
+        _per_source_kernel_from_forward_matrix,
+    )
+
     op = _operator(
         "support-saturates",
         (0.0, 0.5, 0.25),
@@ -113,14 +117,14 @@ def test_shadow_engine_matches_promoted_core_for_saturating_support():
     )
     promoted_surface = evaluate_span_readout(
         cohort_ids=("c0",),
-        root_days=(0,),
-        root_counts=(1.0,),
-        root_supports=(1.0,),
+        root_days=np.asarray([0], dtype=int),
+        root_counts=np.asarray([1.0], dtype=float),
+        root_supports=np.asarray([1.0], dtype=float),
         operators=(
             PromotedOperator(
                 name=op.name,
-                value=op.value,
-                support=op.support,
+                value=_per_source_kernel_from_forward_matrix(op.value),
+                support=_per_source_kernel_from_forward_matrix(op.support),
                 family="test",
             ),
         ),
@@ -142,7 +146,9 @@ def test_shadow_engine_matches_promoted_core_for_saturating_support():
 
     assert shadow["spans"]["promoted_core_parity"]["value_max_abs_diff"] < 1e-12
     assert shadow["spans"]["promoted_core_parity"]["support_max_abs_diff"] < 1e-12
-    assert promoted_surface.coverage_by_cohort_tau[0, 2] == 1.0
+    # Engine no longer caps support at 1.0; cumulative coverage exceeds 1.0
+    # when support kernels overlap. Caller-side cap is now caller's job.
+    np.testing.assert_allclose(promoted_surface.coverage_by_cohort_tau[0, 2], 1.6)
 
 
 def test_runtime_provenance_shadow_requires_exact_plans_when_diagnostics_are_on():

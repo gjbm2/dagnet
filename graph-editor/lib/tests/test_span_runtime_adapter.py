@@ -157,8 +157,8 @@ def test_runtime_draw_model_compiles_draw_operators():
         days=4,
     )
     assert len(operators) == 2
-    np.testing.assert_allclose(operators[0].value[1], 0.2)
-    np.testing.assert_allclose(operators[1].value[1], 0.25)
+    np.testing.assert_allclose(operators[0].value[0, 1], 0.2)
+    np.testing.assert_allclose(operators[1].value[0, 1], 0.25)
 
 
 def test_deterministic_runtime_model_end_to_end_lands_at_shift():
@@ -273,7 +273,7 @@ def test_deterministic_runtime_model_uses_shift_not_delta_zero():
         ),
         days=5,
     )
-    np.testing.assert_array_equal(operator.value, np.array([0.0, 0.0, 0.5]))
+    np.testing.assert_array_equal(operator.value, np.array([[0.0, 0.0, 0.5]]))
 
 
 def test_strict_span_model_rate_matches_identity_carrier_formula():

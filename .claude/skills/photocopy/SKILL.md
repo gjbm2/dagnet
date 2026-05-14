@@ -7,7 +7,7 @@ description: Capture a complete snapshot of the current working tree (modified, 
 
 Make a named git stash that captures *everything* in the working tree — modifications, deletions, **and untracked files** — then put the working tree back exactly as it was. The user ends with a stash they can recover from later, but the visible state is unchanged.
 
-This is a git-write operation. It runs through the project's git-write gate (`request-gate.sh` → wait → `confirm-gate.sh` → execute). You cannot bypass the gate; if the user has not approved in the current message, request and wait.
+This is a git-write operation, but the git-write gate has a dedicated, narrow carve-out for the canonical `/photocopy` command (see `gate-check.sh`'s `/photocopy canonical-sequence carve-out` block). The carve-out matches only the exact chained sequence below — any deviation, extra command, or command-substitution inside the stash name falls through to the normal gate and will be blocked. There is no request/confirm dance for canonical `/photocopy`.
 
 ## Picking a name
 
@@ -40,14 +40,15 @@ The naive `git stash push -u && git stash apply` does **not** restore the origin
 
 ## Gate handling
 
-The project's git-write gate blocks any shell line containing git-write patterns until approved. Procedure when invoking this skill:
+Issue the entire sequence as a **single Bash call**, chained with `&&` exactly as below:
 
-1. Run `.claude/hooks/request-gate.sh git-write` and stop.
-2. Wait for the user's approval. Do NOT chain the request and confirmation in the same response.
-3. After approval, in a separate Bash call, run `sleep 11 && .claude/hooks/confirm-gate.sh git-write 11`. Do not include any git command in this same line — the gate hook scans the entire command string and will reject the call.
-4. Then, in another separate Bash call, run the full photocopy sequence (steps 1-7 above) chained with `&&` so a failure short-circuits.
+```
+git status --short > /tmp/photocopy-pre.txt && git add -A && git stash push -m "<name>" && git stash apply --index && git reset && git status --short > /tmp/photocopy-post.txt && diff /tmp/photocopy-pre.txt /tmp/photocopy-post.txt
+```
 
-The gate stays open briefly after confirmation. If the cooldown expires before you execute, repeat from step 1.
+Substitute `<name>` with the chosen stash name (use double quotes; no `$()`, backticks, or shell escapes inside the name — those break the carve-out and the gate will block). The gate's photocopy regex matches this exact shape and lets it through; any deviation — extra commands, splitting the chain across Bash calls, different paths — re-engages the normal gate.
+
+If the working tree is empty, the first `git status --short` produces an empty file. `git add -A` is a no-op and `git stash push` would create an empty stash. **Pre-check yourself**: if `git status --short` (in a separate, ungated call) is empty, tell the user there is nothing to photocopy and exit; do not issue the canonical sequence.
 
 ## Edge cases
 

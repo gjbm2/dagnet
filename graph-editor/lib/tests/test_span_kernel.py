@@ -294,10 +294,17 @@ class TestNoPath:
         kernel = _compose(graph, 'x', 'y', max_tau=100)
         assert kernel is None
 
-    def test_same_node_returns_none(self):
+    def test_same_node_is_identity_kernel(self):
+        """x == y is the identity element of operator-chain composition:
+        mass concentrated at tau=0, K(τ) = 1 for all τ ≥ 0.
+        """
         graph = _make_graph(['x'], [])
         kernel = _compose(graph, 'x', 'x', max_tau=100)
-        assert kernel is None
+        assert kernel is not None
+        assert kernel.density[0] == 1.0
+        assert all(d == 0.0 for d in kernel.density[1:])
+        assert all(k == 1.0 for k in kernel.K)
+        assert kernel.span_p == 1.0
 
 
 class TestPreparedInputs:

@@ -88,6 +88,22 @@ def _compare_plan(plan: SpanShadowPlan, *, max_tau: int) -> Mapping[str, object]
     }
 
 
+def _per_source_kernel_from_forward_matrix(matrix: np.ndarray) -> np.ndarray:
+    """Convert a forward-only banded ``(days, days)`` matrix into the
+    canonical ``(days, kernel_length)`` per-source-kernel form expected by
+    the span readout.
+
+    Entries below the diagonal (destinations earlier than the source day)
+    are not representable as a forward-time delay and are dropped; shadow
+    plans by construction supply only forward-banded operators.
+    """
+    days = int(matrix.shape[0])
+    kernel = np.zeros_like(matrix)
+    for source in range(days):
+        kernel[source, : days - source] = matrix[source, source:]
+    return kernel
+
+
 def _evaluate_curves(
     *,
     root_day: int,
@@ -99,20 +115,20 @@ def _evaluate_curves(
     days = int(root_day) + int(max_tau) + 1
     surface = evaluate_span_readout(
         cohort_ids=("shadow",),
-        root_days=(int(root_day),),
-        root_counts=(float(root_value),),
-        root_supports=(float(root_support),),
+        root_days=np.asarray([root_day], dtype=int),
+        root_counts=np.asarray([root_value], dtype=float),
+        root_supports=np.asarray([root_support], dtype=float),
         operators=tuple(
             SpanOperator(
                 name=operator.name,
-                value=operator.value,
-                support=operator.support,
+                value=_per_source_kernel_from_forward_matrix(operator.value),
+                support=_per_source_kernel_from_forward_matrix(operator.support),
                 family="shadow",
             )
             for operator in operators
         ),
         days=days,
-        max_tau=max_tau,
+        max_tau=int(max_tau),
     )
     return surface.value_by_cohort_tau[0], surface.coverage_by_cohort_tau[0]
 

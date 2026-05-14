@@ -227,8 +227,8 @@ def compose_primitive_span(
         read edge parameter fields directly — those have been resolved
         into the registry's primitives by Stage 2/3.
     x_node_id, end_node_id
-        Span endpoints. ``x == end`` is rejected (plan §149: a single-hop
-        span has at least one primitive).
+        Span endpoints. ``x == end`` produces a zero-edge composition — the
+        identity element of the operator-chain monoid — without raising.
     registry
         Request-scoped primitive registry populated with one primitive
         per edge in the span closure under one ``PrefixArrivalIdentity``
@@ -253,20 +253,10 @@ def compose_primitive_span(
     Raises
     ------
     CompositionError
-        If no path exists from x to end (no topology), if the registry
-        does not supply a primitive for an edge required by the
-        topology, or if primitives disagree on draw count.
+        If the registry does not supply a primitive for an edge required
+        by the topology.
     """
-    if x_node_id == end_node_id:
-        raise CompositionError(
-            f"compose_primitive_span requires x != end; got both = {x_node_id}"
-        )
-
     topo = _build_span_topology(graph, x_node_id, end_node_id)
-    if topo is None or not topo.edge_list:
-        raise CompositionError(
-            f"no path from {x_node_id} to {end_node_id} in supplied graph"
-        )
 
     # Resolve every edge in the topology to its primitive. Missing → hard
     # error: the caller must populate the registry before composing
@@ -310,13 +300,7 @@ def compose_primitive_span(
 
     if all_coherent:
         draw_counts = {p.draw_count for _, p in edge_primitives}
-        if len(draw_counts) != 1:
-            raise CompositionError(
-                f"primitives in span disagree on draw_count: "
-                f"{sorted(draw_counts)}; the registry must enforce a "
-                f"single S per request"
-            )
-        S = draw_counts.pop()
+        S = next(iter(draw_counts), 0)
         composed = _compose_draws(
             topo=topo,
             edge_primitives=edge_primitives,
@@ -358,6 +342,33 @@ def _compose_draws(
     node; the composed reach is its terminal value.
     """
     T = max_tau + 1
+    n_edges = len(edge_primitives)
+
+    # Zero-edge span (x == end) is the algebraic identity of the
+    # operator-chain monoid: empty product on reach (1.0), arrived at
+    # tau=0 on timing (cdf = ones). No primitives → no draws; the
+    # per-draw arrays are genuinely empty along the S axis.
+    if n_edges == 0:
+        return ComposedPrimitiveSpan(
+            x_node_id=topo.x_node_id,
+            end_node_id=topo.y_node_id,
+            primitive_count=0,
+            draw_count=0,
+            is_draw_coherent=True,
+            span_p_mean=1.0,
+            span_p_sd=0.0,
+            span_p_draws=np.array([], dtype=np.float64),
+            cdf_mean=np.ones(T, dtype=np.float64),
+            cdf_draws=np.zeros((0, T), dtype=np.float64),
+            max_tau=max_tau,
+            provenance=_build_provenance(
+                topo=topo,
+                edge_primitives=[],
+                mode="draws",
+                S=0,
+                all_coherent=True,
+            ),
+        )
 
     # Per-edge per-draw density arrays. Shape: (n_edges, S, T).
     # Per-edge per-draw probability arrays. Shape: (n_edges, S).
@@ -370,7 +381,6 @@ def _compose_draws(
     # natural degeneration of single-hop into multi-hop (the single-hop
     # readout reads `mean(p_draws)` directly via the primitive's IS
     # posterior, with no horizon dependency).
-    n_edges = len(edge_primitives)
     f_edge_draws = np.zeros((n_edges, S, T), dtype=np.float64)
     p_draws_by_edge: Dict[Tuple[str, str], np.ndarray] = {}
     for i, ((from_id, to_id), primitive) in enumerate(edge_primitives):

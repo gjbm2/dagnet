@@ -36,22 +36,22 @@ def run(
     max_tau=3,
 ):
     if root_supports is None:
-        root_supports = tuple(1.0 for _ in root_counts)
+        root_supports = [1.0 for _ in root_counts]
     return evaluate_span_readout(
-        cohort_ids=cohort_ids,
-        root_days=root_days,
-        root_counts=root_counts,
-        root_supports=root_supports,
-        operators=operators,
-        days=days,
-        max_tau=max_tau,
+        cohort_ids=tuple(cohort_ids),
+        root_days=np.asarray(root_days, dtype=int),
+        root_counts=np.asarray(root_counts, dtype=float),
+        root_supports=np.asarray(root_supports, dtype=float),
+        operators=tuple(operators),
+        days=int(days),
+        max_tau=int(max_tau),
     )
 
 
 def test_identity_operator_passes_mass_through_unchanged():
     operator = identity_operator("I", days=4)
-    np.testing.assert_array_equal(operator.value, np.array([1.0]))
-    np.testing.assert_array_equal(operator.support, np.array([1.0]))
+    np.testing.assert_array_equal(operator.value, np.array([[1.0]]))
+    np.testing.assert_array_equal(operator.support, np.array([[1.0]]))
     surface = run((operator,), root_counts=(100.0,), days=4, max_tau=3)
     np.testing.assert_allclose(surface.value_by_cohort_tau[0], [100.0, 100.0, 100.0, 100.0])
 
@@ -142,8 +142,8 @@ def test_latent_model_primitive_compiles_p_times_latency_increments():
         PrimitiveModelSurface("A-B", p=0.5, conditional_cdf=(0.0, 0.25, 1.0)),
         days=5,
     )
-    np.testing.assert_allclose(operator.value[1], 0.125)
-    np.testing.assert_allclose(operator.value[2], 0.375)
+    np.testing.assert_allclose(operator.value[0, 1], 0.125)
+    np.testing.assert_allclose(operator.value[0, 2], 0.375)
 
 
 def test_nonlatent_model_primitive_is_delta_zero():
@@ -151,7 +151,7 @@ def test_nonlatent_model_primitive_is_delta_zero():
         PrimitiveModelSurface("A-B", p=0.3, timing_family="non_latent"),
         days=4,
     )
-    np.testing.assert_array_equal(operator.value, np.array([0.3]))
+    np.testing.assert_array_equal(operator.value, np.array([[0.3]]))
 
 
 def test_deterministic_model_primitive_is_delta_at_shift():
@@ -164,7 +164,7 @@ def test_deterministic_model_primitive_is_delta_at_shift():
         ),
         days=5,
     )
-    np.testing.assert_array_equal(operator.value, np.array([0.0, 0.0, 0.3]))
+    np.testing.assert_array_equal(operator.value, np.array([[0.0, 0.0, 0.3]]))
 
 
 def test_latent_draw_primitive_compiles_one_operator_per_draw():
@@ -177,8 +177,8 @@ def test_latent_draw_primitive_compiles_one_operator_per_draw():
         days=4,
     )
     assert len(operators) == 2
-    np.testing.assert_allclose(operators[0].value[1], 0.2)
-    np.testing.assert_allclose(operators[1].value[1], 0.25)
+    np.testing.assert_allclose(operators[0].value[0, 1], 0.2)
+    np.testing.assert_allclose(operators[1].value[0, 1], 0.25)
 
 
 def test_deterministic_draw_primitive_compiles_shifted_delta():
@@ -192,8 +192,8 @@ def test_deterministic_draw_primitive_compiles_shifted_delta():
         days=5,
     )
     assert len(operators) == 2
-    np.testing.assert_array_equal(operators[0].value, np.array([0.0, 0.0, 0.2]))
-    np.testing.assert_array_equal(operators[1].value, np.array([0.0, 0.0, 0.5]))
+    np.testing.assert_array_equal(operators[0].value, np.array([[0.0, 0.0, 0.2]]))
+    np.testing.assert_array_equal(operators[1].value, np.array([[0.0, 0.0, 0.5]]))
 
 
 def test_nonlatent_draw_primitive_is_delta_zero():
@@ -202,8 +202,8 @@ def test_nonlatent_draw_primitive_is_delta_zero():
         days=3,
     )
     assert len(operators) == 2
-    np.testing.assert_array_equal(operators[0].value, np.array([0.2]))
-    np.testing.assert_array_equal(operators[1].value, np.array([0.5]))
+    np.testing.assert_array_equal(operators[0].value, np.array([[0.2]]))
+    np.testing.assert_array_equal(operators[1].value, np.array([[0.5]]))
 
 
 def test_operators_for_path_preserves_supplied_path_order():

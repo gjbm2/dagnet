@@ -1,0 +1,245 @@
+"""Primitive-to-operator constructors for the span readout candidate.
+
+This layer turns one already-resolved primitive into one day-to-day
+``SpanOperator``.  It is deliberately role-neutral: carrier vs subject is
+decided by which primitives the caller supplies to the span, not by this file.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Sequence
+
+import numpy as np
+
+from span_operator_supply_candidate import (
+    delay_operator,
+    evidence_operator_from_cumulative_rate,
+    evidence_operator_from_nk_by_age,
+    source_day_specific_evidence_operator,
+)
+from span_readout_candidate import SpanOperator
+
+
+@dataclass(frozen=True)
+class PrimitiveModelSurface:
+    """Model surface for one primitive edge."""
+
+    edge_id: str
+    p: float
+    conditional_cdf: Sequence[float]
+
+
+@dataclass(frozen=True)
+class PrimitiveEvidenceSurface:
+    """Age-indexed evidence surface for one primitive edge."""
+
+    edge_id: str
+    n_by_age: Sequence[float]
+    k_by_age: Sequence[float]
+
+
+@dataclass(frozen=True)
+class SourceDayPrimitiveEvidenceSurface:
+    """Source-day-specific evidence surface for one primitive edge."""
+
+    edge_id: str
+    source_days: Sequence[int]
+    n_by_source_age: np.ndarray
+    k_by_source_age: np.ndarray
+
+
+@dataclass(frozen=True)
+class PrimitiveDrawSurface:
+    """Draw-indexed model surface for one primitive edge."""
+
+    edge_id: str
+    p_draws: np.ndarray
+    conditional_cdf_draws: np.ndarray
+
+
+def model_primitive_operator(
+    primitive: PrimitiveModelSurface,
+    *,
+    days: int,
+) -> SpanOperator:
+    """Compile a primitive model p and timing CDF into one operator."""
+
+    cdf = np.asarray(primitive.conditional_cdf, dtype=float)
+    increments = float(primitive.p) * np.diff(cdf, prepend=0.0)
+    support = np.ones_like(increments, dtype=float)
+    return delay_operator(
+        primitive.edge_id,
+        increments,
+        support_increments=support,
+        days=days,
+        family="primitive_model",
+    )
+
+
+def nonlatent_model_primitive_operator(
+    edge_id: str,
+    *,
+    p: float,
+    days: int,
+) -> SpanOperator:
+    """Compile a non-latent primitive as a delta(0) operator."""
+
+    return delay_operator(
+        edge_id,
+        (float(p),),
+        support_increments=(1.0,),
+        days=days,
+        family="primitive_model_delta0",
+    )
+
+
+def deterministic_model_primitive_operator(
+    edge_id: str,
+    *,
+    p: float,
+    shift_days: int,
+    days: int,
+) -> SpanOperator:
+    """Compile a deterministic primitive as a delta(k) operator."""
+
+    increments = np.zeros(int(shift_days) + 1, dtype=float)
+    increments[int(shift_days)] = float(p)
+    support = np.zeros_like(increments)
+    support[int(shift_days)] = 1.0
+    return delay_operator(
+        edge_id,
+        increments,
+        support_increments=support,
+        days=days,
+        family="primitive_model_deterministic",
+    )
+
+
+def evidence_primitive_operator(
+    primitive: PrimitiveEvidenceSurface,
+    *,
+    days: int,
+) -> SpanOperator:
+    """Compile age-indexed cumulative n/k evidence into one operator."""
+
+    return evidence_operator_from_nk_by_age(
+        primitive.edge_id,
+        n_by_age=primitive.n_by_age,
+        k_by_age=primitive.k_by_age,
+        days=days,
+        family="primitive_evidence",
+    )
+
+
+def source_day_evidence_primitive_operator(
+    primitive: SourceDayPrimitiveEvidenceSurface,
+    *,
+    days: int,
+) -> SpanOperator:
+    """Compile source-day-specific cumulative n/k evidence into one operator."""
+
+    return source_day_specific_evidence_operator(
+        primitive.edge_id,
+        n_by_source_age=primitive.n_by_source_age,
+        k_by_source_age=primitive.k_by_source_age,
+        source_days=primitive.source_days,
+        days=days,
+        family="primitive_evidence_source_day_specific",
+    )
+
+
+def cumulative_rate_primitive_operator(
+    edge_id: str,
+    *,
+    cumulative_rate_by_age: Sequence[float],
+    support_by_age: Sequence[float],
+    days: int,
+) -> SpanOperator:
+    """Compile an already-computed cumulative local rate into one operator."""
+
+    return evidence_operator_from_cumulative_rate(
+        edge_id,
+        cumulative_rate_by_age=cumulative_rate_by_age,
+        support_by_age=support_by_age,
+        days=days,
+        family="primitive_evidence_rate",
+    )
+
+
+def draw_model_primitive_operators(
+    primitive: PrimitiveDrawSurface,
+    *,
+    days: int,
+) -> tuple[SpanOperator, ...]:
+    """Compile each primitive draw into its own operator.
+
+    The pure readout core is currently single-family.  Draw support is therefore
+    represented as a tuple of ordinary operators, one per draw.  A batched core
+    can later stack these operators without changing the primitive algebra.
+    """
+
+    cdf = np.asarray(primitive.conditional_cdf_draws, dtype=float)
+    pmf = np.diff(cdf, axis=1, prepend=0.0)
+    increments_by_draw = np.asarray(primitive.p_draws, dtype=float)[:, None] * pmf
+    support_by_draw = np.ones_like(increments_by_draw, dtype=float)
+    return tuple(
+        delay_operator(
+            f"{primitive.edge_id}::draw:{idx}",
+            increments,
+            support_increments=support,
+            days=days,
+            family="primitive_model_draw",
+        )
+        for idx, (increments, support) in enumerate(zip(increments_by_draw, support_by_draw))
+    )
+
+
+def nonlatent_draw_model_primitive_operators(
+    edge_id: str,
+    *,
+    p_draws: np.ndarray,
+    days: int,
+) -> tuple[SpanOperator, ...]:
+    """Compile non-latent primitive draws as delta(0) operators."""
+
+    return tuple(
+        delay_operator(
+            f"{edge_id}::draw:{idx}",
+            (float(p),),
+            support_increments=(1.0,),
+            days=days,
+            family="primitive_model_draw_delta0",
+        )
+        for idx, p in enumerate(np.asarray(p_draws, dtype=float))
+    )
+
+
+def deterministic_draw_model_primitive_operators(
+    edge_id: str,
+    *,
+    p_draws: np.ndarray,
+    shift_days: int,
+    days: int,
+) -> tuple[SpanOperator, ...]:
+    """Compile deterministic primitive draws as delta(k) operators."""
+
+    return tuple(
+        deterministic_model_primitive_operator(
+            f"{edge_id}::draw:{idx}",
+            p=float(p),
+            shift_days=int(shift_days),
+            days=days,
+        )
+        for idx, p in enumerate(np.asarray(p_draws, dtype=float))
+    )
+
+
+def operators_for_path(
+    edge_ids: Sequence[str],
+    primitive_operator_by_edge_id: dict[str, SpanOperator],
+) -> tuple[SpanOperator, ...]:
+    """Return operators in the caller-supplied path order."""
+
+    return tuple(primitive_operator_by_edge_id[edge_id] for edge_id in edge_ids)
+

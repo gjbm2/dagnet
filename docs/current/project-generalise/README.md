@@ -64,6 +64,16 @@ project-generalise/
 ├── README.md                                               (this file)
 ├── cf-defensive-coding-audit.md                            (12-May-26 audit: 21 findings + 5 forks)
 ├── cohort_forecast_v3.generalisation-attempt.py            (the failed rewrite, 6377 lines)
+├── generalised-span-readout-candidate-plan.md              (13-May-26 next-attempt plan: isolated span readout candidate first)
+├── span_readout_candidate.py                               (isolated role-neutral span evaluator candidate)
+├── test_span_readout_candidate.py                          (blind algebraic tests for the candidate)
+├── span_operator_supply_candidate.py                       (minimal operator constructors feeding the pure span core)
+├── test_span_operator_supply_candidate.py                  (logical tests for operator construction)
+├── primitive_operator_supply_candidate.py                  (primitive-shaped p/CDF/evidence -> span operator constructors)
+├── test_primitive_operator_supply_candidate.py             (logical tests for primitive operator construction)
+├── test_model_span_oracles_candidate.py                    (independent model-curve convolution oracle tests)
+├── runtime_model_span_adapter_candidate.py                 (draft current-runtime model-shape -> candidate span adapter)
+├── test_runtime_model_span_adapter_candidate.py            (logical tests for the draft runtime model adapter)
 │
 ├── multi-hop-window-evidence-rate-composition-design.md    (design)
 ├── multi-hop-window-evidence-rate-composition-implementation-plan.md
@@ -107,10 +117,18 @@ historical. Resolve them under this folder:
 
 ## Picking this up later
 
-1. Re-read the design + implementation plan + y-deficit investigation in
-   order.
-2. Diff `cohort_forecast_v3.generalisation-attempt.py` against the current
+1. Read [generalised-span-readout-candidate-plan.md](generalised-span-readout-candidate-plan.md)
+   first. Its progress section names the current candidate layers and the
+   remaining production adapter work; its "Current Technical State" and
+   "Next Steps" sections are the hand-off point.
+2. Run the isolated candidate harness before editing production code:
+   `python -m unittest discover -s docs/current/project-generalise -p 'test_*candidate.py' -v`.
+3. Start production work with a model-only shadow harness. Do not start with
+   evidence rows; model curves are the proven surface.
+4. Re-read the original design + implementation plan + y-deficit investigation
+   for historical context and failure signatures.
+5. Diff `cohort_forecast_v3.generalisation-attempt.py` against the current
    `graph-editor/lib/runner/cohort_forecast_v3.py` (the photocopy state) to
    recover the intended generalisation shape.
-3. The catastrophic regression was around `cohort()` `y` subject handling —
+6. The catastrophic regression was around `cohort()` `y` subject handling —
    re-tests the y-deficit fixtures first before extending scope.

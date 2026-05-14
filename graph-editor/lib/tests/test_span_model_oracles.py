@@ -14,16 +14,16 @@ from runner.span_readout import evaluate_span_readout
 
 
 def run_model_span(operators, *, root_count=1.0, max_tau=8):
-    kernel_extent = sum(op.value.shape[0] for op in operators)
+    kernel_extent = sum(op.value.shape[1] for op in operators)
     days = max(max_tau + 1, kernel_extent + 1)
     return evaluate_span_readout(
         cohort_ids=("C0",),
-        root_days=(0,),
-        root_counts=(root_count,),
-        root_supports=(1.0,),
+        root_days=np.asarray([0], dtype=int),
+        root_counts=np.asarray([root_count], dtype=float),
+        root_supports=np.asarray([1.0], dtype=float),
         operators=tuple(operators),
-        days=days,
-        max_tau=max_tau,
+        days=int(days),
+        max_tau=int(max_tau),
     )
 
 

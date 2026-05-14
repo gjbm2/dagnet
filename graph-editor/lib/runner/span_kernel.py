@@ -136,12 +136,11 @@ def _build_span_topology(
 ) -> Optional[SpanTopology]:
     """Build the reusable DAG topology for x→y.
 
-    Returns None if no path exists from x to y.
+    Returns None if x != y and no path exists from x to y. When x == y the
+    natural empty topology is returned (single node, no edges) — the
+    identity element of the operator-chain composition monoid.
     """
     from collections import deque
-
-    if x_node_id == y_node_id:
-        return None
 
     edges = graph.get('edges', [])
     nodes = graph.get('nodes', [])
@@ -163,9 +162,6 @@ def _build_span_topology(
     # docs/current/snapshot-fetch-envelope-design.md (Atom-2-adjacent fix).
     x_canon = uuid_to_id.get(x_node_id, x_node_id)
     y_canon = uuid_to_id.get(y_node_id, y_node_id)
-
-    if x_canon == y_canon:
-        return None
 
     adjacency: Dict[str, List[Tuple[str, Dict]]] = {}
     for e in edges:

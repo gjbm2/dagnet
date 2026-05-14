@@ -424,23 +424,33 @@ def test_moments_only_primitive_drops_span_to_moments_only():
 # ─── Hard contract violations ──────────────────────────────────────────
 
 
-def test_x_equals_end_raises():
+def test_x_equals_end_produces_zero_edge_identity_composition():
+    """x == end is the identity element of the operator-chain monoid: a
+    zero-edge walk produces an empty composition without raising. No
+    primitives, no draws — the composer naturally degenerates.
+    """
     graph = _make_graph([('e-x-y', 'X', 'Y')])
-    with pytest.raises(CompositionError, match='x != end'):
-        compose_primitive_span(
-            graph=graph, x_node_id='X', end_node_id='X',
-            registry=_build_registry_with_primitives([]),
-            edge_to_primitive_lookup=lambda *a, **kw: None,
-        )
+    result = compose_primitive_span(
+        graph=graph, x_node_id='X', end_node_id='X',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=lambda *a, **kw: None,
+    )
+    assert result.primitive_count == 0
+    assert result.draw_count == 0
+    assert result.x_node_id == 'X'
+    assert result.end_node_id == 'X'
 
 
-def test_no_path_raises():
-    """Disconnected graph: X has no path to Z."""
+def test_no_path_fails_hard():
+    """Disconnected graph: x != end with no path between them. Engine
+    walks blindly; downstream access on the (None) topology fails
+    loudly. Per-principle hard failure — not a specific error contract.
+    """
     graph = _make_graph([
         ('e-x-y', 'X', 'Y'),
         ('e-a-z', 'A', 'Z'),
     ])
-    with pytest.raises(CompositionError, match='no path'):
+    with pytest.raises(Exception):
         compose_primitive_span(
             graph=graph, x_node_id='X', end_node_id='Z',
             registry=_build_registry_with_primitives([]),

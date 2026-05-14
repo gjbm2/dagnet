@@ -1801,12 +1801,18 @@ def _composed_pair_request_cdf_draws(
     *,
     horizon: int,
 ) -> Optional[np.ndarray]:
-    """Composed request-rooted CDF draws on the (S, horizon+1) grid for a
-    given (subject, carrier) composition pair.
+    """DEAD CODE — superseded by ``_strict_span_request_cdf_draws``.
 
+    Retained intentionally until the Phase 9 final-cleanup deletion pass
+    so the diff at deletion time is one cohesive cutover, not a cliff edit.
+    Has no callers as of the Phase 4 cutover. Do NOT call this helper.
+    See docs/current/project-generalise/model-first-strict-span-cutover-plan-13-May-26.md.
+
+    (Original docstring: composed request-rooted CDF draws on the
+    (S, horizon+1) grid for a given (subject, carrier) composition pair.
     For carrier=identity (None) the result is the subject CDF directly;
     for active cohort the carrier and subject CDFs are convolved per
-    draw. Returns ``None`` when either object is moments-only.
+    draw. Returns None when either object is moments-only.)
     """
     if subject is None or not subject.is_draw_coherent:
         return None
@@ -1856,6 +1862,53 @@ def _composed_pair_request_cdf_draws(
     return np.clip(convolved, 0.0, 1.0)
 
 
+def _build_span_per_draw_chain(
+    span: Optional[ComposedPrimitiveSpan],
+    *,
+    S: int,
+    days: int,
+    edge_id: str,
+    reach_draws: np.ndarray,
+) -> tuple:
+    """Per-draw operator chain for a composed span — works for subject or
+    carrier with no role-flag.
+
+    Mode degenerates by data: a zero-edge composition (x == end on the
+    walk, e.g. identity carrier in window() / cohort(A=X)) yields an empty
+    operator chain per draw, and algebraic composition with an empty prefix
+    is the identity element of the operator-chain monoid. An N-edge
+    composition yields one collapsed operator per draw (the composed CDF
+    as a single delay kernel, scaled by ``reach_draws``).
+
+    ``reach_draws`` is the per-draw multiplicative factor applied to the
+    collapsed kernel: ``ones(S)`` when the composed span already includes
+    the primitive probability (e.g. conditioned spans), ``span.span_p_draws``
+    when the caller wants the unconditioned span reach factored in (e.g.
+    model rate draws).
+
+    Returns ``None`` when ``span`` is absent (early-skip propagation) or
+    refuses draw-coherence — that signal is distinct from identity.
+    """
+    if span is None:
+        return None
+    cdf = span.cdf_draws
+    if cdf is None or cdf.shape[0] == 0:
+        return tuple(() for _ in range(S))
+    if not span.is_draw_coherent or cdf.shape[0] != S:
+        return None
+    cdf_padded = _pad_draw_cdfs(cdf, days)
+    ops = draw_model_primitive_operators(
+        PrimitiveDrawSurface(
+            edge_id=edge_id,
+            p_draws=reach_draws,
+            conditional_cdf_draws=cdf_padded,
+            timing_family="latent",
+        ),
+        days=days,
+    )
+    return tuple((op,) for op in ops)
+
+
 def _strict_span_model_rate_draws(
     subject: Optional[ComposedPrimitiveSpan],
     carrier: Optional[ComposedPrimitiveSpan],
@@ -1866,40 +1919,29 @@ def _strict_span_model_rate_draws(
 
     ``predictive`` F-mode and opt-in ``epistemic`` model-curve overlays differ
     only by the unconditioned primitive surfaces supplied by the runtime. Both
-    read through this same algebraic span path. E+F evidence rows stay on the
-    selected-Cohort reducer because they project a different object.
+    read through this same algebraic span path. Identity carrier flows through
+    the same code: its per-draw chain is empty, composition with an empty
+    prefix is the identity, denominator collapses to the root mass cumulative
+    (1.0 for all τ), and rate = numerator / 1.0 = numerator. E+F evidence
+    rows stay on the selected-Cohort reducer because they project a different
+    object.
     """
     if subject is None or subject.span_p_draws is None or subject.cdf_draws is None:
         return None
     horizon_len = int(horizon) + 1
-    subject_cdf = _pad_draw_cdfs(subject.cdf_draws, horizon_len)
-    subject_ops = draw_model_primitive_operators(
-        PrimitiveDrawSurface(
-            edge_id="strict-span-subject",
-            p_draws=np.asarray(subject.span_p_draws, dtype=float),
-            conditional_cdf_draws=subject_cdf,
-            timing_family="latent",
-        ),
-        days=horizon_len,
+    S = int(np.asarray(subject.cdf_draws).shape[0])
+    subject_chain = _build_span_per_draw_chain(
+        subject, S=S, days=horizon_len,
+        edge_id="strict-span-subject",
+        reach_draws=np.asarray(subject.span_p_draws, dtype=float),
     )
-
-    carrier_ops = None
-    if carrier is not None:
-        if (
-            not carrier.is_draw_coherent
-            or carrier.cdf_draws is None
-            or carrier.cdf_draws.shape[0] != subject_cdf.shape[0]
-        ):
-            return None
-        carrier_ops = draw_model_primitive_operators(
-            PrimitiveDrawSurface(
-                edge_id="strict-span-carrier",
-                p_draws=np.ones(carrier.cdf_draws.shape[0], dtype=float),
-                conditional_cdf_draws=_pad_draw_cdfs(carrier.cdf_draws, horizon_len),
-                timing_family="latent",
-            ),
-            days=horizon_len,
-        )
+    carrier_chain = _build_span_per_draw_chain(
+        carrier, S=S, days=horizon_len,
+        edge_id="strict-span-carrier",
+        reach_draws=np.ones(S, dtype=float),
+    )
+    if subject_chain is None or carrier_chain is None:
+        return None
 
     root_mass = RuntimeRootMass(
         cohort_ids=("model-curve",),
@@ -1907,28 +1949,21 @@ def _strict_span_model_rate_draws(
         root_counts=np.asarray([1.0], dtype=float),
         root_support=np.asarray([1.0], dtype=float),
     )
-    rate_draws = np.zeros((len(subject_ops), horizon_len), dtype=float)
-    for draw_index, subject_op in enumerate(subject_ops):
-        numerator_ops = (
-            (carrier_ops[draw_index], subject_op)
-            if carrier_ops is not None else (subject_op,)
-        )
+    rate_draws = np.zeros((S, horizon_len), dtype=float)
+    for s in range(S):
         numerator = evaluate_with_operators(
             root_mass=root_mass,
-            operators=numerator_ops,
+            operators=carrier_chain[s] + subject_chain[s],
             days=horizon_len,
             max_tau=horizon,
         ).value_by_cohort_tau[0]
-        if carrier_ops is None:
-            rate_draws[draw_index, :] = numerator
-            continue
         denominator = evaluate_with_operators(
             root_mass=root_mass,
-            operators=(carrier_ops[draw_index],),
+            operators=carrier_chain[s],
             days=horizon_len,
             max_tau=horizon,
         ).value_by_cohort_tau[0]
-        rate_draws[draw_index, :] = np.where(
+        rate_draws[s, :] = np.where(
             denominator > 1e-9,
             numerator / np.maximum(denominator, 1e-9),
             0.0,
@@ -1960,45 +1995,30 @@ def _strict_span_request_cdf_draws(
 
     Builds one operator chain per draw: carrier (when active) then subject,
     each as a latent operator with p=1 since the conditioned spans already
-    incorporate primitive probability. Returns ``(S, horizon+1)`` cumulative
-    request-rooted CDF, or ``None`` when either span is moments-only or the
-    draw shapes disagree.
+    incorporate primitive probability. Identity carrier (zero-edge composed
+    carrier) yields an empty per-draw chain — composition with an empty
+    prefix is the algebraic identity, so the result for identity is the
+    subject CDF unchanged, with no `if carrier is None` branch in the body.
+    Returns ``(S, horizon+1)`` cumulative request-rooted CDF, or ``None``
+    when either span is moments-only or the draw shapes disagree.
     """
     if subject is None or not subject.is_draw_coherent or subject.cdf_draws is None:
         return None
     horizon_len = int(horizon) + 1
-    subject_cdf = _pad_draw_cdfs(subject.cdf_draws, horizon_len)
-
-    carrier_cdf: Optional[np.ndarray] = None
-    if carrier is not None:
-        if not carrier.is_draw_coherent or carrier.cdf_draws is None:
-            return None
-        if carrier.cdf_draws.shape[0] != subject_cdf.shape[0]:
-            return None
-        carrier_cdf = _pad_draw_cdfs(carrier.cdf_draws, horizon_len)
-
-    n_draws = subject_cdf.shape[0]
-    unit_p = np.ones(n_draws, dtype=float)
-    subject_ops = draw_model_primitive_operators(
-        PrimitiveDrawSurface(
-            edge_id="strict-span-request-subject",
-            p_draws=unit_p,
-            conditional_cdf_draws=subject_cdf,
-            timing_family="latent",
-        ),
-        days=horizon_len,
+    S = int(np.asarray(subject.cdf_draws).shape[0])
+    unit_p = np.ones(S, dtype=float)
+    subject_chain = _build_span_per_draw_chain(
+        subject, S=S, days=horizon_len,
+        edge_id="strict-span-request-subject",
+        reach_draws=unit_p,
     )
-    carrier_ops = None
-    if carrier_cdf is not None:
-        carrier_ops = draw_model_primitive_operators(
-            PrimitiveDrawSurface(
-                edge_id="strict-span-request-carrier",
-                p_draws=unit_p,
-                conditional_cdf_draws=carrier_cdf,
-                timing_family="latent",
-            ),
-            days=horizon_len,
-        )
+    carrier_chain = _build_span_per_draw_chain(
+        carrier, S=S, days=horizon_len,
+        edge_id="strict-span-request-carrier",
+        reach_draws=unit_p,
+    )
+    if subject_chain is None or carrier_chain is None:
+        return None
 
     root_mass = RuntimeRootMass(
         cohort_ids=("request",),
@@ -2006,15 +2026,11 @@ def _strict_span_request_cdf_draws(
         root_counts=np.asarray([1.0], dtype=float),
         root_support=np.asarray([1.0], dtype=float),
     )
-    cdf_draws = np.zeros((n_draws, horizon_len), dtype=float)
-    for s, subject_op in enumerate(subject_ops):
-        ops = (
-            (carrier_ops[s], subject_op)
-            if carrier_ops is not None else (subject_op,)
-        )
+    cdf_draws = np.zeros((S, horizon_len), dtype=float)
+    for s in range(S):
         surface = evaluate_with_operators(
             root_mass=root_mass,
-            operators=ops,
+            operators=carrier_chain[s] + subject_chain[s],
             days=horizon_len,
             max_tau=horizon,
         )

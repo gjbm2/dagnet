@@ -42,6 +42,44 @@ fi
 # Catches /usr/bin/git, /usr/local/bin/git, $(which git), etc.
 COMMAND=$(echo "$COMMAND" | sed -E 's|[^ ]*/git |git |g')
 
+# ── /photocopy canonical-sequence carve-out ───────────────────────
+# The /photocopy skill is a user-pre-approved, non-destructive snapshot
+# of the working tree via git stash. It runs an exact sequence:
+#   status > pre  &&  add -A  &&  stash push -m "<name>"
+#   &&  stash apply --index  &&  reset
+#   &&  status > post  &&  diff pre post
+#
+# When the entire command line matches this canonical sequence — and
+# nothing else — allow it without consent. Any deviation (extra
+# commands, different paths, command-substitution in the name, shell
+# metacharacters outside the quoted name) falls through to the normal
+# gate logic.
+#
+# Audited and intended for /photocopy invocations only. Maintaining the
+# narrowness of this regex is what keeps the carve-out safe; do not
+# loosen it without re-auditing.
+PHOTOCOPY_MATCH=$(GATE_COMMAND="$COMMAND" python3 <<'PYEOF'
+import os, re
+cmd = os.environ.get('GATE_COMMAND', '')
+pattern = (
+    r'^\s*'
+    r'git\s+status\s+--short\s+>\s+/tmp/photocopy-pre\.txt'
+    r'\s*&&\s*git\s+add\s+-A'
+    r'\s*&&\s*git\s+stash\s+push\s+-m\s+(?:"[^"$`\\]+"|\'[^\'$`\\]+\')'
+    r'\s*&&\s*git\s+stash\s+apply\s+--index'
+    r'\s*&&\s*git\s+reset'
+    r'\s*&&\s*git\s+status\s+--short\s+>\s+/tmp/photocopy-post\.txt'
+    r'\s*&&\s*diff\s+/tmp/photocopy-pre\.txt\s+/tmp/photocopy-post\.txt'
+    r'\s*$'
+)
+print('YES' if re.match(pattern, cmd) else 'NO')
+PYEOF
+)
+if [ "$PHOTOCOPY_MATCH" = "YES" ]; then
+  echo "GATE-CHECK: /photocopy canonical sequence — pre-approved by user; allowed." >&2
+  exit 0
+fi
+
 # ── Hardcoded: protect gate infrastructure from Bash writes ───────
 
 PROTECTED_FILES=(

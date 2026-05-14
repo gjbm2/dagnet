@@ -443,16 +443,20 @@ class ResolvedRuntimeReadoutResult:
     """Role-labelled primitive runtime result.
 
     This is the closure surface over the old staged surfaces: one request
-    owns one arrival map, one primitive registry, optional carrier
-    primitives, and subject primitives for the full X->end span. Window
-    and cohort(A=X) represent the carrier as identity data.
+    owns one arrival map, one primitive registry, a composed carrier span
+    (A→X — zero-edge for window() and cohort(A=X), the algebraic identity
+    of the operator-chain monoid), and a composed subject span (X→end).
+
+    ``composed_carrier`` / ``composed_subject`` are Optional only because
+    early-skip results carry ``None`` — they do NOT signal identity carrier.
+    A successful resolution always has both spans populated; identity
+    carrier is represented as ``composed_carrier`` with ``primitive_count=0``.
     """
 
     eligible: bool
     skip_reason: Optional[str]
     composed_subject: Optional[ComposedPrimitiveSpan]
     composed_carrier: Optional[ComposedPrimitiveSpan]
-    carrier_is_identity: bool
     p_mean_primitive: Optional[float]
     p_sd_primitive: Optional[float]
     p_sd_epistemic_primitive: Optional[float]
@@ -467,8 +471,10 @@ class ResolvedRuntimeReadoutResult:
     # Unconditioned overlay compositions over the same A→end topology,
     # keyed by dispersion basis (e.g. 'predictive' powers F-mode bands;
     # 'epistemic' powers the optional model_curve_* row fields). Each
-    # entry's ``carrier`` is ``None`` for identity-carrier cases (window
-    # / cohort(A=X)). Bases not requested by the caller are absent.
+    # entry's ``carrier`` is a zero-edge composition for identity-carrier
+    # cases (window / cohort(A=X)) — the algebraic identity of the
+    # operator-chain monoid, not ``None``. Bases not requested by the
+    # caller are absent.
     unconditioned_overlays: Mapping[
         str, 'ComposedUnconditionedOverlay'
     ] = field(default_factory=dict)
@@ -479,7 +485,7 @@ class ResolvedRuntimeReadoutResult:
             return False
         if self.composed_subject is None:
             return False
-        if not self.carrier_is_identity and self.composed_carrier is None:
+        if self.composed_carrier is None:
             return False
         if not self.composed_subject.is_draw_coherent:
             return False
@@ -494,10 +500,12 @@ class ComposedUnconditionedOverlay:
 
     Mirrors the conditioned-side ``composed_subject``/``composed_carrier``
     pair so the row projector's existing carrier⊛subject convolution
-    applies to the overlay without a parallel code path.
+    applies to the overlay without a parallel code path. ``carrier`` is
+    always composed; identity carrier is a zero-edge span (the algebraic
+    identity of the operator-chain monoid), not ``None``.
     """
     subject: ComposedPrimitiveSpan
-    carrier: Optional[ComposedPrimitiveSpan]
+    carrier: ComposedPrimitiveSpan
 
 
 def _build_resolved_runtime_prefix_arrival_identity(
@@ -560,14 +568,12 @@ def compute_resolved_runtime_readout(
     compose_options = compose_options or ComposeOptions()
     carrier_resolutions = list(carrier_edge_resolutions or ())
     subject_resolutions = list(subject_edge_resolutions or ())
-    carrier_is_identity = not carrier_resolutions
     diag: Dict[str, Any] = {
         "eligible": True,
         "skip_reason": None,
         "population_root": population_root_node_id,
         "x_node_id": x_node_id,
         "end_node_id": end_node_id,
-        "carrier_mode": "identity" if carrier_is_identity else "composed",
         "request_candidates_count": (
             len(request_evidence_candidates)
             if request_evidence_candidates is not None
@@ -583,12 +589,8 @@ def compute_resolved_runtime_readout(
     ) -> Mapping[str, Any]:
         if note:
             diag["note"] = note
-        carrier_span = (
-            {"role": "identity", "x_node_id": x_node_id}
-            if carrier_is_identity else diag.get("composed_carrier")
-        )
         return {
-            "carrier_span": carrier_span,
+            "carrier_span": diag.get("composed_carrier"),
             "subject_span": diag.get("composed_subject"),
             "primitives": {
                 "carrier": tuple(diag.get("carrier_primitives", ())),
@@ -612,7 +614,6 @@ def compute_resolved_runtime_readout(
             skip_reason=reason,
             composed_subject=None,
             composed_carrier=None,
-            carrier_is_identity=carrier_is_identity,
             p_mean_primitive=None,
             p_sd_primitive=None,
             p_sd_epistemic_primitive=None,
@@ -865,38 +866,37 @@ def compute_resolved_runtime_readout(
             return carrier_edge_id_to_primitive[edge_id]
         return carrier_edge_to_primitive.get((from_id, to_id))
 
-    composed_carrier: Optional[ComposedPrimitiveSpan] = None
-    if carrier_resolutions:
-        try:
-            composed_carrier = compose_primitive_span(
-                graph=graph,
-                x_node_id=str(population_root_node_id),
-                end_node_id=str(x_node_id),
-                registry=registry,
-                edge_to_primitive_lookup=_carrier_lookup,
-                options=compose_options,
-            )
-        except CompositionError as exc:
-            diag["carrier_composition_error"] = str(exc)
-            return _early_skip(
-                "carrier_composition_error",
-                f"compose_primitive_span(A->X carrier) raised: {exc}",
-            )
-        diag["composed_carrier"] = {
-            "anchor_node_id": str(population_root_node_id),
-            "x_node_id": str(x_node_id),
-            "role": "carrier_to_x",
-            "primitive_count": composed_carrier.primitive_count,
-            "draw_count": composed_carrier.draw_count,
-            "is_draw_coherent": composed_carrier.is_draw_coherent,
-            "reach": composed_carrier.span_p_mean,
-            "span_p_sd": composed_carrier.span_p_sd,
-            "max_tau": composed_carrier.max_tau,
-            "binding_policy": composed_carrier.provenance.get("binding_policy"),
-            "composition_mode": composed_carrier.provenance.get("composition_mode"),
-        }
-    else:
-        diag["composed_carrier"] = {"role": "identity", "x_node_id": str(x_node_id)}
+    # Carrier is composed unconditionally. When population_root == x, the
+    # walk has zero edges and the composer naturally produces a zero-edge
+    # identity composition — no perimeter branch on "identity vs active".
+    try:
+        composed_carrier = compose_primitive_span(
+            graph=graph,
+            x_node_id=str(population_root_node_id),
+            end_node_id=str(x_node_id),
+            registry=registry,
+            edge_to_primitive_lookup=_carrier_lookup,
+            options=compose_options,
+        )
+    except CompositionError as exc:
+        diag["carrier_composition_error"] = str(exc)
+        return _early_skip(
+            "carrier_composition_error",
+            f"compose_primitive_span(A->X carrier) raised: {exc}",
+        )
+    diag["composed_carrier"] = {
+        "anchor_node_id": str(population_root_node_id),
+        "x_node_id": str(x_node_id),
+        "role": "carrier_to_x",
+        "primitive_count": composed_carrier.primitive_count,
+        "draw_count": composed_carrier.draw_count,
+        "is_draw_coherent": composed_carrier.is_draw_coherent,
+        "reach": composed_carrier.span_p_mean,
+        "span_p_sd": composed_carrier.span_p_sd,
+        "max_tau": composed_carrier.max_tau,
+        "binding_policy": composed_carrier.provenance.get("binding_policy"),
+        "composition_mode": composed_carrier.provenance.get("composition_mode"),
+    }
     carrier_span_role = dict(diag["composed_carrier"])
 
     try:
@@ -1026,17 +1026,14 @@ def compute_resolved_runtime_readout(
             return _idp.get((from_id, to_id))
 
         try:
-            if carrier_resolutions:
-                overlay_carrier = compose_primitive_span(
-                    graph=graph,
-                    x_node_id=str(population_root_node_id),
-                    end_node_id=str(x_node_id),
-                    registry=registry,
-                    edge_to_primitive_lookup=carrier_overlay_lookup,
-                    options=compose_options,
-                )
-            else:
-                overlay_carrier = None
+            overlay_carrier = compose_primitive_span(
+                graph=graph,
+                x_node_id=str(population_root_node_id),
+                end_node_id=str(x_node_id),
+                registry=registry,
+                edge_to_primitive_lookup=carrier_overlay_lookup,
+                options=compose_options,
+            )
             overlay_subject = compose_primitive_span(
                 graph=graph,
                 x_node_id=str(x_node_id),
@@ -1058,16 +1055,13 @@ def compute_resolved_runtime_readout(
             'subject_is_draw_coherent': overlay_subject.is_draw_coherent,
             'subject_primitive_count': overlay_subject.primitive_count,
             'subject_draw_count': overlay_subject.draw_count,
-            'carrier_present': overlay_carrier is not None,
-            'carrier_span_p_mean': (
-                overlay_carrier.span_p_mean if overlay_carrier is not None else None
-            ),
+            'carrier_primitive_count': overlay_carrier.primitive_count,
+            'carrier_span_p_mean': overlay_carrier.span_p_mean,
         }
 
     substituted = bool(
         composed_subject.is_draw_coherent
         and p_mean_pri is not None
-        and (carrier_is_identity or composed_carrier is not None)
     )
     provenance = _runtime_provenance(
         substituted=substituted,
@@ -1078,7 +1072,6 @@ def compute_resolved_runtime_readout(
         skip_reason=None,
         composed_subject=composed_subject,
         composed_carrier=composed_carrier,
-        carrier_is_identity=carrier_is_identity,
         p_mean_primitive=p_mean_pri,
         p_sd_primitive=p_sd_pri,
         p_sd_epistemic_primitive=p_sd_epi_pri,

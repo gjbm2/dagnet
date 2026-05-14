@@ -13,20 +13,25 @@ from runner.span_readout import SpanOperator, evaluate_span_readout
 
 
 def lag_op(name, lag, fraction, *, days=8, family="evidence"):
-    value = np.zeros((days, days))
-    support = np.zeros((days, days))
-    for source_day in range(days - lag):
-        value[source_day, source_day + lag] = fraction
-        support[source_day, source_day + lag] = 1.0
+    """Shift-invariant single-lag operator in canonical ``(1, lag+1)`` form."""
+    value = np.zeros((1, lag + 1))
+    support = np.zeros((1, lag + 1))
+    value[0, lag] = fraction
+    support[0, lag] = 1.0
     return SpanOperator(name=name, value=value, support=support, family=family)
 
 
 def explicit_op(name, cells, *, days=8, family="evidence"):
-    value = np.zeros((days, days))
-    support = np.zeros((days, days))
+    """Per-source-day operator in canonical ``(days, max_lag+1)`` form."""
+    max_lag = max((d - s for s, d, _, _ in cells), default=0)
+    value = np.zeros((days, max_lag + 1))
+    support = np.zeros((days, max_lag + 1))
     for source_day, destination_day, fraction, coverage in cells:
-        value[source_day, destination_day] = fraction
-        support[source_day, destination_day] = coverage
+        lag = destination_day - source_day
+        if lag < 0 or source_day + lag >= days:
+            continue
+        value[source_day, lag] = fraction
+        support[source_day, lag] = coverage
     return SpanOperator(name=name, value=value, support=support, family=family)
 
 
@@ -40,16 +45,18 @@ def seed(
     operators=(),
     provenance=None,
 ):
-    return dict(
-        cohort_ids=cohort_ids,
-        root_days=root_days,
-        root_counts=masses,
-        root_supports=tuple(float(mass > 0.0) for mass in masses),
-        operators=operators,
-        days=days,
-        max_tau=max_tau,
-        provenance=provenance,
+    kwargs = dict(
+        cohort_ids=tuple(cohort_ids),
+        root_days=np.asarray(root_days, dtype=int),
+        root_counts=np.asarray(masses, dtype=float),
+        root_supports=np.asarray([float(mass > 0.0) for mass in masses], dtype=float),
+        operators=tuple(operators),
+        days=int(days),
+        max_tau=int(max_tau),
     )
+    if provenance is not None:
+        kwargs["provenance"] = provenance
+    return kwargs
 
 
 def test_zero_edge_identity_returns_input_mass_unchanged():
