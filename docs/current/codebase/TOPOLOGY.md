@@ -177,11 +177,11 @@ When debugging, trace seams first.
 
 ## Volume of code (rough orientation)
 
-- **`graph-editor/lib/runner/`** (BE) — 18,481 LOC, the biggest subsystem cluster.
-- **`graph-editor/lib/api_handlers.py`** — 5,275 LOC; the BE dispatch monolith.
-- **`bayes/`** — 36,113 LOC (compiler, worker, regression harness, synth gen, tracker).
-- **`graph-editor/src/services/`** — ~108k LOC across 102 services + 250 tests.
-- **`graph-editor/src/hooks/`** — 20.7k LOC across 93 hooks.
-- **`graph-editor/src/components/`** — 137 components; the heavy hitters: `ConversionEdge` (3k), `GraphCanvas` (2.9k), `GraphEditor` (2.6k), `PropertiesPanel` (4k).
+- **`graph-editor/src/services/`** — 209,670 LOC across 102 services + 250 tests; largest cluster.
+- **`graph-editor/src/components/`** — 98,790 LOC across 137 components; heavy hitters: `ConversionEdge` (3k), `GraphCanvas` (2.9k), `GraphEditor` (2.6k), `PropertiesPanel` (4k).
+- **`bayes/`** — 52,216 LOC (compiler, worker, regression harness, synth gen, tracker).
+- **`graph-editor/lib/runner/`** (BE) — 31,593 LOC; forecast and analysis runtime.
+- **`graph-editor/src/hooks/`** — 21,182 LOC across 93 hooks.
+- **`graph-editor/lib/api_handlers.py`** — 5,127 LOC; the BE dispatch monolith.
 
 Read by **cluster**, not by file. The fetch cluster, forecasting cluster, Bayes tree, snapshot DB, signature cluster, and sync engine each have their own internal logic; the **seams between them are where the bugs live**.

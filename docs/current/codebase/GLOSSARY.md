@@ -56,6 +56,9 @@ When in doubt, this glossary points at the canonical doc; that doc is the source
 - **ESS** — Effective Sample Size. Convergence diagnostic for MCMC.
 - **rhat / R̂** — Gelman-Rubin convergence diagnostic. `<1.01` good.
 - **ELBO** — Evidence Lower Bound. SVI optimisation target.
+- **EWMA** — Exponentially Weighted Moving Average. Recency-biased aggregator used for snapshot smoothing and per-window evidence weighting where applicable.
+- **IPW** — Inverse Probability Weighting. Each observed contribution is scaled by `1 / Pr(observed)` to recover an unbiased estimator of the full-population quantity. Used in the cohort-maturity row reducer to derive `evidence_*_adjusted` from `evidence_*_strict` divided by per-anchor coverage, per Phase 6 §5.6.
+- **MCAR** — Missing Completely At Random. Sparsity is uncorrelated with the underlying quantity being measured (e.g. snapshot-row presence is driven by retrieval timing and capture infrastructure, not by cohort or edge conversion behaviour). Under MCAR, IPW is an unbiased estimator. The variance-blow-up at low coverage is bias-free; epoch B dashing communicates the higher variance, not bias.
 - **completeness** — Fraction of eventual converters observed by a given cohort age. `LogNormalCDF(age − onset, μ, σ)`.
 - **τ_observed / `tau_observed`** — Maximum observed cohort age. Drives epoch boundaries in cohort maturity charts.
 
@@ -99,6 +102,25 @@ The F vs E+F invariant: at τ = `tau_solid_max` both lines should agree (latency
 - **Hold-out engine** — One of three analytic engines (`funnel_engine`, `daily_conversions_derivation`, `cohort_maturity_derivation`) that compute `ΣY / ΣX` with their own evidence intake and projection logic, in parallel with the canonical selected-cohort mass reducer. Pending unification (audit F-1). See [CF_HOLD_OUT_ENGINES.md](CF_HOLD_OUT_ENGINES.md).
 - **Legacy trajectory engine** — `forecast_state.compute_forecast_trajectory`. Pre-substrate cohort-loop projector. Post-73n status: "DO NOT ADD NEW CALLERS". Two surviving callers: `surprise_gauge` and `daily_conversions` row annotation. See [CF_HOLD_OUT_ENGINES.md](CF_HOLD_OUT_ENGINES.md) §"The legacy trajectory engine".
 - **Residual guard** — `primitive_residual_guard.classify_edge_requirement`. Refuses adjacency `1−p` derivation, residual closure, and rejected prepared spans by emitting `UNSUPPORTED_RESIDUAL` primitives rather than silently computing them. See [CF_RESIDUAL_GUARD.md](CF_RESIDUAL_GUARD.md).
+
+## Evidence operator / coverage algebra
+
+Terms from the Phase 6 evidence-operator contract ([phase-6-evidence-operator-contract.md](../project-generalise/phase-6-evidence-operator-contract.md)).
+
+- **Conditioned (model) operator** — Per-edge kernel `p × Δcdf` built from the fitted parametric posterior via `ConditionedTransitionPrimitive` / `condition_primitive`. Defined at every cell (continuous parametric fit). Drives model surfaces (`midpoint`, `fan_*`, `forecast_*`) and — with the row-presence mask — coverage and exposure. Phase 6 §4.1.
+- **Empirical (evidence) operator** — Per-edge kernel `Δk_emp / n_emp` built directly from admitted snapshot rows. Per-draw via arrival-weighted aggregation; forward-filled across absent ages (Δ = 0 at absent cells, structurally). Drives strict evidence cumulatives. Phase 6 §4.9.
+- **Value kernel** — `p × Δcdf` per edge from the conditioned operator. The "mass projection" kernel. Phase 6 §4.8.
+- **Support kernel** — `value_kernel × mask`. Cell-wise zeroed at absent (mask = 0) cells. Phase 6 §4.8.
+- **Exposure kernel** — `unit_density_shape × mask`. Independent of `p`. Distinguishes covered-zero (mask=1, value=0) from absent (mask=0) at terminal-zero cells. Phase 6 §4.8.
+- **Masked kernel** — Generic term for any kernel × row-presence mask. Support and exposure are both masked kernels with different value bases.
+- **Row-presence mask** — Per-cell `(edge, source_day, age)` indicator. `1` iff a snapshot row exists at that cell; `0` iff absent. Pure row-presence, independent of `k` / `n` values. Plumbed from `bind_primitive_evidence` through `condition_primitive` into the composer.
+- **Coverage** — `cumulative_support / cumulative_value` per `(anchor, τ)`. Mass-weighted fraction of the wavefront passing through fully-observed paths. Computed exclusively against the conditioned operator's value stream (the empirical kernel collapses the ratio to 1). Phase 6 §4.8.
+- **Per-terminal coverage** — Coverage read at distinct chain nodes. `coverage_x_A[τ]` at X (carrier terminal) drives `evidence_x_coverage` and the `evidence_x_adjusted` IPW factor. `coverage_y_A[τ]` at Z (chain terminal) drives `evidence_y_coverage` and the `evidence_y_adjusted` IPW factor. In window or `A=X` mode the carrier is identity and `coverage_x = 1` trivially.
+- **Exposure (signal)** — `cumulative_exposure` per `(anchor, τ)`. `> 0` iff at least one wavefront path reached `(anchor, τ)` through observed cells. Drives admissibility filtering at the reducer.
+- **Frontier (τ per anchor)** — `max τ where exposure_y_A[τ] > 0`. The last τ at which any wavefront path to the chain terminal is fully observed for that anchor.
+- **Admissibility** — Per-`(anchor, τ)` `exposure_y_A[τ] > 0`. Cohorts failing the admissibility check at τ contribute neither to strict nor adjusted row-level sums at that τ.
+- **Strict evidence** — `Σ_admissible evidence_y_strict_A[τ]` per τ, no scaling. The E-mode display fields `evidence_x`, `evidence_y`, `rate`. Falls naturally in epoch B with sparsity. Phase 6 §5.6.
+- **Adjusted evidence** — `Σ_admissible evidence_y_strict_A[τ] / coverage_y_A[τ]` per τ, IPW under MCAR. The E+F-mode display fields `evidence_x_adjusted`, `evidence_y_adjusted`, `rate_adjusted`. Supersedes legacy `rate_blended`. Phase 6 §5.6.
 
 ## Cohort/Window roles
 

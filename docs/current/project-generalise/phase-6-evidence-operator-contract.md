@@ -22,7 +22,7 @@ This doc fixes the algebra in prose so the Phase 7 implementer has a fixed targe
 - §3 — the four load-bearing rules (τ-axis, arrival-map / propagation consistency, unified push-forward, cumulative-vs-incremental boundary).
 - §4 — the evidence-side surfaces (per-edge rate kernel, seed mass, the unified propagation formula, the cohort cancellation result, window non-cancellation, the support / freshness / emission contract in §4.7, and the masked-kernel coverage algebra in §4.8 — the same convolution as mass propagation, with an observation mask).
 - §5 — how this maps to the new engine core (`model_span_spine.py`), including the term-by-term §4-symbol mapping in §5.1.5, the thin Phase 7 wrapper scope in §5.2, the prefix-object index reads in §5.3, and §5.4's pointer at the existing display contract pinned by [`cohort-maturity-evidence-coverage-design.md`](../cohort-maturity-evidence-coverage-design.md). The load-bearing section. Read §5.1.5 first if you have an intuition gap or are picking up Phase 7 implementation cold.
-- §6 — closure criteria and test families.
+- §6 — closure criteria and test families, including the §6.5 crosswalk from the 14 prior failures to the invariants and tests that protect against them.
 - §7 — out of scope.
 
 ---
@@ -319,7 +319,9 @@ with `𝟙_fresh^UV(s, age) = 1` iff the (UV, s, age) cell is observed *and* ret
 
 Same algebra, additional masked stream per orthogonal axis. Cost: one extra kernel per edge, one extra convolution per hop. Benefit: a per-cell freshness map computed identically to coverage. §5.4 treats freshness as an axis orthogonal to coverage; whether Phase 7 implements freshness as a runtime parallel stream or computes it from snapshot retrieval metadata at display time is a policy choice the contract admits in either form. The algebra above pins the runtime-stream path if it is chosen.
 
-**Covered-zero vs absent — resolved by the parallel exposure stream.** The masked-kernel value-stream above carries *conversion-mass support*: how much wavefront mass flowed through observed cells. It distinguishes the three per-cell states correctly when a path has positive value:
+**Covered-zero vs absent — resolved by the parallel exposure stream.** The masked-kernel value-stream above carries *conversion-mass support*: how much wavefront mass flowed through observed cells.
+
+> **NOTE (superseded by §4.9):** the three-state characterisation immediately below describes the old per-cell model in which `Δcdf` was treated as evidence-driven (zero at covered-zero, model-imputed at absent). Under the §4.9 two-kernel-form model, the conditioned operator's `Δcdf` is the fitted parametric posterior — positive at every cell where the distribution has support, **including at covered-zero cells**. The §4.8 streams (value, support, exposure) therefore cannot distinguish observed-positive from covered-zero under the parametric kernel; that distinction lives in the empirical kernel `Δk_emp / n_emp`. Read the three-state characterisation below as historical context; §4.9's reconciliation paragraph and §6.1 invariants 11/12's operator-scope qualifiers are normative.
 
 - **Observed-positive** `(UV, s, age)`: `Δcdf_UV > 0`, mask = 1. Positive mass to value; same positive mass to support.
 - **Covered-zero**: `Δcdf_UV = 0` because evidence says zero, mask = 1. Contributes 0 to value and 0 to support — a 0-mass path; doesn't enter the value wavefront.
@@ -354,6 +356,56 @@ The covered-zero/absent distinction at the per-edge level remains a load-bearing
 - **Display consumption** — pinned by the design doc §4 and the existing FE implementation cited from §5.4.
 
 Phase 7's algebra work has three parts, none free: (a) plumb the per-cell observation mask from evidence through `prepare_primitive` into the per-edge primitive (the mask does not exist in the kernel pipeline today; latent support is a placeholder `np.ones_like(increments)` at [span_operator_supply.py:57](graph-editor/lib/runner/span_operator_supply.py#L57)); (b) change the support-kernel construction to `value × mask`; (c) compute the projection ratio. The convolution machinery and two-stream operator shape are already in place; the load-bearing missing piece is (a). No new "coverage algorithm" to design; the algorithm is "the value algebra with a masked kernel", but the mask itself is upstream work.
+
+### 4.9 Empirical kernel form
+
+§4.1 specifies the per-edge cohort-conditioned rate kernel as the fitted parametric posterior `p × Δcdf`. The contract admits a second **per-edge kernel form** with the same algebraic role: an empirical kernel constructed directly from admitted snapshot rows, without parametric fitting.
+
+**Reconciliation with §4.8's covered-zero prose.** §4.8 (lines describing the "Covered-zero vs absent — resolved by the parallel exposure stream" three-state characterisation) describes covered-zero as `Δcdf_UV = 0` because evidence says zero. That characterisation predates §4.9's clean kernel-form separation and is inconsistent with the parametric posterior, which is continuous and remains positive at every cell where the fitted distribution has support — including at covered-zero cells. Under the §4.9 model:
+
+- The conditioned operator's value kernel `p × Δcdf` is positive at observed-positive **and** covered-zero cells (the fitted posterior doesn't go to zero at a single observed-zero point). The §4.8 streams (value, support, exposure) therefore cannot distinguish observed-positive from covered-zero — both have mask = 1 and positive parametric value.
+- The empirical operator's kernel `Δk_emp / n_emp` IS zero at covered-zero cells (because the observed `k` is zero there). The observed-positive vs covered-zero distinction lives entirely in the empirical operator.
+- The mask alone (row-presence, §4.7) discriminates absent from non-absent. It does NOT discriminate observed-positive from covered-zero.
+
+So the chart's three-state read at terminal `(anchor, τ)` resolves to:
+
+- **Observed-positive contribution**: empirical strict cumulative > 0 AND coverage = 1 (mask = 1 along the contributing paths).
+- **Covered-zero contribution**: empirical strict cumulative = 0 AND coverage = 1 — we observed and saw zero.
+- **Absent contribution**: coverage < 1 — observation didn't reach this path.
+
+§6.1 invariants 11 and 12 (covered-zero vs absent discrimination) are accordingly **scoped to the empirical operator** for the observed-positive-vs-covered-zero half, and to the conditioned-with-mask streams for the absent-vs-not-absent half. They must NOT be tested as if the parametric value kernel goes to zero at covered-zero cells — it doesn't.
+
+**Construction.** For edge U → V, source day s, and per-draw arrival-weighted aggregation:
+
+```
+n_emp_UV(s, draw)        = Σ_row weight(row, s, draw) × n_row
+k_emp_UV(s, age, draw)   = Σ_row weight(row, s, draw) × k_row(age)
+R_emp_UV(s, age, draw)   = k_emp(s, age) / n_emp(s)          (forward-filled across absent ages)
+```
+
+The per-edge empirical kernel for the composer's per-day mass propagation is the right-edge increment:
+
+```
+kernel_UV^empirical_value(s, age, draw) = R_emp(s, age, draw) − R_emp(s, age − 1, draw)
+                                        = Δk_emp(s, age, draw) / n_emp(s, draw)
+```
+
+Forward-filling the cumulative `R` across absent ages produces a kernel that is **zero at absent cells by construction** — no incremental conversions are captured between observed neighbours because the cumulative is flat there. The increment at the next observed age after a gap absorbs the cumulative jump across the gap. Forward-fill is not a separate code path; it is a property of the increment form applied to a monotone-non-decreasing cumulative.
+
+**Per-draw, not deterministic.** Because the arrival map is per-draw (the carrier's reach to `U` varies across posterior draws), `n_emp` and `k_emp` are per-draw aggregations. The empirical kernel has shape `(S, T_p)` per edge with non-identical realisations across the `S` axis. Same admitted rows; per-draw weights.
+
+**Inheritance from §3–§4.** The empirical kernel inherits the algebra established for the parametric kernel because the differentiation between the two forms lies downstream of row admission and upstream of composition:
+
+- **§3.2 arrival-map / propagation consistency.** The same per-draw arrival map drives row admission for both kernel forms. Both consume the same admitted rows, weighted the same way.
+- **§4.4 cohort cancellation.** Per-draw `n_emp(s, draw) = m_U(s, draw)` by the same construction that makes the parametric path cancel. The composer's per-edge propagation reduces to `Δk` arithmetic identically.
+- **§4.5 window non-cancellation.** Window-clocked row admission makes the ratio non-cancelling for both kernel forms identically.
+- **§4.8 mask composition.** `support_kernel = value_kernel × mask` applies to either form. The mask propagates through the DAG DP with whichever value kernel is supplied.
+
+The kernel forms differ only at the per-edge supply boundary. The same DP/readout core consumes both; the differentiation is purely how the per-edge `(value_kernel, support_kernel, exposure_kernel)` triple is constructed from upstream evidence.
+
+**No `p × shape` factorisation for the empirical form.** The parametric kernel decomposes naturally as `p × Δcdf` (saturation scalar × normalised density). The empirical kernel is `Δk/n` — already a per-day mass quantity, with no fixed asymptote to fit independently of the shape. Implementations supplying the empirical kernel to a composer hook expecting a `(p, shape)` pair set `p = 1` and `shape = Δrate` directly; the composer's product yields the empirical kernel unchanged.
+
+**Coverage requires the parametric kernel.** The §4.8 ratio `support / value` requires a value kernel positive everywhere the wavefront reaches; the empirical kernel is zero exactly where the mask is zero, so the masked stream and the value stream coincide identically and the ratio collapses to 1. **Coverage is therefore computed exclusively against the parametric kernel's value stream** (with the row-presence mask). The empirical kernel produces evidence cumulatives; the parametric kernel produces both model projections and the coverage / exposure signal. Both kernels run through the same DP, both share row admission, both inherit §4.4 cancellation — but the §4.8 coverage ratio reads the parametric streams only.
 
 ---
 
@@ -499,6 +551,43 @@ All five consume the same composition (`compose_primitive_span`), the same condi
 
 This is the mapping the intuition needs to hold onto: **the spine is one machine that converts (per-edge conditioned primitives, seed mass) into per-(draw, cohort, τ) terminal values**. The model overlay, the conditioned forecast CDF, and the evidence reducer are three callers of one machine, distinguished only by what they hand in.
 
+### 5.6 Strict vs adjusted evidence readout
+
+The chart consumes two distinct evidence quantities at the row level: **strict** and **adjusted**. Both derive from the empirical kernel of §4.9 and the parametric kernel's coverage signal of §4.8. They differ in policy at the row reducer.
+
+**Strict evidence** is the empirical operator's per-anchor terminal cumulative summed across admissible anchors, with no scaling. Admissibility per `(anchor, τ)` is `exposure_A(τ) > 0`:
+
+```
+admissible(A, τ)        ⇔ exposure_y_A(τ) > 0
+evidence_y_strict(τ)    = Σ_admissible evidence_y_A(τ)
+evidence_x_strict(τ)    = Σ_admissible evidence_x_A(τ)
+rate_strict(τ)          = evidence_y_strict / evidence_x_strict
+```
+
+Strict evidence is what was literally observed. Where rows are absent at any contributing cell, the empirical operator's per-anchor cumulative reflects that absence; the strict readout falls naturally with sparsity past the chart-row's frontier.
+
+**Adjusted evidence** scales strict evidence by inverse-probability weighting (IPW), per anchor:
+
+```
+evidence_y_adjusted(τ)  = Σ_admissible evidence_y_A(τ) / coverage_y_A(τ)
+evidence_x_adjusted(τ)  = Σ_admissible evidence_x_A(τ) / coverage_x_A(τ)
+rate_adjusted(τ)        = evidence_y_adjusted / evidence_x_adjusted
+```
+
+`coverage_y_A(τ)` is read at the chain terminal (Z); `coverage_x_A(τ)` is read at the carrier terminal (X). They differ in active cohort because chain dispersion stacks on carrier dispersion — typically `coverage_y_A ≤ coverage_x_A` in mass-weighted terms. In window mode the carrier is the zero-edge identity and `coverage_x_A = 1` trivially.
+
+**IPW under MCAR.** Sparsity in admitted-row presence is a function of snapshot retrieval timing and capture infrastructure; it is uncorrelated with cohort-level or edge-level conversion behaviour. Missing-completely-at-random (MCAR) holds in this domain; under MCAR, inverse-probability weighting is an unbiased estimator of the full-observation cumulative. The estimator's variance scales with `1/coverage²` and grows at low coverage — bias-free, but high-variance in epoch B regions where coverage approaches zero. This is the regime in which epoch B dashing communicates "less certain"; the adjusted curve is mathematically correct but lumpy there.
+
+**Both coverages, two terminals.** Per (anchor, τ) the §4.8 ratio is read at two distinct nodes: at X for the carrier terminal (drives `evidence_x_coverage` and the `coverage_x` IPW factor) and at Z for the chain terminal (drives `evidence_y_coverage` and the `coverage_y` IPW factor). Both come for free from the same support / value / exposure streams produced by one masked-kernel propagation; only the read point differs.
+
+**Display routing.**
+
+- **E mode** (`visibility_mode = 'e'`): strict evidence only. The evidence-rate line falls in epoch B as observation drops — meaning "strictly admissible evidence". No model imputation, no IPW scaling.
+- **E+F mode** (`visibility_mode = 'f+e'`): adjusted evidence and the unconditioned model curve, as two separate curves. Adjusted compensates for sparsity within admissible cohorts via IPW; cohorts past their frontier drop out via admissibility filtering (`exposure_A = 0`), so the adjusted curve thins toward zero past the chart-row's frontier while the model curve continues unchanged.
+- **F mode** (`visibility_mode = 'f'`): unconditioned model curve only. No empirical readout.
+
+**Supersedes the legacy `rate_blended` linear blend.** The legacy formula `rate_blended = empirical × coverage + model × (1 − coverage)` mixed two operator outputs at the row level with an implicit uniformity assumption. The strict/adjusted decomposition makes the assumption explicit (IPW under MCAR) and separates the two display surfaces — strict for "what we saw", adjusted for "what we estimate given the MCAR data-collection model", model for "what the unconditioned posterior predicts". In E+F mode the chart presents the adjusted and model curves simultaneously; there is no row-level linear blend.
+
 ---
 
 ## 6. Closure criteria and test families
@@ -527,9 +616,15 @@ These tests pass iff the algebra in §3–§5 is internally consistent and rules
 
 10. **Coverage as masked-kernel ratio (direct, §4.8).** With one per-cell mask zeroed (a single absent cell on one concrete edge), assert that `coverage(a, τ)` at every downstream `(anchor, τ)` cell whose wavefront passes through that cell strictly decreases below 1.0 by exactly the mass-weighted fraction routed through it, while `value(a, τ)` is unchanged. With *all* per-cell masks unit, assert `coverage(a, τ) = 1.0` wherever `value(a, τ) > 0`. With *no* observation anywhere (every mask zero), assert `coverage(a, τ) = 0.0` everywhere `value(a, τ) > 0`. These three corner conditions plus a partial-mask case (a single edge with mixed observed/absent source days, and a parallel-paths topology where one path is observed and the other absent) directly exercise the §4.8 ratio formulation and confirm support composition through the DAG.
 
-11. **Covered-zero vs absent — three-stream discrimination (direct, §4.8).** Replace one per-cell entry with covered-zero (`Δcdf_UV(s, age) = 0`, mask = 1) and re-run; assert at every downstream `(anchor, τ)` cell whose wavefront passes through that cell: `value` unchanged from the unmodified-fixture baseline at cells whose wavefront depends on that source-day cell (covered-zero contributes 0 to value but only at the specific (s, age) and only along paths that route through it), `support` unchanged from the value-weighted baseline, and `exposure` carries positive mass through (because mask = 1, the unit-reach PMF kernel still contributes). Then replace the same per-cell entry with absent (mask = 0, model-imputed `Δcdf` > 0) and re-run; assert `value` carries imputed mass, `support` drops, AND `exposure` drops to 0 along paths that route through that cell. This is the load-bearing algebraic distinction: covered-zero leaves exposure positive (we observed); absent zeros exposure (we didn't). A failure indicates the mask is computed from value-positivity rather than row presence, or the exposure stream's kernel is conflated with the support stream's.
+11. **Covered-zero vs absent discrimination — operator-aware (direct, §4.8 + §4.9).** Per §4.9, the parametric value kernel `p × Δcdf` does NOT go to zero at covered-zero cells; the conditioned three-stream readouts therefore cannot distinguish observed-positive from covered-zero. Test in two parts:
+    - **Empirical operator** (where the distinction lives). Replace one per-cell entry with covered-zero (empirical `Δk_emp(s, age) = 0`, mask = 1) and re-run; assert at every downstream `(anchor, τ)` cell whose wavefront passes through that cell: `empirical_cumulative` drops by the mass that would have flowed through that specific (s, age) cell. Other paths unaffected. The empirical operator carries the covered-zero contribution as a literal zero increment.
+    - **Conditioned-with-mask streams** (where absent-vs-non-absent lives). With the same covered-zero injection (mask = 1, parametric `Δcdf` unchanged): `value`, `support`, and `exposure` are ALL unchanged from baseline at downstream cells (because mask = 1 still, and the parametric `Δcdf` does not depend on `k_observed = 0` at one cell). Then replace the same per-cell entry with absent (mask = 0, no row): `value` unchanged (parametric continues), `support` drops, `exposure` drops to 0 along paths routing through that cell. This is the load-bearing distinction: absent zeros support/exposure (mask = 0); covered-zero leaves support/exposure unchanged in the conditioned streams.
+    - A failure of the empirical part indicates the empirical kernel is not zeroing at covered-zero (admission policy or forward-fill bug). A failure of the conditioned part indicates the mask is computed from value-positivity rather than row presence, or the parametric kernel is being treated as evidence-driven rather than fit-driven.
 
-12. **Zero-value terminal discrimination (direct, §4.8 corner cases).** Construct a DAG fixture where: (a) every contributing path is covered-zero, and (b) every contributing path is absent. In case (a), `cumulative_value(a, τ) = 0` and `cumulative_exposure(a, τ) > 0` — "we observed zero everywhere". In case (b), `cumulative_value(a, τ) > 0` (model-imputed) and `cumulative_exposure(a, τ) = 0` — "we don't know". The two cases are distinguishable by the (value, support, exposure) triple even though value-weighted coverage is undefined at terminal-zero cells in case (a).
+12. **Zero-value terminal discrimination — operator-aware (direct, §4.8 + §4.9).** Construct a DAG fixture where: (a) every contributing path is covered-zero, and (b) every contributing path is absent.
+    - Case (a) — under the **empirical operator**: `empirical_cumulative(a, τ) = 0`. Under the conditioned-with-mask streams: `value > 0`, `support > 0`, `exposure > 0` (parametric kernel positive, mask = 1 everywhere) → `coverage = 1`. The chart reads "observation reached, empirical sums to zero" = "we observed zero everywhere".
+    - Case (b) — under the **empirical operator**: `empirical_cumulative(a, τ) = 0` (forward-fill from absent cells). Under the conditioned-with-mask streams: `value > 0`, `support = 0`, `exposure = 0` (mask = 0 along all paths) → `coverage = 0`. The chart reads "observation didn't reach, empirical sums to zero" = "we don't know".
+    - The two cases are distinguishable by `coverage` (1 vs 0) and `exposure` (positive vs 0). The empirical cumulative is zero in both — which is the right answer for both (we saw zero in (a), saw nothing in (b)) — but the conditioned streams disambiguate.
 
 ### 6.2 Window local-rate tests (algebraic, blind, prose specification)
 
@@ -561,9 +656,10 @@ Phase 6 closes when:
 
 - This document is reviewed and the four rules (§3), the unified DAG-level mass-propagation algebra with cohort cancellation (§4.3–§4.4), the pointer at the existing three-state contract (§4.7 → design doc §3.1), the three-stream masked-kernel chain-composition algebra (§4.8 — value + support + exposure, the new contribution), the pointer at the existing display contract (§5.4 → design doc §4 + code), and the spine mapping anchored in the extended engine (§5.1, §5.1.5 term-by-term, §5.2 reducer scope, §5.3 node-id-keyed prefix reads, §5.5) are accepted.
 - The §6.1 and §6.2 test sets are specified (this document).
+- The §6.5 crosswalk maps each of the 14 failures recorded in [`strict-span-regression-failures-13-May-26.md`](strict-span-regression-failures-13-May-26.md) to a §3–§4 invariant that prevents its recurrence and a §6.1 / §6.2 test that detects it.
 - The next plan iteration (Phase 7 implementation plan) can start, gated by §6 acceptance.
 
-**The plan §6 closure criterion — "reviewers can point to one section for value, support, coverage, frontier, midpoint policy" — is discharged at the contract level by this document.** A pointer per axis:
+**The plan §6 closure criteria are discharged at the contract level by this document.** The first criterion — "reviewers can point to one section for value, support, coverage, frontier, midpoint policy" — is addressed by the per-axis pointers below; the second criterion — "the contract explains how the previous 14-failure clusters are protected" — is discharged by the crosswalk in §6.5. A pointer per axis:
 
 - **Value policy** — §4.3 (the unified mass-propagation formula with DAG inflows sum), §4.4 (cohort cancellation), §4.5 (window non-cancellation). Engine: DAG forward DP at [timing_span.py:467-498](graph-editor/lib/runner/timing_span.py#L467-L498); per-node reads via `read_node_mass_draws`. Tested by §6.1 invariants 1–9 and §6.2.
 - **Support policy** — pinned by [`cohort-maturity-evidence-coverage-design.md`](../cohort-maturity-evidence-coverage-design.md) §3.1 (the three states: Absent / Covered-zero / Covered-positive). Phase 6 adds DAG-level propagation in §4.8 (the masked-kernel parallel stream computing chain-cell support from per-edge masks via the same DAG DP that propagates mass). Engine: `node_support_draws[node_id]` via `read_node_support_draws`. Tested by §6.1 invariants 10–12.
@@ -579,6 +675,22 @@ Phase 6 closes when:
 - The per-edge data-availability fallback inside `Absent` cells: refuse-to-emit at the cell level vs propagate-only fallback at the wavefront level. Either is admissible under the algebra in §4.8; the choice trades off chart honesty against chart smoothness.
 
 These are implementation choices, not contract gaps. The display semantics, three-state trichotomy, coverage definition, and visual encoding are pinned by the existing design doc and code; Phase 7 inherits them. The contract pins what the implementation must satisfy at the algebra level — not what it must look like (the design doc already pins that).
+
+### 6.5 Failure-cluster crosswalk
+
+The parent plan's §6 acceptance gate requires this contract to "explain how the previous 14-failure clusters are protected" — the 14 test failures recorded in [`strict-span-regression-failures-13-May-26.md`](strict-span-regression-failures-13-May-26.md) that aborted the prior release. Those 14 are grouped into 5 clusters by failure mode. The crosswalk below pins each cluster to the §3–§4 invariant(s) that prevent its recurrence at the algebra level and the §6.1 / §6.2 test(s) that detect it directly. Phase 7 implementation conforming to this contract cannot produce these failures without first violating one of the named invariants — which the listed tests catch in isolation before integration.
+
+**Cluster 1 — Identity and zero-length degeneracy.** Tests `test_unified_builder_identity_carrier_synthesises_carrier_surface_from_subject_primitive`, `test_identity_cohort_multihop_matches_window_rate_attributed_oracle`, `test_query_scoped_identity_carrier_collapses_public_evidence_basis`. Failure mode: `window()` and `cohort(A=X)` stopped degenerating to the same evidence object. **Protected by**: §3.3 (unified push-forward — mode-and-role encoding lives at primitive conditioning via T1, not in the operator; identity carrier collapses to a zero-edge composition with δ(0) at the root by data, not by branch); §4.2 (seed mass — `window(X→Z)` and `cohort(A, X→Z)` with `A = X` share the same single-source-day seed structure at the chain root). **Caught by**: §6.1 invariant 5 (identity-carrier degeneracy — `cohort(A, X→Z)` with `A == X` produces identical numerics to `cohort(X, X→Z)` and to `window(X→Z)`'s degeneracy at the chain root).
+
+**Cluster 2 — Selected evidence support / coverage.** Tests `test_shared_sweep_latency_rows_use_selected_evidence_coverage`, `test_runtime_built_selected_a_clock_evidence_feeds_existing_consumers`. Failure mode: the support / coverage channel was zeroed or disconnected from count amplitude. **Protected by**: §4.7 (the three-state trichotomy pinned at design-doc §3.1 — Absent / Covered-zero / Covered-positive as load-bearing per-cell input); §4.8 (masked-kernel parallel stream — support propagates by the same DAG DP as value, with the per-edge kernel multiplied by an observation mask; the third exposure stream distinguishes covered-zero from absent at terminal-zero cells). **Caught by**: §6.1 invariant 10 (coverage as masked-kernel ratio — unit-mask, zero-mask, partial-mask corner conditions), invariant 11 (covered-zero vs absent three-stream discrimination), invariant 12 (zero-value terminal discrimination via the (value, support, exposure) triple).
+
+**Cluster 3 — Multi-hop rate-attributed evidence.** Tests `test_window_multihop_evidence_matches_rate_attributed_db_oracle`, `test_identity_cohort_multihop_matches_window_rate_attributed_oracle`, `test_window_multihop_ef_boundary_matches_rate_attributed_selected_evidence`, `test_multihop_evidence_parity`. Failure mode: multi-hop evidence readout and E+F seam behaviour damaged; the 1-day shift signature in [`multi-hop-rate-composition-y-deficit-investigation.md`](multi-hop-rate-composition-y-deficit-investigation.md). **Protected by**: §3.1 (τ-axis convention — right-edge cumulative, density as right-edge difference); §3.4 (cumulative-vs-incremental boundary — Δk internally, cumulative sum exactly once at terminal readout; the structural property of the DAG DP, not a per-hop branch); §4.3 (unified mass-propagation formula with sum over DAG inflows — no serial-vs-branching case distinction); §4.5 (window non-cancellation made explicit so per-hop ratio arithmetic does not silently revert to cohort form); §4.6 (aggregation and seam invariant — row builder and reducer read the same per-(anchor, τ) surface by construction). **Caught by**: §6.1 invariants 1–4 and 9 (saturation conservation, per-source-day decomposition consistency, mass conservation at intermediate nodes, time-shift invariance, cumulative-vs-incremental boundary direct test — the latter is the 1-day-shift detector); §6.2 W2 (multi-hop rate composition), W4 (local-rate reproduction), W3 (window-cohort divergence at finite τ but convergence at τ→∞).
+
+**Cluster 4 — Evidence admission / conditioning boundary.** Test `test_cohort_frame_evidence_is_admitted_only_for_single_hop_anchor_override_case`. Failure mode: p-conditioning evidence parity changed; the attempted change "crossed a boundary it should not have crossed". **Protected by**: §3.2 (arrival-map / propagation consistency — single source of truth: the latency map weighting evidence at U must equal the latency kernel propagating mass to U; per-draw not per-mean); §3.3 (mode encoding lives in primitive conditioning via T1 = role-root, citing `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` Appendix A invariant 5 — the conditioning boundary is upstream of the composer, not inside it). The contract names the conditioning boundary explicitly so an implementer cannot fold evidence admission into the composer or the reducer by accident. **Caught by**: §6.1 invariant 7 (arrival-map / propagation invariant direct — pointwise equal per draw); invariant 8 (cohort cancellation direct — `n_UV(s) = m_U(s)` per draw under cohort clocking, which holds only when the conditioning boundary is honoured upstream).
+
+**Cluster 5 — Model projection consistency.** Test `test_active_cohort_multihop_total_projection_matches_subject_projection_product`. Failure mode: subject projection product drifted from truth at saturation, suggesting model / projection surface invariants were invalidated. **Protected by**: §3.2 (arrival-map / propagation consistency holds per draw, which is the load-bearing condition for §2.1's saturation conservation `N_A × Π p_i`); §4.3 (unified mass-propagation formula with the cancellation in §4.4 producing the chain product structurally rather than as a per-hop arithmetic computation that can drift); §5.1 (the spine is one machine for model overlay, conditioned forecast CDF, and reducer — the same composition produces both the projection product and the cohort terminal, so they cannot disagree). **Caught by**: §6.1 invariant 1 (saturation conservation — terminal cumulative at τ→∞ equals `N × p_AZ` where `p_AZ` is the composed-span topological reach); invariant 3 (mass conservation at intermediate nodes — projection product at any on-path U equals `N × reach_to_U`); invariant 6 (single-edge limit — a two-edge DAG with one Dirac-at-zero edge equals a one-edge DAG with composed reach `p_1 × p_2`, the closed-form projection-product check).
+
+**Coverage check.** Every failing test in the §1 list above falls into exactly one cluster, every cluster maps to at least two §3–§4 invariants and at least one §6.1 / §6.2 direct test. The two cross-references that fall outside the cluster list — `test_active_single_hop_evidence_matches_selected_a_clock_snapshot_oracle` and `test_active_multihop_evidence_uses_query_x_denominator_not_terminal_edge_x` — are both undercounts of `evidence_y` against the selected A-clock oracle, the same algebraic signature as cluster 3 (multi-hop rate-attributed evidence) at the single-hop and multi-hop active-cohort cases; they are caught by the same invariants and tests. `test_unified_builder_single_hop_subject_max_flow_equals_primitive_k` and `test_shadow_parity_single_hop_window_aggregate_matches_legacy_engine_cohort` are single-hop window-degeneracy failures caught by §6.1 invariant 5 (identity-carrier degeneracy) and §6.2 W1 (single-edge identity).
 
 ---
 
@@ -600,6 +712,157 @@ Display semantics, three-state trichotomy, coverage definition, alpha-on-blobs i
 ## 8. Related documents
 
 - `model-first-strict-span-cutover-plan-13-May-26.md` — the main cutover plan; this doc discharges its §6.
+- `selected-cohort-projection-cutover-plan.md` — detailed implementation plan for carrying this contract into the selected-Cohort row cutover without recreating mode-sliced reducer branches.
 - `multi-hop-rate-composition-y-deficit-investigation.md` — the rolled-back attempt's failure characterisation (1-day timing shift, never root-caused). Cited here as the failure mode the §3.1 τ-axis rule and §3.2 consistency rule together prevent.
 - `cf-defensive-coding-audit.md` — independent audit converging on the same hotspots (`is_identity_carrier` branching, parallel `ΣY / ΣX` engines). The Phase 7 implementation must not reintroduce any of the 21 findings.
 - `cohort-1apr-falling-k-problem-statement.md §A.4` — the seam invariant (reducer and row builder read the same prefix object per cohort). Preserved by §5.3's projection-of-spine factoring.
+
+---
+
+## Appendix A — Under review: discretisation kernel construction
+
+**Status**: UNDER REVIEW. Opened 15-May-26 during the selected-Cohort cutover plan derivation ([selected-cohort-projection-cutover-plan.md](selected-cohort-projection-cutover-plan.md) Stage 2 reasoning block). Not yet resolved; the cutover blocks here until this appendix closes.
+
+**Scope**: this appendix governs **continuous model timing kernels**: conditioned primitives, unconditioned model overlays, carrier spans, subject spans, and prefix-arrival maps when their timing comes from a continuous latency CDF. It does not apply a midpoint or quadrature correction to empirical evidence rows. Snapshot evidence rows are already calendar-bucket observations.
+
+**Question**: §3.1 specifies "rate(s, 0) includes same-day conversions." The current composer implementation in [subject_span_composer.py:461](../../graph-editor/lib/runner/subject_span_composer.py#L461) constructs the per-edge kernel as `pmf[τ] = G(τ) − G(τ−1)` from the parametric CDF `G`. Does this endpoint-CDF kernel satisfy §3.1's row-observation convention, or must the continuous CDF first be converted to a row-aligned cumulative surface?
+
+**Why this is open**: §3.1 was written against the empirical snapshot-row convention, where same-day capture happens automatically because the observation integrates over real arrivals during a calendar day. Continuous model CDFs do not automatically have that row-bucket interpretation when sampled at integer endpoints. If the model operator is compared with or plotted on the same cohort-maturity `τ` axis as snapshot rows, its timing surface must use the same calendar-bucket convention.
+
+### A.1 Row-aligned cumulative timing
+
+Let `G(t)` be the continuous conditional latency CDF for an edge, measured from the real source-event time. A snapshot row at integer age `τ` does not observe an endpoint sample `G(τ)`: the source event occurred sometime during the source calendar day, and the row is read at the end of calendar day `source_day + τ`.
+
+Under the standard uniform-within-day bucket model, the row-aligned cumulative is:
+
+```
+B(τ) = ∫_0^1 G(τ + 1 − u) du
+     = ∫_τ^{τ+1} G(v) dv
+```
+
+with `B(τ < 0) = 0`. The daily kernel consumed by the DAG DP is:
+
+```
+q(τ) = B(τ) − B(τ−1)
+```
+
+not:
+
+```
+G(τ) − G(τ−1)
+```
+
+The composer may continue to implement "daily kernel = `diff(cdf, prepend=0)`", but the operator-facing `cdf` must then mean row-aligned cumulative `B`, not endpoint cumulative `G`.
+
+### A.2 Endpoint CDF vs row-aligned CDF
+
+The current endpoint construction is:
+
+```
+ΔG[τ] = G(τ) − G(τ−1) = ∫_{τ−1}^{τ} g(v) dv
+```
+
+where `g` is the continuous latency density. This is a unit integral of the **density** over the interval ending at `τ`.
+
+The row-aligned construction is:
+
+```
+B(τ) = ∫_τ^{τ+1} G(v) dv
+q(τ) = B(τ) − B(τ−1)
+```
+
+This is the daily increment of the **calendar-bucket cumulative**. For smooth `G`, the midpoint-rule approximation is:
+
+```
+q(τ) ≈ G(τ + 0.5) − G(τ − 0.5)
+```
+
+with `G(t < 0) = 0`. This half-day expression is an approximation to the bucket integral, not the mathematical definition.
+
+### A.3 Why empirical rows do not get this correction
+
+Legacy's empirical `R(u, age) = k_observed(u, age) / n_observed(u)` already has the calendar-row interpretation. Snapshot evidence counts users who arrived at source day `u` sometime during that calendar day and who reached the destination by the end of day `u + age`. Under the same uniform-within-day model:
+
+```
+R(u, age) ≈ ∫_0^1 G(age + 1 − τ_arrival) dτ_arrival
+          = ∫_age^{age+1} G(v) dv
+          = B(age)
+```
+
+At age `0`, this gives same-day capture `B(0) = ∫_0^1 G(v) dv`. Therefore empirical evidence output must not receive an additional midpoint, half-shift, interpolation, or quadrature correction. In the single-hop X-clock identity case, evidence output must reproduce the admitted `window()` evidence rows exactly.
+
+This appendix is only about converting **continuous model CDFs** onto the same row-aligned timing convention as the empirical rows.
+
+### A.4 The shift accumulates per hop if left uncorrected
+
+A multi-hop chain composes per-edge daily kernels via discrete convolution. With endpoint `ΔG` kernels, every per-edge integration pins the edge arrival mass to endpoint-day timing. The half-day spread of the within-day source-event distribution is lost at every hop, so the cumulative-at-terminal on the chart `τ` axis is biased on the rising flank.
+
+This is the algebraic structure of the previously-unresolved "1-day shift" signature from [`multi-hop-rate-composition-y-deficit-investigation.md`](multi-hop-rate-composition-y-deficit-investigation.md). The §3.1 row-observation convention forbids that endpoint interpretation for chart-facing model surfaces. The §3.4 cumulative-vs-incremental boundary fix does not address it: §3.4 is about where the cumulative sum happens; this appendix is about which unit-interval cumulative is being differenced before the DP sees the kernel.
+
+### A.5 Correction target and implementation options
+
+The normative target is:
+
+```
+B(τ) = ∫_τ^{τ+1} G(v) dv
+q(τ) = B(τ) − B(τ−1)
+```
+
+Implementation options:
+
+- **Preferred contract: numerical quadrature of `B`.** Evaluate the bucket integral for each integer `τ`, then hand row-aligned cumulative `B` to the existing `diff(cdf, prepend=0)` composer path. This is family-agnostic and makes the mathematical target explicit.
+- **Closed-form antiderivative where available.** For families with tractable antiderivatives, compute `B(τ)` exactly as `H(τ+1) − H(τ)`, where `H' = G`.
+- **Midpoint approximation as an optimisation.** Use `q(τ) ≈ G(τ + 0.5) − G(τ − 0.5)` only after verification shows the approximation is within tolerance for the supported latency families and chart horizons.
+
+The previous "kernel half-shift" proposal is therefore demoted from the leading mathematical proposal to an allowable approximation of the quadrature target.
+
+### A.6 Where the correction must apply
+
+The row-aligned continuous-kernel convention must apply uniformly to every continuous timing kernel that participates in a chart-facing model projection:
+
+- Single-hop window: the one subject edge uses a row-aligned model kernel.
+- Multi-hop window: every subject edge uses row-aligned model kernels.
+- Identity cohort (`A = X`): the carrier is a zero-edge identity; subject corrections are the same as window.
+- Active cohort (`A ≠ X`): every carrier edge and every subject edge uses row-aligned model kernels.
+- Prefix-arrival maps: arrival-map timing and propagation timing must share the same row-aligned convention. Mixing endpoint timing for evidence binding with row-aligned timing for model projection would violate §3.2 arrival-map / propagation consistency.
+- Unconditioned overlays: F-mode and model-curve overlays use the same row-aligned convention, because they are plotted on the same daily chart axis.
+
+This is a pure kernel-construction convention. It must not introduce a mode branch, a row-reducer patch, or a display-layer adjustment.
+
+### A.7 Open verification work before this appendix closes
+
+1. **Co-derivation.** Independently re-derive the row-aligned cumulative `B(τ) = ∫_τ^{τ+1} G(v) dv` and daily kernel `q(τ) = B(τ) − B(τ−1)` from the continuous convolution `K_V(t) = ∫ g_AU(s) × G_UV(t−s) ds` with a histogram representation of upstream source-day mass.
+
+2. **Fine-grid oracle.** For a non-uniform latency shape, e.g. lognormal with `μ = ln(7)`, `σ = 0.5`, compare endpoint `ΔG`, quadrature `q`, and midpoint-approximation kernels against a fine-grid continuous oracle (`h ≤ 0.01`) on serial multi-hop chains. Quantify the bias and approximation error.
+
+3. **Branching / join topology.** Repeat the fine-grid comparison on a topology with parallel paths and a join. The row-aligned convention must compose under the same DAG DP, not only in serial chains.
+
+4. **Identity-mode invariance.** Under the row-aligned convention, verify §6.1 invariant 5 still holds: `cohort(A=X)` and `window(X→Z)` numerics remain identical. The convention must apply uniformly to preserve this degeneracy.
+
+5. **Saturation conservation.** Confirm §6.1 invariant 1 (`K_V(τ→∞) = N × Π p_i`) holds: the row-aligned kernel must not break asymptotic mass conservation. `Σ_τ q(τ)` should equal `1` for conditional timing, so `Σ_τ p × q(τ)` equals edge reach `p`, up to finite-horizon and floating-point tolerance.
+
+6. **Cohort cancellation.** Confirm §4.4 still holds: `n_UV(s) = m_U(s)` per draw under cohort clocking with row-aligned kernels. The cancellation is structural; changing the daily kernel convention should not reintroduce explicit `m/n` arithmetic.
+
+7. **Boundary at τ = 0.** Verify the quadrature boundary `B(0) = ∫_0^1 G(v) dv` against alternatives such as the half-shift approximation `G(0.5)`. The contract target is the integral; midpoint is acceptable only if measured error is acceptable.
+
+8. **Empirical evidence unchanged.** Verify the single-hop X-clock evidence-output case reproduces the admitted `window()` evidence set exactly. No midpoint, interpolation, or quadrature correction is applied to empirical rows.
+
+9. **Display contract check.** Confirm with [cohort-maturity-evidence-coverage-design.md](../cohort-maturity-evidence-coverage-design.md) that row-aligned model kernels preserve the intended dashing-threshold and fan-band semantics at the rising flank.
+
+### A.8 If the correction is wrong
+
+If the verification work above surfaces a flaw in the row-aligned convention, this appendix needs revision before closure. Examples: the uniform-within-day source-event model is wrong for a supported data source; the chart axis is not actually a row-bucket axis for a specific surface; or the correct continuous target is a higher-order source-day distribution rather than the uniform bucket integral.
+
+If the verification confirms the convention, this appendix is upgraded from UNDER REVIEW to a normative addition to §3.1. The implementation then converts continuous timing CDFs into row-aligned cumulative surfaces before the composer constructs daily kernels, and the cutover proceeds.
+
+### A.9 Implications if not corrected
+
+If the cutover proceeds with endpoint `ΔG` kernels for continuous model timing, the new path has systematic endpoint-bucket bias at the rising flank of multi-hop charts. The bias:
+
+- Is visible even in single-hop at age `0` when same-day capture matters.
+- Accumulates through serial multi-hop composition.
+- Is largest on the rising flank where the cumulative changes fastest.
+- Diminishes near saturation, where both endpoint and row-aligned kernels approach the same asymptote.
+- Is systematic and reproducible, not random, so analytic-oracle tests should detect it deterministically.
+
+Specifically, the outside-in oracle tests at multi-hop ([`test_window_multihop_evidence_matches_rate_attributed_db_oracle`](../../graph-editor/lib/tests/test_cohort_factorised_outside_in.py), [`test_active_multihop_cohort_midpoint_matches_a_clock_convolution_oracle`](../../graph-editor/lib/tests/test_cohort_factorised_outside_in.py), [`test_active_cohort_multihop_total_projection_matches_subject_projection_product`](../../graph-editor/lib/tests/test_cohort_factorised_outside_in.py)) are expected to catch this at the endpoint-vs-row-bucket scale. AP59 forbids loosening their tolerances; the cutover halts until the timing convention is resolved.

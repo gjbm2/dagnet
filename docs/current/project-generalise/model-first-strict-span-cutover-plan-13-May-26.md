@@ -26,7 +26,7 @@ Closure requires the acceptance gate, not just code existing. A phase with one m
 
 ## Progress Ledger
 
-Current status after the 14-May-26 F-mode cutover, **revised 14-May-26 to correct a scoping error**: the original Phase 5 was declared complete too quickly. It cut over only the **unconditioned overlay** model surfaces (predictive bands and the epistemic model curve). The **conditioned forecast composition** — the composed subject⊗carrier request-rooted CDF that drives the actual `rate` row column for E+F and the scalar `completeness` — still runs through the bespoke `_composed_pair_request_cdf_draws` helper. That is also model-span algebra (operator-chain composition over already-resolved primitive surfaces) and was wrongly classified as "out of strict span scope" in the original audit. Phase 5 has therefore been split into 5a (unconditioned overlays — done) and 5b (conditioned forecast composition — not started). Evidence design (Phase 6) is held until the model-side debranching and the new Phase 5.5 algebraic-spine checkpoint both land.
+Current status after the 14-May-26 F-mode cutover, **revised 14-May-26 to correct a scoping error**: the original Phase 5 was declared complete too quickly. It cut over only the **unconditioned overlay** model surfaces (predictive bands and the epistemic model curve). The **conditioned forecast composition** — the composed subject⊗carrier request-rooted CDF that drives the actual `rate` row column for E+F and the scalar `completeness` — still runs through the bespoke `_composed_pair_request_cdf_draws` helper. That is also model-span algebra (operator-chain composition over already-resolved primitive surfaces) and was wrongly classified as "out of strict span scope" in the original audit. Phase 5 has therefore been split into 5a (unconditioned overlays — done) and 5b (conditioned forecast composition — not started). The evidence operator contract has since closed the design checkpoint; the remaining reducer cutover is specified in [`selected-cohort-projection-cutover-plan.md`](selected-cohort-projection-cutover-plan.md). That plan is the detailed implementation authority for replacing the legacy selected-prefix / Pop C / Pop D row machinery with one selected-Cohort projection flow.
 
 | Phase | Status |
 |---|---|
@@ -36,8 +36,8 @@ Current status after the 14-May-26 F-mode cutover, **revised 14-May-26 to correc
 | 4. Conditioned primitives subject & carrier — replace `_composed_pair_request_cdf_draws` with promoted-core path. *Outside-in gate after.* | **Done** (14-May-26 outside-in confirmed by user) |
 | 5. **Debranch #4** — remove model-side branching that the cutover left behind (caller-side `if carrier is None` forks, hardcoded timing-family, etc.). **No deletion** — that is Phase 9. *Outside-in gate after.* | **Done** (14-May-26): draw-coherence eliminated, 6 cohort_forecast gates deleted, composer moments-only fallback deleted, zero-edge identity dispatched through `ComposedPrimitiveSpan.identity()`, supply-boundary shape check accepted as perimeter inspection. Outside-in oracle re-run green. |
 | 5.5. **Extract algebraic spine** — introduce a small role/span algebra layer that makes the request-to-carrier-to-subject sequence visible as one contiguous transformation. It must not own frame materialisation, row schema, provenance formatting, or legacy fallback. *Outside-in gate after.* | **Done** (14-May-26): `model_span_spine.py` landed with `resolve_request_spans` (bind+condition → compose carrier → compose subject → compose overlays) plus post-composition projection functions. `primitive_readout.compute_resolved_runtime_readout` refactored from ~560 LOC interleaved orchestration+diag into ~150 LOC perimeter wrapper. Closure remediation: (a) `evaluate_model_rate_draws` restored a one-line algebraic-boundary guard at the genuine 0/0 case (denominator exactly zero before carrier mass arrives at X) — emits 0.0 there per row contract; the spine remains unguarded everywhere `denominator > 0`. (b) dead `evidence_set` kwarg removed from `_build_span_resolutions` and both spine call sites — the field was already absent from `SpanEdgeResolution` / `CarrierEdgeResolution`. Canonical Phase 4-style oracle gate (`test_cohort_factorised_outside_in.py`) green; full `lib/tests/` suite green (1556 passed, 38 skipped, 8 xfailed, 1 xpassed). |
-| 6. Reducer spans: subject & carrier for `cohort()` — promoted-core prefix construction. *Outside-in gate after.* | Not started |
-| 7. Reducer spans: subject & carrier for `window()` — promoted-core prefix construction. *Outside-in gate after.* | Not started |
+| 6. Promoted selected-Cohort projection boundary — engine bridge only, no row-output cutover. Build the single mode-blind surface that evaluates carrier-only X and carrier⊗subject Y from the same root mass, value/support/exposure streams, and per-draw operators. *Focused algebra gate plus outside-in no-change gate.* | Not started |
+| 7. Row reducer cutover — all modes together. Replace `_selected_cohort_group_rate_draws` / selected-prefix authority with the Phase 6 projection boundary in one public row path for `window()`, `cohort(A=X)`, and active `cohort(A!=X)`. *Outside-in gate after each atom.* | Not started |
 | 8. De-branch reducer — `_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, `_RateAttributedSubjectPrefix`, identity/active branches in `_selected_cohort_group_rate_draws`. *Outside-in gate after.* | Not started |
 | 9. Final cleanup — shadow code, dead code (including `_composed_pair_request_cdf_draws`, currently annotated DEAD CODE in place), grep-based verification sweep that runtime is debranched, docs updated. **All deletions deferred from earlier phases land here as one cohesive cutover.** | Not started |
 
@@ -147,9 +147,10 @@ This ledger assigns the remaining known work to a phase so later agents do not t
 | Large "Strict-span algebra — design spine" comment currently embedded in `cohort_forecast_v3.py` | Phase 5.5 | **Done** (14-May-26): comment block stripped from `cohort_forecast_v3.py`; the algebra documentation lives in the module docstring of `graph-editor/lib/runner/model_span_spine.py` next to the executable code reviewers read. |
 | Extracted carrier/subject algebra layer | Phase 5.5 | **Done** (14-May-26): `graph-editor/lib/runner/model_span_spine.py` exposes the durable algebraic sequence — `resolve_request_spans` walks request roles → primitive conditioning roots (via `prepare_primitive` in `primitive_readout.py`) → carrier span composition → subject span composition → unconditioned overlay composition; `evaluate_model_rate_draws` and `evaluate_request_cdf_draws` are the request-level model readouts. The spine raises `PrimitiveUnavailable` / `CompositionError` on engine refusal; no frame materialisation, no row schema, no diag side-effects, no fallback policy. The Phase 5.5 acceptance gate (outside-in oracle re-run) is still required to close. |
 | Stale identity-carrier comments that say `composed_carrier is None` after zero-edge carrier cutover | Phase 8 or Phase 9, depending on touched code | If in reducer code being debranched, fix during Phase 8. If only residual documentation after deletion, fix during Phase 9 cleanup. No stale comment may remain at final acceptance. |
-| Evidence operator contract: value/support/frontier/midpoint policy | Phase 6 | Contract written in prose before code; explains covered-zero vs absent support and protects the known regression clusters. |
-| Denominator and numerator evidence prefixes | Phase 7 | Row evidence and reducer frontier read the same promoted prefix object; `_CarrierOnlyDenominatorPrefix` / `_RateAttributedSubjectPrefix` stop being authorities for migrated roles. |
-| Identity/active branches inside `_selected_cohort_group_rate_draws` | Phase 8 | Reducer is deleted or reduced to semantics-free `ΣY / ΣX` aggregation over promoted prefix surfaces; no Pop C / Pop D carrier-subject convolution remains outside the promoted plan/core contract. |
+| Evidence operator contract: value/support/frontier/midpoint policy | Phase 6 input | **Done**: contract written in prose before code; explains covered-zero vs absent support and protects the known regression clusters. Phase 6 implementation must treat it as binding input, not work to redo. |
+| Promoted selected-Cohort projection boundary | Phase 6 | One engine bridge evaluates carrier-only denominator mass and carrier⊗subject numerator mass from the same selected root mass. It is not a prefix class, not a row builder, and not a cohort/window router. |
+| Denominator and numerator evidence prefixes | Phase 7 | `_CarrierOnlyDenominatorPrefix` and `_RateAttributedSubjectPrefix` stop being runtime authorities when the row path reads the Phase 6 projection boundary. They are not migrated role-by-role; role-by-role migration is the broken branch shape. |
+| Identity/active/window branches inside `_selected_cohort_group_rate_draws` | Phase 7/8 | Phase 7 removes them from the public row path by replacing the reducer authority. Phase 8 deletes any unreachable residue. No Pop C / Pop D carrier-subject convolution and no window/cohort route split may remain outside the promoted projection boundary. |
 | `_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, `_RateAttributedSubjectPrefix`, and old observed-prefix authorities | Phase 8 | Deleted or demonstrably unreachable as runtime authorities; outside-in oracle remains green. |
 | Dead code and shadow/candidate residue, including `_composed_pair_request_cdf_draws` | Phase 9 | Removed in one cohesive final cleanup after migrated callers are green; grep verifies no old authority remains. |
 | Codebase docs that describe candidate/shadow or old prefix architecture as current | Phase 9 | Maintained docs describe the promoted span architecture; candidate docs are archived or clearly superseded. |
@@ -374,46 +375,93 @@ Acceptance gate:
 - The progress ledger above is updated to mark Phase 5.5 complete.
 - No Phase 6 work may start until this gate is satisfied.
 
-## Phase 6: Evidence Span Design Checkpoint
+## Phase 6: Promoted Selected-Cohort Projection Boundary
 
 **Status**: not started.
 
-Only after Phase 5.5 should evidence-span work start. Do not begin by editing the row projection.
+Detailed implementation authority: [`selected-cohort-projection-cutover-plan.md`](selected-cohort-projection-cutover-plan.md).
+
+Only after Phase 5.5 and the evidence operator contract are accepted should evidence-span implementation start. Do not begin by editing row projection. Do not migrate `_CarrierOnlyDenominatorPrefix` or `_RateAttributedSubjectPrefix` one role at a time. That reproduces the broken branch: two authorities, old prefix classes kept alive, and mode-specific cutover criteria.
+
+Phase 6 builds the missing engine bridge below the row layer: one selected-Cohort projection boundary that evaluates the already-composed carrier and subject spans against real selected root mass. It produces two aligned selected surfaces:
+
+- denominator: carrier-only mass at X, evaluated from the selected root mass;
+- numerator: carrier⊗subject mass at the subject end, evaluated from the same selected root mass.
+
+`window()`, `cohort(A=X)`, and active `cohort(A!=X)` are all data cases of this one boundary. Window and A=X supply an identity carrier and X-rooted root mass. Active cohort supplies a real carrier and A-rooted root mass. The projection boundary does not know or branch on the mode; it only sees root mass plus carrier and subject operator chains.
 
 Deliverables:
 
-- Write the evidence operator contract in prose before code.
-- Explicitly define covered-zero versus absent support.
-- Define how midpoint shift, interpolation correction, source-day-specific evidence, and support frontier enter operator supply.
-- Define how selected A-clock evidence, row evidence, and reducer frontier all read the same prefix object.
+- Define the projection-boundary inputs as existing runtime objects, not new semantic objects: `ResolvedCFRuntime`, selected root mass, horizon, and the composed carrier/subject spans. The boundary may construct per-draw operator chains from spans; it must not read frames, DB rows, parameter files, graph-side evidence fields, or legacy prefix classes.
+- Define selected root mass as a perimeter supply object. Active cohort gets A-rooted root mass from admissible root-window carrier candidates. Window and A=X get X-rooted root mass from the same candidate pool under the identity-carrier data case. The root-mass supplier may branch because it is perimeter admission; the projection boundary may not.
+- Define the observed-evidence kernel supply policy before the projection boundary is used. This is where all legacy numerical placement and quadrature behaviour moves: per-source-day forward-fill, midpoint placement for bucketed source-day mass, the higher-order interpolation / curvature correction currently embedded in `_interpolated_rate_at`, source-day-specific versus age-only local-rate surfaces, and the right-edge cumulative-to-density conversion. None of these policies may live inside the projection boundary or row reducer.
+- Evaluate denominator and numerator from the same root mass. Denominator is the carrier-only readout. Numerator is the carrier plus subject readout. Both must propagate value, support, and exposure through the same operator sequence. Division into `Y / X` happens only after selected cohorts have been accumulated.
+- Preserve the current row output during Phase 6. The new boundary is built and tested as an engine surface, then optionally compared in diagnostics. It is not authoritative for public rows until Phase 7.
+- Keep real observation-mask plumbing at the primitive/operator supply boundary. Covered-zero versus absent is encoded before convolution as mask data. The projection boundary must not inspect `k`, row presence, or support state to decide behaviour.
+- Prove both mode families inside the same focused test suite before any row cutover. Tests must include active cohort, A=X, and window fixtures in the same harness and assert that they differ by root mass and primitive conditioning clocks, not by projection code.
+- Prove topology generality before row cutover: serial, multi-hop, branch/join, coincident siblings, non-latent, deterministic, latent, and zero-edge identity must all use the same projection boundary.
+- Prove the density/cumulative boundary: every internal operator moves densities; cumulative projection happens at readout. No terminal-edge special case, no per-hop cumulative carry.
+- Prove value/support/exposure semantics under unit mask and non-unit mask. Under unit mask, support follows value and exposure follows unit-reach timing. Under absent masks, support and exposure drop while value may still carry model-imputed mass. Under covered-zero, value/support are zero but exposure remains positive.
+
+Implementation atoms:
+
+1. **Root-mass supply atom** — isolate selected root-mass construction from projection. Acceptance: active, A=X, and window requests all produce root mass through one perimeter supplier; the supplier records provenance for the selected root count source; no row output changes.
+2. **Observed-evidence kernel supply atom** — migrate the legacy numerical evidence-placement policy into operator supply. Acceptance: focused tests prove that per-source-day forward-fill, midpoint placement, source-day-specific versus age-only local-rate surfaces, and the `_interpolated_rate_at` curvature/quadrature correction are reproduced by supplied kernels before any projection-boundary row comparison. The projection boundary remains a pure evaluator.
+3. **Projection-boundary atom** — add the mode-blind denominator/numerator projection boundary over composed carrier/subject spans, selected root mass, and supplied observed-evidence kernels. Acceptance: focused tests prove denominator and numerator surfaces for identity carrier and active carrier without touching row projection.
+4. **Three-stream atom** — carry value, support, and exposure through the projection boundary. Acceptance: unit-mask, absent-mask, covered-zero, and mixed-mask tests pass; coverage is derived from support/value and exposure is exposed separately.
+5. **Topology atom** — prove the projection boundary with multi-hop, branch/join, coincident sibling, deterministic, non-latent, latent, and zero-edge identity fixtures. Acceptance: no projection code branches on these cases.
+6. **Cross-mode algebra atom** — prove `window()`, `cohort(A=X)`, and active `cohort(A!=X)` in one focused suite. Acceptance: the test harness asserts one projection function is used; mode differences enter only via root mass, carrier identity, and primitive conditioning clocks.
+7. **No-change integration atom** — wire optional diagnostics comparing the Phase 6 projection boundary to current row outputs without making it authoritative. Acceptance: outside-in oracle remains green; diagnostic deltas are recorded for review; no production old/new branch survives outside diagnostic mode.
 
 Acceptance gate:
 
-- Reviewers can point to one contract section for value, support, coverage, frontier, and midpoint policy.
-- The contract explains how the previous 14-failure clusters are protected.
+- One projection boundary produces denominator and numerator value/support/exposure surfaces for active, A=X, and window cases.
+- Phase 6 has not introduced any mode-specific reducer implementation, any new prefix class, or any row-output authority.
+- Legacy numerical evidence-placement policy is represented in the supplied kernels, not in the projection boundary: midpoint placement, source-day forward-fill, source-day-specific / age-only local-rate selection, and curvature/quadrature interpolation all have focused tests.
+- Focused tests prove both invariant families: cohort mass conservation and window local-rate reproduction. They are acceptance cases for one boundary, not separate implementations.
+- Focused tests prove topology generality and covered-zero / absent semantics.
+- The row path still uses the legacy reducer at phase close; outside-in oracle remains green. Any diagnostic comparison is diagnostic-only and removable.
+- No new xfail, no loosened tolerance, no fixture or DSL weakening.
 - The progress ledger above is updated to mark Phase 6 complete.
-- No Phase 7 evidence code may start until this gate is satisfied.
+- No Phase 7 row cutover may start until this gate is satisfied.
 
-## Phase 7: Cut Over Evidence Prefixes
+## Phase 7: Row Reducer Cutover — All Modes Together
 
 **Status**: not started.
 
-Replace evidence prefix authority one role at a time.
+Detailed implementation authority: [`selected-cohort-projection-cutover-plan.md`](selected-cohort-projection-cutover-plan.md).
 
-Order:
+Phase 7 makes the Phase 6 projection boundary authoritative for public rows. It is a single row cutover, not a cohort cutover followed by a window cutover. If active, A=X, and window cannot move together through the same projection boundary, Phase 6 is incomplete and this phase must stop.
 
-1. Denominator evidence prefix.
-2. Numerator evidence prefix.
-3. Coverage/support projection.
-4. Frontier state.
-5. Reducer frozen-prefix inputs.
+Deliverables:
+
+- Replace the public E+F selected-Cohort reducer draw source with the Phase 6 projection boundary for every mode in one row path. The selected rate is still `ΣY / ΣX`; only the source of X and Y changes.
+- Turn `_selected_cohort_group_rate_draws` into a temporary adapter over the Phase 6 projection boundary or bypass it. It must not retain Pop D / Pop C arithmetic, carrier residual arithmetic, identity-carrier arithmetic, or mode branching as public authority.
+- Convert `SelectedAClockEvidence` into an observation/frontier/display adapter over the promoted surfaces. It may preserve the row schema, but it must not compute denominator amplitude, numerator amplitude, or coverage from independent prefix arithmetic.
+- Retire `_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, and `_RateAttributedSubjectPrefix` as runtime authorities. They may remain as diagnostic comparison inputs during one atom only; the phase cannot close while row output depends on them.
+- Move real observation masks into primitive/operator supply before coverage becomes public authority. The row layer consumes coverage/exposure from the promoted surfaces; it does not calculate support from placement-share side channels.
+- Preserve display policy while changing authority. E, F, and E+F rendering semantics stay as currently specified. Any switch from raw rate to coverage-blended rate is allowed only after the promoted coverage surface is authoritative and signed off.
+- Keep public scalar and row semantics separated. `p_infinity_*` remains a runtime public moment; selected-Cohort row midpoint/fan remains a group trajectory from selected numerator and denominator surfaces. Do not force convergence by projection-time patching.
+
+Implementation atoms:
+
+1. **Shadow comparison atom** — compare current row reducer output against the Phase 6 projection boundary across active, A=X, and window fixtures. Acceptance: differences are classified by contract invariant, not patched in the row layer.
+2. **Selected draw-source atom** — switch E+F midpoint/fan/projected X/Y to the Phase 6 selected projection for all modes. Acceptance: outside-in oracle remains green or failures identify missing Phase 6 semantics; no cohort-only or window-only production switch is allowed.
+3. **Evidence cell authority atom** — make evidence-named row fields and frontier consume promoted value/support/exposure surfaces through the existing row schema. Acceptance: `SelectedAClockEvidence` is a schema adapter only; it does not own amplitude arithmetic.
+4. **Coverage authority atom** — make row coverage, evidence_x_coverage, evidence_y_coverage, and exposure diagnostics read from the promoted support/exposure streams. Acceptance: covered-zero and absent remain distinguishable; alpha-on-blobs behaviour is unchanged.
+5. **Legacy authority isolation atom** — make `_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, `_RateAttributedSubjectPrefix`, and old observed-prefix helpers unreachable from public row output. Acceptance: temporary comparison hooks are diagnostic-only.
+6. **Cross-mode public gate atom** — run the outside-in gate for active, A=X, window, single-hop, multi-hop, branch/join, and selected-evidence cases. Acceptance: all pass without fixture weakening; no strict xfail that this phase was meant to flip remains xfailed.
 
 Acceptance gate:
 
-- Row evidence and reducer frontier read the same promoted prefix object.
-- `SelectedAClockEvidence.aggregate_by_tau` no longer owns amplitude if a promoted prefix exists.
-- `_CarrierOnlyDenominatorPrefix` and `_RateAttributedSubjectPrefix` are no longer authorities for migrated roles.
-- Outside-in oracle gate remains green after each role.
+- Public row output for active, A=X, and window modes is produced by the same Phase 6 projection boundary.
+- There is no cohort-only or window-only row reducer implementation and no central `if window` / `if cohort` projection path.
+- `_selected_cohort_group_rate_draws` no longer owns Pop D / Pop C, carrier residual, identity-carrier, or subject progression arithmetic.
+- `SelectedAClockEvidence` no longer owns denominator amplitude, numerator amplitude, or coverage authority; it is a schema/display adapter over promoted surfaces.
+- `_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, `_RateAttributedSubjectPrefix`, and old observed-prefix helpers are no longer public row authorities.
+- Cohort mass conservation tests, window local-rate reproduction tests, and paired finite-τ divergence tests all pass against the public row path.
+- Outside-in oracle gate remains green after every atom and at phase close.
+- No new xfail, no loosened tolerance, no fixture or DSL weakening.
 - The progress ledger above is updated to mark Phase 7 complete.
 - No Phase 8 deletion may start until this gate is satisfied.
 

@@ -183,6 +183,21 @@ The modelled probability that a user takes this edge, often inferred from n/k pl
 An assumption about p or latency **before** seeing current data (e.g. “we think this edge is ~10% likely”).  
 Useful when current data is thin or noisy.
 
+**Coverage**
+A 0–1 measure, per cohort and per τ (cohort age), of how much of the model's projected wavefront we have direct snapshot observations for. `coverage = 1` means every cell along every contributing path has an observed row; `coverage = 0` means none do; values in between mean partial — some paths are fully observed, others have gaps. The chart uses coverage to fade evidence-line markers, decide when to dash (epoch B), and weight empirical contributions in the adjusted rate.
+
+**Exposure**
+A per‑cohort, per‑τ admissibility signal. `exposure > 0` means at least one wavefront path to this cohort/τ cell reached observed snapshot data; `exposure = 0` means no observed path exists. Used by the analysis runner to decide whether a cohort contributes anything to a chart row at that τ — cohorts with `exposure = 0` are excluded from both empirical sums and the rate calculation at that τ.
+
+**Frontier (per cohort)**
+The largest τ at which a cohort's chain coverage is still positive. Past the frontier, observation has run out for this cohort and the evidence line is dashed (epoch B). Different cohorts have different frontiers; the chart-row frontier is a reduction across them.
+
+**Strict evidence (E‑mode display)**
+The unadjusted empirical readout — `evidence_x`, `evidence_y`, `rate` — summed across admissible cohorts at each τ with no scaling. Falls naturally with sparsity past the frontier; the chart shows this in E mode as the literal observed signal.
+
+**Adjusted evidence (E+F‑mode display)**
+The empirical readout with inverse-probability weighting (IPW) applied per cohort to correct for snapshot sparsity. Each admissible cohort's contribution is divided by its coverage before being summed. The chart shows the adjusted curve alongside the unconditioned model curve in E+F mode; cohorts past their frontier drop out via admissibility, so the adjusted curve thins toward zero while the model continues. Supersedes the legacy `rate_blended` linear blend.
+
 ---
 
 ## Latency, Survival & Time‑to‑Convert
@@ -294,7 +309,25 @@ Cumulative onset dead-time along the path from the anchor node to this edge. Com
 The `model_vars` entry currently selected by `model_source_preference` as the active model for an edge. Its values are "promoted" to `p.mean`, `p.stdev`, and latency parameters. The promotion resolver picks from available candidates (Bayesian posterior → analytic MLE → manual override → prior default) based on the preference setting.
 
 **Quality tier**
-A classification of a Bayesian fit result: **good** (converged, adequate sample), **fair**, **poor**, or **very poor** (failed convergence or insufficient effective sample size). Derived from MCMC diagnostics (Rhat, ESS) and reported in the Bayesian Posterior Card, operations toast, and session log. Quality tiers gate warm-start reuse — only good/fair posteriors are eligible.
+A classification of a Bayesian fit result: **good** (converged, adequate sample), **fair**, **poor**, or **very poor** (failed convergence or insufficient effective sample size). Derived from MCMC diagnostics (R̂, ESS) and reported in the Bayesian Posterior Card, operations toast, and session log. Quality tiers gate warm-start reuse — only good/fair posteriors are eligible.
+
+**ESS (Effective Sample Size)**
+Diagnostic that estimates how many *independent* samples the MCMC chain effectively produced. A 4000-sample chain with heavy autocorrelation might have ESS ~200. Low ESS means the chain is mixing slowly — posterior summaries (means, credible intervals) are noisier than the raw sample count suggests. Used as part of the quality tier; combined with R̂.
+
+**R̂ (Rhat, Gelman-Rubin)**
+Convergence diagnostic that compares variance within each MCMC chain to variance between chains. `R̂ ≈ 1.0` means chains agree; `R̂ > 1.01` flags non-convergence. Used as part of the quality tier.
+
+**PPC (Posterior Predictive Check)**
+Calibration check: simulate replicated data from the fitted posterior and compare to actual observed data. If the model is well-calibrated, observed quantities should lie near the centre of their posterior-predictive distributions. Surfaced in model adequacy summaries alongside LOO-ELPD.
+
+**EWMA (Exponentially Weighted Moving Average)**
+A recency-biased average that weights recent observations more heavily than older ones, with exponentially decaying weights. Used in snapshot smoothing and per-window evidence weighting where the most recent data should drive the estimate more than historical data.
+
+**IPW (Inverse Probability Weighting)**
+A statistical correction for missing or sparse data: each observed contribution is scaled by `1 / Pr(observed)` to estimate what the full-population quantity would have been. In DAGNet, used to derive `evidence_*_adjusted` from `evidence_*_strict / coverage` per cohort. Valid under MCAR (see below); unbiased in expectation, with variance that grows as coverage approaches zero — which is communicated by epoch B dashing on the chart.
+
+**MCAR (Missing Completely At Random)**
+The assumption that missing data is uncorrelated with the quantity being measured. In DAGNet, sparsity in snapshot observations is driven by retrieval timing and capture infrastructure, not by cohort or edge conversion behaviour, so MCAR holds. Under MCAR, the IPW estimator is unbiased — `evidence_*_adjusted` is the correct sparsity-corrected reading of `evidence_*_strict`.
 
 **LOO-ELPD (Leave-One-Out Expected Log Predictive Density)**
 A model adequacy score computed per edge after Bayesian fitting. Measures how well the fitted model predicts held-out observations compared to an analytic null baseline. A positive ΔELPD means the Bayesian model improves on point estimates; negative means it does not. Surfaced in the Forecast Quality overlay, Edge Info Model tab, and PosteriorIndicator popover. Uses Pareto-smoothed importance sampling (PSIS-LOO) via ArviZ.

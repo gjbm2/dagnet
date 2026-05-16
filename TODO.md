@@ -19,6 +19,7 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
 **Spike B3** work to use cohort() data properly
 - is epist. or predict. banding right on cohortmaturity curve? ...in f mode? in e+f mode?? under degernerate subset -> global case???
 - poss. issue with t95 roundtrip bloating.../ horizon llogic
+- **CF conditioner dispersion semantics:** check that the way we use dispersions in the CF conditioner is mathematically valid. Ideally carry `kappa` through directly rather than inferring from `sd.pred` bands, then double-check the conditioning maths and band semantics.
 
 **Nightly fetch**
 - **E.** Problematically slow — [daily-automation-audit 28-Feb-26](docs/current/daily-automation-audit-28-feb-26.md), [programme P2.11](docs/current/project-bayes/programme.md) — **needs instrumentation & optimisation**

@@ -117,14 +117,17 @@ historical. Resolve them under this folder:
 
 ## Picking this up later
 
-1. Read [generalised-span-readout-candidate-plan.md](generalised-span-readout-candidate-plan.md)
-   first. Its progress section names the current candidate layers and the
-   remaining production adapter work; its "Current Technical State" and
-   "Next Steps" sections are the hand-off point.
-2. Run the isolated candidate harness before editing production code:
-   `python -m unittest discover -s docs/current/project-generalise -p 'test_*candidate.py' -v`.
-3. Start production work with a model-only shadow harness. Do not start with
-   evidence rows; model curves are the proven surface.
+1. Read [model-first-strict-span-cutover-plan-13-May-26.md](model-first-strict-span-cutover-plan-13-May-26.md)
+   first for the strict execution sequence, then
+   [selected-cohort-projection-cutover-plan.md](selected-cohort-projection-cutover-plan.md)
+   for the remaining selected-Cohort row cutover. The latter is the clean
+   implementation plan for moving from the promoted spine to a completed
+   refactored row flow without recreating mode-sliced reducer branches.
+2. Treat the candidate artefacts below as historical context. The promoted
+   production core now lives under `graph-editor/lib/runner/`; do not resume
+   work from the candidate files.
+3. Start production work from the selected-Cohort cutover plan's first step:
+   freeze the current numerical evidence policy before moving row authority.
 4. Re-read the original design + implementation plan + y-deficit investigation
    for historical context and failure signatures.
 5. Diff `cohort_forecast_v3.generalisation-attempt.py` against the current
