@@ -23,7 +23,7 @@
       "t": 3.0, "mu": 1.0986122886681098, "sigma": 0.8, "expected": 0.5, "tol": 1e-8
     },
     {
-      "_comment": "non-median point (t=5, precomputed from scipy)",
+      "_comment": "non-median point (t=5, precomputed reference value)",
       "t": 5.0, "mu": 1.0986122886681098, "sigma": 0.8, "expected": 0.7384362945, "tol": 1e-6
     }
   ],

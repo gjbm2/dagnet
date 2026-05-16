@@ -51,7 +51,7 @@ describe('lag distribution maths (golden)', () => {
 
   it('logNormalCDF returns precomputed value at non-median point (t=5)', () => {
     // Canonical params: mu = ln(3), sigma = 0.8
-    // Precomputed using scipy: lognorm.cdf(5, s=0.8, scale=3) ≈ 0.7384362945
+    // Precomputed reference: lognormal CDF at t=5, mu=ln(3), sigma=0.8.
     const mu = Math.log(3);
     const sigma = 0.8;
     // Tolerance: 6 decimal places (tight enough to catch drift, realistic for floating point)

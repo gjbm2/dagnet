@@ -1090,7 +1090,7 @@ def compute_forecast_trajectory(
         from_node_arrival: upstream carrier (cohort mode only).
         num_draws: MC draw count.
     """
-    from scipy.special import logit as _logit, expit as _expit
+    from .numpy_stats import expit as _expit, logit as _logit
 
     if runtime_bundle is not None:
         resolved = runtime_bundle.resolved_params or resolved

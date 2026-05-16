@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import sys as _sys
 from dataclasses import dataclass, field
+from datetime import date as _date, timedelta as _timedelta
 from pathlib import Path as _Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -411,20 +412,18 @@ def _compose_draws(
     #   exposure_shape(s,τ) = Δcdf_s(τ)               (unit-reach PMF;
     #                                                  value without
     #                                                  the p factor)
-    #   support(s, τ)       = value(s, τ) × mask(s, τ)
-    #   exposure(s, τ)      = exposure_shape(s, τ) × mask(s, τ)
-    # The mask defaults to all-ones here (the fully-observed primitive
-    # case from Phase 6 §4.8 acceptance); real per-cell masks are
-    # plumbed by Phase 7 evidence binding upstream of the composer.
-    # Under the default mask, support kernels equal value kernels and
-    # exposure kernels equal the unit-reach PMF.
+    # Support and exposure are source-day-aware streams. Their masks are
+    # selected during DP propagation by the actual source day reached by
+    # the wavefront, preserving Phase 6 §4.7's (edge, source_day, age)
+    # row-presence contract.
     p_draws_by_edge: Dict[str, np.ndarray] = {}
     value_kernels_by_edge: Dict[str, np.ndarray] = {}
-    support_kernels_by_edge: Dict[str, np.ndarray] = {}
-    exposure_kernels_by_edge: Dict[str, np.ndarray] = {}
+    exposure_shapes_by_edge: Dict[str, np.ndarray] = {}
+    primitive_by_edge: Dict[str, ConditionedTransitionPrimitive] = {}
 
     for ce, primitive in edge_primitives:
         edge_key = ce.edge_key
+        primitive_by_edge[edge_key] = primitive
         p_draws = primitive.probability_draws()
         if p_draws.shape[0] != S:
             raise CompositionError(
@@ -465,18 +464,8 @@ def _compose_draws(
             )
             exposure_shape = pmf / safe_row_sums
 
-        value_kernel = exposure_shape * p_draws[:, None]
-        # Default mask is all-ones (fully observed); Phase 7 plumbs real
-        # masks here. The two derived streams are uniform expressions of
-        # mask-multiplied kernels; under unit mask they collapse to the
-        # value and exposure_shape arrays directly.
-        mask = np.ones((S, T), dtype=np.float64)
-        support_kernel = value_kernel * mask
-        exposure_kernel = exposure_shape * mask
-
-        value_kernels_by_edge[edge_key] = value_kernel
-        support_kernels_by_edge[edge_key] = support_kernel
-        exposure_kernels_by_edge[edge_key] = exposure_kernel
+        value_kernels_by_edge[edge_key] = exposure_shape * p_draws[:, None]
+        exposure_shapes_by_edge[edge_key] = exposure_shape
 
     # Per-node and per-edge `(S, T)` stacks for each of the three
     # streams. Stacks are pre-initialised so the per-draw assignment
@@ -502,15 +491,6 @@ def _compose_draws(
             edge_key: value_kernels_by_edge[edge_key][s, :]
             for edge_key in value_kernels_by_edge
         }
-        support_densities_s = {
-            edge_key: support_kernels_by_edge[edge_key][s, :]
-            for edge_key in support_kernels_by_edge
-        }
-        exposure_densities_s = {
-            edge_key: exposure_kernels_by_edge[edge_key][s, :]
-            for edge_key in exposure_kernels_by_edge
-        }
-
         # Per-draw expected reach decouples the asymptotic span
         # probability from the finite horizon T. Sibling edges with the
         # same endpoint pair contribute additively (the cohort's reach
@@ -524,12 +504,24 @@ def _compose_draws(
             )
         expected_reach_s = _topological_reach(topo, edge_probs_s_by_pair)
 
-        # Run the same trace DP three times, one per stream. The
-        # topology and convolution algebra are identical; only the
-        # per-edge kernel changes.
+        # Run value through the standard DP. Support and exposure use the
+        # same topology, but select row-presence masks by source day at
+        # each concrete edge before applying the edge kernel.
         trace_value = _run_dp_density_trace(topo, value_densities_s, T)
-        trace_support = _run_dp_density_trace(topo, support_densities_s, T)
-        trace_exposure = _run_dp_density_trace(topo, exposure_densities_s, T)
+        trace_support = _run_masked_dp_density_trace(
+            topo=topo,
+            base_kernels_by_edge=value_kernels_by_edge,
+            primitive_by_edge=primitive_by_edge,
+            draw_index=s,
+            T=T,
+        )
+        trace_exposure = _run_masked_dp_density_trace(
+            topo=topo,
+            base_kernels_by_edge=exposure_shapes_by_edge,
+            primitive_by_edge=primitive_by_edge,
+            draw_index=s,
+            T=T,
+        )
 
         for node_id, density in trace_value.node_density_by_node.items():
             node_density_draws[node_id][s, :] = density
@@ -592,6 +584,140 @@ def _compose_draws(
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────
+
+
+def _run_masked_dp_density_trace(
+    *,
+    topo: SpanTopology,
+    base_kernels_by_edge: Mapping[str, np.ndarray],
+    primitive_by_edge: Mapping[str, ConditionedTransitionPrimitive],
+    draw_index: int,
+    T: int,
+) -> SpanDPTrace:
+    """Forward DP where each edge kernel is masked by source day.
+
+    This is the support/exposure sibling of `_run_dp_density_trace`.
+    The value stream can precompute one edge kernel because it is defined
+    for every source day. Masked streams cannot: row presence is keyed by
+    `(edge, source_day, age)`, so the edge kernel selected for a wavefront
+    bucket depends on the source day that bucket reached the edge source.
+    """
+    node_density: Dict[str, np.ndarray] = {
+        node: np.zeros(T, dtype=np.float64) for node in topo.on_path
+    }
+    node_density[topo.x_node_id][0] = 1.0
+    edge_contribution: Dict[str, np.ndarray] = {}
+
+    for node in topo.topo_order:
+        for ce in topo.incoming_concrete_edges.get(node, ()):
+            primitive = primitive_by_edge[ce.edge_key]
+            source_density = node_density[ce.from_id]
+            contribution = np.zeros(T, dtype=np.float64)
+            for source_index in np.flatnonzero(source_density):
+                source_index_int = int(source_index)
+                source_mass = float(source_density[source_index_int])
+                source_day = _source_day_for_index(primitive, source_index_int)
+                mask = _mask_for_source_day(
+                    primitive=primitive,
+                    source_day=source_day,
+                    draw_index=draw_index,
+                    T=T,
+                    edge_key=ce.edge_key,
+                )
+                kernel = (
+                    base_kernels_by_edge[ce.edge_key][draw_index, :] * mask
+                )
+                remaining = T - source_index_int
+                contribution[source_index_int:] += (
+                    source_mass * kernel[:remaining]
+                )
+            edge_contribution[ce.edge_key] = contribution
+            node_density[node] += contribution
+
+    return SpanDPTrace(
+        node_density_by_node=node_density,
+        edge_contribution_by_edge=edge_contribution,
+    )
+
+
+def _source_day_for_index(
+    primitive: ConditionedTransitionPrimitive,
+    day_index: int,
+) -> str:
+    """Map the composer's τ index to a source-day key for masks.
+
+    When row masks exist, the support's first source day defines the
+    row-local calendar origin. This matches the empirical operator and
+    the existing Stage 2 fixtures, where τ=0 means "first admitted
+    source day" rather than always `scope.date_from`.
+    """
+    if primitive.observation_mask_draws_by_source_day:
+        origin = min(
+            _date.fromisoformat(str(day)[:10])
+            for day in primitive.observation_mask_draws_by_source_day
+        )
+    else:
+        origin = _date.fromisoformat(str(primitive.scope.date_from)[:10])
+    return (origin + _timedelta(days=int(day_index))).isoformat()
+
+
+def _mask_for_source_day(
+    *,
+    primitive: ConditionedTransitionPrimitive,
+    source_day: str,
+    draw_index: int,
+    T: int,
+    edge_key: str,
+) -> np.ndarray:
+    """Read the row-presence mask for one source day and draw.
+
+    `None` means an unconditioned overlay bypassed evidence binding, so
+    the mask is all ones. A non-empty source-day map is authoritative:
+    missing source days are absent, not aggregate-age observed. When no
+    source-day map exists (legacy/manual primitive), fall back to the
+    aggregate mask for compatibility.
+    """
+    if primitive.observation_mask_draws is None:
+        return np.ones(T, dtype=np.float64)
+
+    masks_by_day = primitive.observation_mask_draws_by_source_day
+    raw_mask = masks_by_day.get(source_day) if masks_by_day else None
+    if raw_mask is None and masks_by_day:
+        topology_case = (
+            primitive.weighted_evidence.arrival_weight_summary.get('topology_case')
+            if primitive.weighted_evidence is not None
+            else None
+        )
+        if topology_case != 'identity':
+            return np.zeros(T, dtype=np.float64)
+    if raw_mask is None:
+        raw_mask = primitive.observation_mask_draws
+    if raw_mask.ndim != 2 or raw_mask.shape[0] != primitive.draw_count:
+        raise CompositionError(
+            f"primitive {edge_key!r} observation mask has shape "
+            f"{raw_mask.shape}; expected ({primitive.draw_count}, *)"
+        )
+    return _align_mask_grid(raw_mask, T)[draw_index, :]
+
+
+def _align_mask_grid(mask_arr: np.ndarray, T: int) -> np.ndarray:
+    """Pad masks with zeros or truncate to length T.
+
+    Masks are row-presence indicators, not CDFs. A present final cell
+    does not imply future cells are present, so CDF saturation padding is
+    forbidden here.
+    """
+    if mask_arr.ndim != 2:
+        raise ValueError(
+            f"_align_mask_grid expects 2-D input; got shape {mask_arr.shape}"
+        )
+    n_rows, T_p = mask_arr.shape
+    if T_p == T:
+        return mask_arr
+    if T_p > T:
+        return mask_arr[:, :T]
+    pad = np.zeros((n_rows, T - T_p), dtype=mask_arr.dtype)
+    return np.concatenate([mask_arr, pad], axis=1)
 
 
 def _align_cdf_grid(cdf_arr: np.ndarray, T: int) -> np.ndarray:

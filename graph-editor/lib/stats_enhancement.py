@@ -9,15 +9,10 @@ Lightweight operations (inverse-variance weighting) are handled in TypeScript.
 
 from typing import Dict, List, Any
 
-# Optional imports for heavy computations
-try:
-    import numpy as np
-    from scipy import stats
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
-    # Fallback: use basic math for simple operations
-    import math
+import math
+
+import numpy as np
+from runner.numpy_stats import beta_interval, normal_cdf
 
 
 def enhance_aggregation(
@@ -64,9 +59,6 @@ def _enhance_mcmc(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     Uses PyMC or similar for MCMC sampling to estimate posterior distribution.
     For now, uses beta distribution (Bayesian conjugate prior).
     """
-    if not HAS_SCIPY:
-        raise ImportError("scipy is required for MCMC enhancement. Install with: pip install scipy")
-    
     n = raw_data['n']
     k = raw_data['k']
     
@@ -99,7 +91,7 @@ def _enhance_mcmc(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     stdev = math.sqrt(variance)
     
     # 95% confidence interval, rounded to 3 decimal places
-    ci_lower, ci_upper = stats.beta.interval(0.95, alpha, beta)
+    ci_lower, ci_upper = beta_interval(0.95, alpha, beta)
     
     return {
         'method': 'mcmc',
@@ -136,9 +128,6 @@ def _enhance_trend_aware(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     
     Detects trends in daily data and adjusts mean accordingly.
     """
-    if not HAS_SCIPY:
-        raise ImportError("scipy is required for trend-aware enhancement. Install with: pip install scipy")
-    
     daily_data = raw_data.get('raw_data', [])
     
     if len(daily_data) < 2:
@@ -178,8 +167,26 @@ def _enhance_trend_aware(raw_data: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
     
-    # Linear regression to detect trend
-    slope, intercept, r_value, p_value, std_err = stats.linregress(days, p_values)
+    # Linear regression to detect trend. Significance uses a normal
+    # approximation; this module must remain dependency-light for Vercel.
+    x = np.asarray(days, dtype=np.float64)
+    y = np.asarray(p_values, dtype=np.float64)
+    x_mean = float(np.mean(x))
+    y_mean = float(np.mean(y))
+    ss_x = float(np.sum((x - x_mean) ** 2))
+    if ss_x <= 0.0:
+        slope = 0.0
+        p_value = 1.0
+    else:
+        slope = float(np.sum((x - x_mean) * (y - y_mean)) / ss_x)
+        intercept = y_mean - slope * x_mean
+        residuals = y - (intercept + slope * x)
+        if len(y) > 2:
+            stderr = math.sqrt(float(np.sum(residuals ** 2)) / (len(y) - 2) / ss_x)
+            z = abs(slope / stderr) if stderr > 0.0 else 0.0
+            p_value = float(2.0 * (1.0 - normal_cdf(z))) if z > 0.0 else 1.0
+        else:
+            p_value = 1.0
     
     # Determine trend direction
     if abs(slope) < 0.001:  # Essentially flat
@@ -222,9 +229,6 @@ def _enhance_robust(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     
     Uses median-based methods and outlier removal.
     """
-    if not HAS_SCIPY:
-        raise ImportError("numpy is required for robust enhancement. Install with: pip install numpy")
-    
     daily_data = raw_data.get('raw_data', [])
     
     if len(daily_data) == 0:

@@ -33,6 +33,7 @@ class TimingTransitionPrimitive:
     mu_sd: float = 0.0
     sigma_sd: float = 0.0
     onset_sd: float = 0.0
+    onset_mu_corr: float = 0.0
     source: str = 'prior_synthetic'
 
 
@@ -393,6 +394,7 @@ def resolve_timing_transitions_from_graph(
                 lat.onset_sd,
                 label=f'latency onset_sd for {from_id}->{to_id}',
             ),
+            onset_mu_corr=float(getattr(lat, 'onset_mu_corr', 0.0) or 0.0),
             source=(
                 f'prior_{resolved.source}'
                 if resolved.source else 'prior_unresolved'

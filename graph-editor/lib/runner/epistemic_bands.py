@@ -80,10 +80,10 @@ def _hdi_from_beta(alpha: float, beta: float, hdi_level: float) -> tuple[float, 
     """Equal-tailed interval from Beta(alpha, beta). Good enough for display."""
     if alpha <= 0 or beta <= 0:
         return (0.0, 0.0)
-    from scipy.stats import beta as _beta_dist
+    from .numpy_stats import beta_ppf
     tail = (1.0 - hdi_level) / 2.0
-    lo = float(_beta_dist.ppf(tail, alpha, beta))
-    hi = float(_beta_dist.ppf(1.0 - tail, alpha, beta))
+    lo = float(beta_ppf(tail, alpha, beta))
+    hi = float(beta_ppf(1.0 - tail, alpha, beta))
     return (lo, hi)
 
 

@@ -981,7 +981,7 @@ def compute_cohort_maturity_rows(
         # parameters.  Drift is on transformed (unconstrained) scales
         # so that p stays in (0,1), sigma stays positive, etc.
         # Drift SD = sqrt(DRIFT_FRACTION × posterior_var_on_transformed_scale).
-        from scipy.special import logit as _logit, expit as _expit
+        from .numpy_stats import expit as _expit, logit as _logit
 
         DRIFT_FRACTION = edge_params.get('cohort_drift_fraction', 0.20)
 

@@ -624,7 +624,7 @@ def build_closed_form_beta_rate_surface(
     band_levels: Optional[List[float]] = None,
 ) -> Optional[ClosedFormBetaRateSurface]:
     """Return the shared doc-57 Beta surface for degraded rate outputs."""
-    from scipy.stats import beta as _beta_dist
+    from .numpy_stats import beta_ppf
 
     alpha_val = max(float(alpha or 0.0), 0.0)
     beta_val = max(float(beta or 0.0), 0.0)
@@ -646,8 +646,8 @@ def build_closed_form_beta_rate_surface(
     )
     band_lookup = {
         str(int(level * 100)): [
-            float(_beta_dist.ppf((1.0 - level) / 2.0, alpha_val, beta_val)),
-            float(_beta_dist.ppf((1.0 + level) / 2.0, alpha_val, beta_val)),
+            float(beta_ppf((1.0 - level) / 2.0, alpha_val, beta_val)),
+            float(beta_ppf((1.0 + level) / 2.0, alpha_val, beta_val)),
         ]
         for level in requested_levels
     }

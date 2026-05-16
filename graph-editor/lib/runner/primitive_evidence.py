@@ -57,6 +57,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Dict, Optional, Tuple
 
+import numpy as np
+
 from evidence_merge import (
     EvidenceCandidate,
     EvidenceRole,
@@ -250,22 +252,43 @@ def bind_primitive_evidence(
 
     raw = merge_evidence_candidates(evidence_scope, list(candidates))
 
+    S = int(arrival_weights.draw_count)
     rows: list[WeightedEvidenceRow] = []
     rejected = 0
+    n_total_draws = np.zeros(S, dtype=np.float64)
+    k_total_draws = np.zeros(S, dtype=np.float64)
     for point in raw.points:
         observed = point.candidate.coordinate.observed_date
         weight = arrival_weights.weight_on(observed)
-        if weight <= 0.0:
+        weight_draws = arrival_weights.weight_draws_on(observed)
+        # Admit a row when EITHER the scalar mean weight is positive OR
+        # any per-draw weight is positive (some draws may place mass on
+        # this day even when the marginal mean rounds to zero). The
+        # admission test is on the union of the two surfaces so a row
+        # whose conditional per-draw mass is non-zero under some draw
+        # still feeds the per-draw likelihood. The off-clock reject
+        # path stays at the perimeter — never inside conditioning.
+        any_per_draw = bool(weight_draws.size and np.any(weight_draws > 0.0))
+        if weight <= 0.0 and not any_per_draw:
             rejected += 1
             continue
+        n_w = float(point.n) * float(weight)
+        k_w = float(point.k) * float(weight)
+        n_w_draws = float(point.n) * weight_draws
+        k_w_draws = float(point.k) * weight_draws
+        n_total_draws += n_w_draws
+        k_total_draws += k_w_draws
         rows.append(WeightedEvidenceRow(
             observed_date=observed,
             retrieved_at=point.candidate.coordinate.retrieved_at,
             n=int(point.n),
             k=int(point.k),
             arrival_weight=float(weight),
-            n_weighted=float(point.n) * float(weight),
-            k_weighted=float(point.k) * float(weight),
+            n_weighted=n_w,
+            k_weighted=k_w,
+            arrival_weight_draws=weight_draws,
+            n_weighted_draws=n_w_draws,
+            k_weighted_draws=k_w_draws,
             root_day_shares=dict(arrival_weights.root_day_shares_on(observed)),
         ))
 
@@ -274,6 +297,9 @@ def bind_primitive_evidence(
     weighted = WeightedPrimitiveEvidenceView(
         n_weighted_total=n_total,
         k_weighted_total=k_total,
+        n_weighted_total_draws=n_total_draws,
+        k_weighted_total_draws=k_total_draws,
+        draw_count=S,
         rows=tuple(rows),
         arrival_weight_summary={
             'topology_case': arrival_weights.provenance.topology_case,

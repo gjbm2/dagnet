@@ -145,8 +145,15 @@ class TestGracefulDegradation:
         # Model chosen so t95 ~ 2 days from anchor_to (exp(0 + 0.1 * Φ⁻¹(0.95)) ≈ 1.18 → ceil=2).
         # That should produce one synthetic day beyond the last real snapshot_date (2-Oct-25 → 3-Oct-25).
         graph = {
+            "nodes": [
+                {"uuid": "u-a", "id": "A"},
+                {"uuid": "u-b", "id": "B"},
+            ],
             "edges": [{
                 "uuid": "e1",
+                "edge_id": "e1",
+                "from": "u-a",
+                "to": "u-b",
                 "p": {"latency": {"mu": 0.0, "sigma": 0.1, "onset_delta_days": 0.0}},
             }],
         }
@@ -174,6 +181,8 @@ class TestGracefulDegradation:
                         "sweep_from": "2025-10-02",
                         "sweep_to": "2025-10-02",
                         "slice_keys": [""],
+                        "from_node": "A",
+                        "to_node": "B",
                         "target": {"targetId": "e1"},
                     }],
                 }],

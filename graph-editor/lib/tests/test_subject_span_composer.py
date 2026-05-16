@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -49,6 +50,7 @@ from runner.primitives import (
     ConditionedTransitionPrimitive,
     ConditioningStatus,
     DrawFamilyKey,
+    ProbabilityPosterior,
     PrimitiveScope,
     TimingFamily,
     TimingPosterior,
@@ -135,6 +137,7 @@ def _empty_arrival_map():
         identity=_prefix_identity(),
         nodes={},
         max_tau=400,
+        draw_count=200,
         root_day_weights={},
         construction_diagnostics={'binding_policy': 'test_synthetic'},
     )
@@ -166,6 +169,8 @@ def _build_prior_only_primitive(
     )
     arrival_weights = NodeArrivalWeights(
         weights={},
+        weights_draws={},
+        draw_count=200,
         reach_from_root=1.0,
         provenance=NodeArrivalProvenance(
             topology_case='identity',
@@ -594,17 +599,34 @@ def test_identity_span_carries_root_delta_in_node_density_draws():
 
 
 def test_composer_exposes_support_and_exposure_streams_under_unit_mask():
-    """With the default unit observation mask, the support stream equals
-    the value stream (mask × value = value) and the exposure stream
-    propagates the unit-reach PMF (Δcdf, no edge-probability factor).
-    Both surfaces share the same topology as value."""
+    """With the unit observation mask (the F-mode unconditioned-overlay
+    semantic: ``observation_mask_draws=None`` so the composer defaults
+    to all-ones), the support stream equals the value stream
+    (mask × value = value) and the exposure stream propagates the
+    unit-reach PMF (Δcdf, no edge-probability factor). Both surfaces
+    share the same topology as value.
+
+    Per Phase 6 §4.7, a PRIOR_ONLY primitive from the canonical
+    conditioning pathway (empty candidates → zero admitted rows) emits
+    an all-zeros mask rather than a unit mask — see
+    ``test_composer_zero_mask_zeroes_support_and_exposure_streams``
+    below. This test pins the no-evidence-consulted overlay path; we
+    override the conditioned prior-only's mask to ``None`` to express
+    that semantic on the primitive contract.
+    """
     graph = _make_graph([('e-x-y', 'X', 'Y'), ('e-y-z', 'Y', 'Z')])
     primitives = {
-        'e-x-y': _build_prior_only_primitive(
-            from_id='X', to_id='Y', edge_id='e-x-y', alpha=4.0, beta=6.0,
+        'e-x-y': replace(
+            _build_prior_only_primitive(
+                from_id='X', to_id='Y', edge_id='e-x-y', alpha=4.0, beta=6.0,
+            ),
+            observation_mask_draws=None,
         ),
-        'e-y-z': _build_prior_only_primitive(
-            from_id='Y', to_id='Z', edge_id='e-y-z', alpha=5.0, beta=5.0,
+        'e-y-z': replace(
+            _build_prior_only_primitive(
+                from_id='Y', to_id='Z', edge_id='e-y-z', alpha=5.0, beta=5.0,
+            ),
+            observation_mask_draws=None,
         ),
     }
     composed = compose_primitive_span(
@@ -641,6 +663,182 @@ def test_composer_exposes_support_and_exposure_streams_under_unit_mask():
     z_value_cum = np.cumsum(composed.node_density_draws['Z'], axis=1)
     assert np.all(z_value_cum[:, -1] <= 1.0 + 1e-12)
     assert np.all(z_value_cum[:, -1] <= z_exposure_cum[:, -1] + 1e-12)
+
+
+def test_composer_zero_mask_zeroes_support_and_exposure_streams():
+    """Phase 6 §4.7: a PRIOR_ONLY primitive produced by the canonical
+    conditioning pathway with zero admitted rows MUST emit an
+    all-zeros ``observation_mask_draws``, not None. The composer reads
+    that mask onto every edge — support and exposure streams must then
+    be zero everywhere, while value and density streams are unaffected
+    (the value kernel is independent of the mask).
+
+    This protects the coverage / exposure consumers downstream: an
+    evidentially-empty edge must NOT silently claim "fully observed".
+    """
+    graph = _make_graph([('e-x-y', 'X', 'Y'), ('e-y-z', 'Y', 'Z')])
+    primitives = {
+        'e-x-y': _build_prior_only_primitive(
+            from_id='X', to_id='Y', edge_id='e-x-y', alpha=4.0, beta=6.0,
+        ),
+        'e-y-z': _build_prior_only_primitive(
+            from_id='Y', to_id='Z', edge_id='e-y-z', alpha=5.0, beta=5.0,
+        ),
+    }
+    # Pin the contract on the primitives themselves first.
+    for prim in primitives.values():
+        assert prim.observation_mask_draws is not None
+        assert np.all(prim.observation_mask_draws == 0.0)
+
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='Z',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory(primitives),
+        options=ComposeOptions(max_tau=60, draw_count=200),
+    )
+
+    # Support and exposure streams are zero at every non-root node
+    # (mask=0 ⇒ propagated kernel × mask = 0). The chain root X
+    # carries δ(0) in all three streams by construction (the cohort
+    # itself IS the observation at the chain root, per Phase 6 §4.8);
+    # the mask only zeroes downstream propagation, not the root delta.
+    for node_id, support in composed.node_support_draws.items():
+        if node_id == 'X':
+            continue
+        np.testing.assert_array_equal(
+            support, np.zeros_like(support),
+            err_msg=f'node {node_id} support must be zero under zero mask',
+        )
+    for node_id, exposure in composed.node_exposure_draws.items():
+        if node_id == 'X':
+            continue
+        np.testing.assert_array_equal(
+            exposure, np.zeros_like(exposure),
+            err_msg=f'node {node_id} exposure must be zero under zero mask',
+        )
+    for edge_key, support in composed.edge_support_contribution_draws.items():
+        np.testing.assert_array_equal(
+            support, np.zeros_like(support),
+            err_msg=f'edge {edge_key} support must be zero under zero mask',
+        )
+    for edge_key, exposure in composed.edge_exposure_contribution_draws.items():
+        np.testing.assert_array_equal(
+            exposure, np.zeros_like(exposure),
+            err_msg=f'edge {edge_key} exposure must be zero under zero mask',
+        )
+
+    # Value stream is independent of the mask: it should retain its
+    # non-zero shape from the underlying kernels (so coverage = support /
+    # value is well-defined and the consumer sees 0/positive = 0, not
+    # 0/0 = NaN). Sanity-check that at least one terminal value cell
+    # carries non-zero mass per draw.
+    z_value = composed.node_density_draws['Z']
+    assert z_value.sum() > 0.0, (
+        'value stream should be unaffected by zero mask; coverage = '
+        'support / value requires positive value for the ratio to be '
+        'meaningful at observed cells'
+    )
+
+
+def test_composer_masks_support_by_source_day_not_age_only():
+    """Phase 6 §4.7: row presence is keyed by (source_day, age).
+
+    Two sibling upstream edges place mass at M on source-day offsets 0
+    and 1. The downstream M→Y primitive has a row at age 0 only for the
+    first source day. An age-only mask would mark both M source days as
+    observed at age 0 and pass support through at τ=1. The source-day
+    mask must pass only the τ=0 wavefront.
+    """
+    S = 200
+    T = 61
+    graph = _make_graph([
+        ('e-x-m-now', 'X', 'M'),
+        ('e-x-m-late', 'X', 'M'),
+        ('e-m-y', 'M', 'Y'),
+    ])
+
+    def _with_constant_p(primitive, p):
+        draws = np.full(S, float(p), dtype=np.float64)
+        posterior = ProbabilityPosterior(mean=float(p), sd=0.0, draws=draws)
+        return replace(
+            primitive,
+            probability_posterior=posterior,
+            probability_prior=posterior,
+        )
+
+    x_m_now = replace(
+        _with_constant_p(
+            _build_prior_only_primitive(
+                from_id='X', to_id='M', edge_id='e-x-m-now',
+            ),
+            0.5,
+        ),
+        observation_mask_draws=None,
+    )
+    x_m_late = replace(
+        _with_constant_p(
+            _build_prior_only_primitive(
+                from_id='X', to_id='M', edge_id='e-x-m-late',
+            ),
+            0.5,
+        ),
+        timing_family=TimingFamily.DETERMINISTIC,
+        timing_posterior=TimingPosterior(
+            family=TimingFamily.DETERMINISTIC,
+            cdf_mean=tuple([0.0] + [1.0] * 60),
+            deterministic_shift_days=1,
+        ),
+        observation_mask_draws=None,
+    )
+
+    aggregate_age_mask = np.zeros((S, T), dtype=np.float64)
+    aggregate_age_mask[:, 0] = 1.0
+    source_day_mask = np.zeros((S, T), dtype=np.float64)
+    source_day_mask[:, 0] = 1.0
+    m_y = replace(
+        _with_constant_p(
+            _build_prior_only_primitive(
+                from_id='M', to_id='Y', edge_id='e-m-y',
+            ),
+            1.0,
+        ),
+        observation_mask_draws=aggregate_age_mask,
+        observation_mask_draws_by_source_day={
+            '2026-03-01': source_day_mask,
+            '2026-03-02': np.zeros((S, T), dtype=np.float64),
+        },
+    )
+
+    composed = compose_primitive_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='Y',
+        registry=_build_registry_with_primitives([]),
+        edge_to_primitive_lookup=_lookup_factory({
+            'e-x-m-now': x_m_now,
+            'e-x-m-late': x_m_late,
+            'e-m-y': m_y,
+        }),
+        options=ComposeOptions(max_tau=60, draw_count=S),
+    )
+
+    y_value = composed.node_density_draws['Y']
+    y_support = composed.node_support_draws['Y']
+    y_exposure = composed.node_exposure_draws['Y']
+
+    # Value is independent of observation: both source days reach Y.
+    np.testing.assert_allclose(y_value[:, 0], 0.5, atol=1e-12)
+    np.testing.assert_allclose(y_value[:, 1], 0.5, atol=1e-12)
+    # Support/exposure must keep the source-day axis. The τ=1 wavefront
+    # came from source day 2026-03-02, which had no row at age 0.
+    np.testing.assert_allclose(y_support[:, 0], 0.5, atol=1e-12)
+    np.testing.assert_allclose(y_support[:, 1], 0.0, atol=1e-12)
+    # Exposure carries unit-reach timing rather than edge probability, so
+    # the observed upstream wavefront contributes 1.0 here.
+    np.testing.assert_allclose(y_exposure[:, 0], 1.0, atol=1e-12)
+    np.testing.assert_allclose(y_exposure[:, 1], 0.0, atol=1e-12)
 
 
 def test_identity_span_carries_root_delta_in_all_three_streams():

@@ -131,7 +131,7 @@ def _build_tier1_parametric(
         return None
 
     import numpy as np
-    from scipy.special import ndtr as _ndtr
+    from .numpy_stats import normal_cdf as _ndtr
     from .confidence_bands import _shifted_lognormal_cdf
 
     T = max_tau + 1
@@ -372,7 +372,7 @@ def _build_tier3_weak_prior(
     Always succeeds — this is the final fallback.
     """
     import numpy as np
-    from scipy.special import ndtr as _ndtr
+    from .numpy_stats import normal_cdf as _ndtr
 
     T = max_tau + 1
     S = num_draws
@@ -716,7 +716,7 @@ def compute_cohort_maturity_rows_v2(
 
     if has_uncertainty and mc_cdf_arr is not None and mc_p_s is not None:
         import numpy as np
-        from scipy.special import ndtr as _ndtr, logit as _logit, expit as _expit
+        from .numpy_stats import expit as _expit, logit as _logit, normal_cdf as _ndtr
 
         rng = np.random.default_rng(42)
         tau_grid = np.arange(0, max_tau + 1, dtype=float)

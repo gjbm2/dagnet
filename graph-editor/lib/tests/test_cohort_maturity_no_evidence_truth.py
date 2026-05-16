@@ -13,8 +13,8 @@ is small and the analytic identity
     median(p × CDF(τ)) ≈ Beta_median(α, β) × CDF(τ; μ, σ, onset)
 
 holds to first order. Both factors are closed-form: ``Beta_median`` via
-``scipy.stats.beta.ppf(0.5, α, β)``; ``CDF`` is the shifted lognormal at
-the prior's mean parameters. No Monte Carlo is invoked by the oracle.
+the inverse Beta CDF at 0.5; ``CDF`` is the shifted lognormal at the
+prior's mean parameters. No Monte Carlo is invoked by the oracle.
 
 Per-family priors (epistemic vs predictive) are read from the canonical
 Bayes sidecar — ``alpha`` / ``beta`` for ``model_curve_midpoint``,
@@ -149,9 +149,9 @@ def _shifted_lognormal_cdf(tau: int, *, onset: float, mu: float, sigma: float) -
 
 
 def _beta_median(alpha: float, beta: float) -> float:
-    """Closed-form-ish median of Beta(α, β) via scipy's inverse CDF."""
-    from scipy.stats import beta as _beta_dist
-    return float(_beta_dist.ppf(0.5, alpha, beta))
+    """Median of Beta(alpha, beta) via inverse CDF."""
+    from runner.numpy_stats import beta_ppf
+    return float(beta_ppf(0.5, alpha, beta))
 
 
 def _read_sidecar_prior(sidecar_path: Path, edge_param_id: str) -> dict[str, float]:
@@ -186,8 +186,8 @@ def test_no_evidence_curve_matches_truth_analytic() -> None:
       ``model_curve_midpoint`` ≈ Beta_median(alpha, beta) × CDF(τ)
       ``model_midpoint``        ≈ Beta_median(alpha_pred, beta_pred) × CDF(τ)
 
-    Beta_median is the inverse-CDF of Beta evaluated at 0.5 — closed form
-    via scipy. CDF is the shifted lognormal at the prior's mean params.
+    Beta_median is the inverse-CDF of Beta evaluated at 0.5. CDF is the
+    shifted lognormal at the prior's mean params.
     No MC is used by the oracle.
     """
     _ensure_synth_ready(_GRAPH, enriched=True, bayesian=True, check_fe_parity=False)

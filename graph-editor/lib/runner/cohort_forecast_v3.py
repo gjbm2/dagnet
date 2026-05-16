@@ -1646,6 +1646,7 @@ def build_resolved_cf_runtime(
             primitive_scope=target_resolution.primitive_scope,
             request_root=str(query_from_node),
         )
+        _draw_count_for_arrival_map = ConditioningPolicyOptions().draw_count
         subject_arrival_map = _build_request_arrival_map(
             graph=graph,
             root_node_id=str(query_from_node),
@@ -1655,6 +1656,13 @@ def build_resolved_cf_runtime(
             ],
             identity=subject_arrival_identity,
             max_tau=400,
+            scenario_seed=_runtime_seed(scenario_id, 'resolved_cf_runtime'),
+            draw_count=_draw_count_for_arrival_map,
+            primitive_scopes={
+                (r.transition.source_node, r.transition.destination_node):
+                    r.primitive_scope
+                for r in subject_resolutions
+            },
         )
 
     # 73n in-runtime widening REMOVED. The fetch envelope is now derived

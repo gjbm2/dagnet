@@ -49,7 +49,13 @@ import numpy as np
 
 from .timing_span import (
     TimingTransitionPrimitive,
+    compose_timing_span_from_densities,
     compose_timing_span_from_transition_primitives,
+)
+from .timing_particles import (
+    EdgeTimingParticles,
+    RequestTimingParticles,
+    build_per_draw_edge_cdf,
 )
 
 
@@ -123,11 +129,28 @@ class NodeArrivalProvenance:
 class NodeArrivalWeights:
     """One node's normalised calendar-day arrival distribution.
 
+    ``weights`` is the scalar (marginal-mean) calendar-day distribution.
+    ``weights_draws`` is the per-draw sibling — a calendar-day-keyed
+    mapping whose values are ``(S,)`` arrays of per-draw arrival weights
+    at that day, where ``S = draw_count``. The two surfaces describe
+    the same physical quantity at different levels of marginalisation:
+    ``weights[day] = mean(weights_draws[day])`` (up to numerical
+    rounding).
+
+    Per Phase 6 §3.2 / §4.9, primitive admission and evidence display
+    consume ``weights_draws`` so that the latency map used to weight
+    evidence at U is per-draw consistent with the latency kernel that
+    propagates mass to U. The scalar ``weights`` surface is retained
+    for diagnostics and legacy consumers (envelope construction, etc.).
+
     ``weights`` sums to 1.0 for non-degraded entries. Degraded entries
-    carry an empty mapping; the provenance ``topology_case`` distinguishes
-    "no path from root" from "horizon inadequate".
+    carry empty mappings on both surfaces; the provenance
+    ``topology_case`` distinguishes "no path from root" from "horizon
+    inadequate".
     """
     weights: Mapping[str, float]
+    weights_draws: Mapping[str, np.ndarray]
+    draw_count: int
     reach_from_root: float
     provenance: NodeArrivalProvenance
     root_day_contributions: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
@@ -138,6 +161,19 @@ class NodeArrivalWeights:
 
     def weight_on(self, calendar_day: str) -> float:
         return float(self.weights.get(calendar_day, 0.0))
+
+    def weight_draws_on(self, calendar_day: str) -> np.ndarray:
+        """Per-draw weight at ``calendar_day``; shape ``(S,)``.
+
+        Returns zeros for days outside the support. Same lookup
+        semantics as ``weight_on`` (which returns scalar 0.0 for absent
+        days) — algebraic degeneracy of the "no mass arrived here on
+        this day under any draw" data state.
+        """
+        result = self.weights_draws.get(calendar_day)
+        if result is None:
+            return np.zeros(self.draw_count, dtype=np.float64)
+        return result
 
     def root_day_shares_on(self, calendar_day: str) -> Mapping[str, float]:
         total = self.weight_on(calendar_day)
@@ -161,7 +197,8 @@ class PrefixArrivalMap:
     """Request-scoped ``arrival_weight[node_id][calendar_day]`` map.
 
     Keys are canonical node ids. The root entry is always present and
-    carries ``reach_from_root=1.0``.
+    carries ``reach_from_root=1.0``. ``draw_count`` is the per-draw
+    axis size shared by every node's ``weights_draws`` surface.
 
     Consumers MUST query through ``get`` (which returns ``None`` for
     unknown nodes) so that misspelled or absent node ids fail loudly
@@ -170,6 +207,7 @@ class PrefixArrivalMap:
     identity: PrefixArrivalIdentity
     nodes: Mapping[str, NodeArrivalWeights]
     max_tau: int
+    draw_count: int
     root_day_weights: Mapping[str, float]
     construction_diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
@@ -234,12 +272,73 @@ def _shift_pmf_to_calendar(
     return result, contributions
 
 
+def _shift_pmf_draws_to_calendar(
+    *,
+    root_day_weights: Mapping[str, float],
+    pmf_draws: np.ndarray,
+) -> Dict[str, np.ndarray]:
+    """Per-draw analog of ``_shift_pmf_to_calendar``.
+
+    ``pmf_draws`` is ``(S, T_p)``. For each root day ``d_root`` with
+    weight ``w_root`` (scalar — root-day weights are deterministic at
+    the request perimeter), accumulate ``w_root * pmf_draws[:, t]``
+    into the ``(S,)`` array at calendar day ``d_root + t``. The
+    per-draw axis is preserved end-to-end.
+    """
+    S = int(pmf_draws.shape[0])
+    T = int(pmf_draws.shape[1])
+    result: Dict[str, np.ndarray] = {}
+    for d_root, w_root in root_day_weights.items():
+        if w_root <= 0:
+            continue
+        try:
+            base = date.fromisoformat(d_root)
+        except ValueError:
+            continue
+        w = float(w_root)
+        for t in range(T):
+            day = (base + timedelta(days=int(t))).isoformat()
+            contribution = w * pmf_draws[:, t]
+            existing = result.get(day)
+            if existing is None:
+                result[day] = contribution.astype(np.float64, copy=True)
+            else:
+                existing += contribution
+    return result
+
+
+def _normalise_per_draw(
+    weights_draws: Mapping[str, np.ndarray],
+    draw_count: int,
+) -> Dict[str, np.ndarray]:
+    """Normalise per-draw calendar weights so each draw sums to 1.
+
+    Divides each ``(S,)`` entry pointwise by the per-draw total. Draws
+    with zero total stay zero (algebraic degeneracy: a draw whose
+    composed latency PMF was zero everywhere has no mass to normalise).
+    """
+    if not weights_draws:
+        return {}
+    totals = np.zeros(draw_count, dtype=np.float64)
+    for arr in weights_draws.values():
+        totals += arr
+    safe_totals = np.where(totals > 0.0, totals, 1.0)
+    result: Dict[str, np.ndarray] = {}
+    for day, arr in weights_draws.items():
+        normalised = arr / safe_totals
+        if np.any(normalised > 0.0):
+            result[day] = normalised
+    return result
+
+
 def build_prefix_arrival_map(
     *,
     graph: Mapping[str, Any],
     root_node_id: str,
     root_day_weights: Mapping[str, float],
     transitions: Mapping[Tuple[str, str], TimingTransitionPrimitive],
+    timing_particles: Optional[RequestTimingParticles] = None,
+    draw_count: int = 2000,
     identity: PrefixArrivalIdentity,
     max_tau: int = 400,
     target_node_ids: Optional[Tuple[str, ...]] = None,
@@ -290,9 +389,57 @@ def build_prefix_arrival_map(
     # probability distributions over arrival days.
     normalised_root = _normalise(root_day_weights)
     root_canonical = _canonicalise(graph, root_node_id)
+    # Perimeter normalisation: callers that don't yet plumb per-draw
+    # particles (e.g. preparation-layer envelope construction, unit
+    # tests with deterministic priors) get an algebraic-degenerate
+    # per-draw map built from each edge's mean parameters with zero
+    # dispersion, broadcast across ``draw_count``. The engine flow
+    # downstream is uniform — particles are always present after this
+    # entry-point check.
+    if timing_particles is None:
+        S_degenerate = int(draw_count)
+        degenerate_particles: Dict[Tuple[str, str], EdgeTimingParticles] = {}
+        for edge_key, primitive in transitions.items():
+            degenerate_particles[edge_key] = EdgeTimingParticles(
+                mu_draws=np.full(
+                    S_degenerate, float(primitive.mu), dtype=np.float64,
+                ),
+                sigma_draws=np.clip(
+                    np.full(
+                        S_degenerate, float(primitive.sigma), dtype=np.float64,
+                    ),
+                    0.01, 20.0,
+                ),
+                onset_draws=np.maximum(
+                    np.full(
+                        S_degenerate, float(primitive.onset), dtype=np.float64,
+                    ),
+                    0.0,
+                ),
+                draw_count=S_degenerate,
+            )
+        timing_particles = RequestTimingParticles(
+            particles_by_edge=degenerate_particles,
+            draw_count=S_degenerate,
+        )
+    S = int(timing_particles.draw_count)
+    # Root's per-draw weights are the identity broadcast — under every
+    # draw, the root arrival distribution on its own clock is the same
+    # root-day mass function. Algebraic degeneracy: root → root latency
+    # is a Dirac at τ=0, independent of any latency-parameter sample.
+    root_scalar_weights = {
+        k: float(v) for k, v in root_day_weights.items() if v > 0
+    }
+    root_draws_weights: Dict[str, np.ndarray] = {
+        k: np.full(S, float(v), dtype=np.float64)
+        for k, v in root_day_weights.items()
+        if v > 0
+    }
     nodes: Dict[str, NodeArrivalWeights] = {
         root_canonical: NodeArrivalWeights(
-            weights={k: float(v) for k, v in root_day_weights.items() if v > 0},
+            weights=root_scalar_weights,
+            weights_draws=root_draws_weights,
+            draw_count=S,
             reach_from_root=1.0,
             provenance=NodeArrivalProvenance(
                 topology_case='identity',
@@ -343,6 +490,7 @@ def build_prefix_arrival_map(
                     note='active timing without conditional_cdf',
                     horizon_ratio=timing.horizon_ratio,
                     transition_source=timing.transition_source,
+                    draw_count=S,
                 )
                 diagnostics['degraded_count'] += 1
                 continue
@@ -360,6 +508,7 @@ def build_prefix_arrival_map(
                     ),
                     horizon_ratio=timing.horizon_ratio,
                     transition_source=timing.transition_source,
+                    draw_count=S,
                 )
                 diagnostics['degraded_count'] += 1
                 continue
@@ -374,11 +523,34 @@ def build_prefix_arrival_map(
                     note='convolution produced empty calendar weights',
                     horizon_ratio=timing.horizon_ratio,
                     transition_source=timing.transition_source,
+                    draw_count=S,
                 )
                 diagnostics['degraded_count'] += 1
                 continue
+            # Per-draw composition over the same topology: for every
+            # draw s, compose the per-draw edge densities through the
+            # shared DAG DP. The same keyed timing particles drive
+            # both this composition and the primitive-conditioning
+            # proposal (Phase 6 §3.2 single-source-of-truth invariant).
+            per_draw_pmf = _compose_per_draw_pmf_at_end(
+                graph=dict(graph),
+                root_canonical=root_canonical,
+                end_canonical=canonical,
+                transitions=transitions_dict,
+                timing_particles=timing_particles,
+                max_tau=max_tau,
+            )
+            calendar_draws_raw = _shift_pmf_draws_to_calendar(
+                root_day_weights=normalised_root,
+                pmf_draws=per_draw_pmf,
+            )
+            calendar_draws_norm = _normalise_per_draw(
+                calendar_draws_raw, draw_count=S,
+            )
             nodes[canonical] = NodeArrivalWeights(
                 weights=calendar_norm,
+                weights_draws=calendar_draws_norm,
+                draw_count=S,
                 reach_from_root=float(timing.reach),
                 provenance=NodeArrivalProvenance(
                     topology_case='composed',
@@ -413,6 +585,7 @@ def build_prefix_arrival_map(
                 note='no path from root',
                 horizon_ratio=timing.horizon_ratio,
                 transition_source=timing.transition_source,
+                draw_count=S,
             )
             diagnostics['degraded_count'] += 1
         elif timing.horizon_ratio < 0.95 and timing.composed_edges > 0:
@@ -424,6 +597,7 @@ def build_prefix_arrival_map(
                 ),
                 horizon_ratio=timing.horizon_ratio,
                 transition_source=timing.transition_source,
+                draw_count=S,
             )
             diagnostics['degraded_count'] += 1
         else:
@@ -438,6 +612,7 @@ def build_prefix_arrival_map(
                 ),
                 horizon_ratio=timing.horizon_ratio,
                 transition_source=timing.transition_source,
+                draw_count=S,
             )
             diagnostics['degraded_count'] += 1
 
@@ -445,9 +620,84 @@ def build_prefix_arrival_map(
         identity=identity,
         nodes=nodes,
         max_tau=max_tau,
+        draw_count=S,
         root_day_weights=dict(normalised_root),
         construction_diagnostics=diagnostics,
     )
+
+
+def _compose_per_draw_pmf_at_end(
+    *,
+    graph: Mapping[str, Any],
+    root_canonical: str,
+    end_canonical: str,
+    transitions: Mapping[Tuple[str, str], TimingTransitionPrimitive],
+    timing_particles: RequestTimingParticles,
+    max_tau: int,
+) -> np.ndarray:
+    """Compose per-draw root → end latency PMF on a ``(S, T)`` grid.
+
+    For every draw ``s``, every edge ``U → V`` in the topology
+    contributes a per-draw sub-probability density built from the same
+    edge-keyed particles that drive primitive conditioning's proposal:
+
+        density_edge[s, t] = p_edge × (cdf_draws[s, t] − cdf_draws[s, t-1])
+
+    where ``cdf_draws`` comes from ``build_per_draw_edge_cdf`` on the
+    edge's particles. The shared DAG DP (``compose_timing_span_from_densities``)
+    composes per-draw densities into the per-draw root → end density
+    CDF; the increment of that CDF is the per-draw PMF on this grid.
+    """
+    S = int(timing_particles.draw_count)
+    T = int(max_tau) + 1
+
+    # Build per-edge per-draw sub-probability densities once.
+    per_edge_densities: Dict[Tuple[str, str], np.ndarray] = {}
+    edge_p: Dict[Tuple[str, str], float] = {}
+    for edge_key, primitive in transitions.items():
+        particles = timing_particles.particles_by_edge.get(edge_key)
+        if particles is None:
+            # Caller bug — every edge in the topology must have keyed
+            # particles. Surface as a missing-edge error at the
+            # composer (perimeter), not in-engine.
+            raise KeyError(
+                f'timing_particles missing edge {edge_key!r}; '
+                f'request perimeter must seed particles for every '
+                f'edge in the transitions map.'
+            )
+        cdf_draws = build_per_draw_edge_cdf(particles, T)  # (S, T)
+        pmf_draws = np.diff(cdf_draws, prepend=0.0, axis=1)  # (S, T)
+        pmf_draws = np.clip(pmf_draws, 0.0, None)
+        p_edge = float(primitive.p)
+        per_edge_densities[edge_key] = p_edge * pmf_draws
+        edge_p[edge_key] = p_edge
+
+    # Per-draw composition: loop over draws and call the shared DAG DP
+    # per draw with that draw's edge densities. The DP code is the same
+    # one the scalar composer uses; per-draw is a data degeneracy of
+    # the same routine with one-density-per-edge per draw.
+    pmf_at_end = np.zeros((S, T), dtype=np.float64)
+    for s in range(S):
+        densities_s = {
+            edge_key: per_edge_densities[edge_key][s, :]
+            for edge_key in per_edge_densities
+        }
+        timing_s = compose_timing_span_from_densities(
+            graph=dict(graph),
+            root_node_id=root_canonical,
+            end_node_id=end_canonical,
+            densities=densities_s,
+            max_tau=max_tau,
+            horizon_blocking_floor=None,
+        )
+        if timing_s.is_composed and timing_s.conditional_cdf is not None:
+            cdf_s = np.asarray(timing_s.conditional_cdf, dtype=np.float64)
+            pmf_at_end[s, :] = np.diff(cdf_s, prepend=0.0)
+        # Else: this draw degenerated to no-path / zero-reach — leave
+        # row at zero. Algebraic degeneracy of the same composition;
+        # downstream per-draw normalisation handles it.
+    pmf_at_end = np.clip(pmf_at_end, 0.0, None)
+    return pmf_at_end
 
 
 def _degraded(
@@ -455,9 +705,12 @@ def _degraded(
     note: str,
     horizon_ratio: float,
     transition_source: str,
+    draw_count: int,
 ) -> NodeArrivalWeights:
     return NodeArrivalWeights(
         weights={},
+        weights_draws={},
+        draw_count=int(draw_count),
         reach_from_root=0.0,
         provenance=NodeArrivalProvenance(
             topology_case='degraded',

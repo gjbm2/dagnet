@@ -125,6 +125,9 @@ def _condition_with_cohort(
             parameter_fingerprint='fp-1',
         ),
         max_tau=60,
+        # Match the conditioning draw_count so the weighted view's
+        # per-draw arrays line up with the IS proposal's particles.
+        draw_count=S,
     )
     ev_scope = EvidenceScope(
         role=EvidenceRole.WINDOW_SUBJECT_HELPER,

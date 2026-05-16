@@ -21,21 +21,7 @@ from typing import Sequence
 
 import numpy as np
 
-
-def _ndtr(z):
-    """Normal CDF, vectorised. Drop-in replacement for scipy.special.ndtr.
-
-    Uses the Abramowitz & Stegun 5-term erf approximation (7.1.28),
-    max |error| < 7e-8 vs scipy.  ~30ms for a 2000×365 array on CPython.
-    """
-    x = z / np.sqrt(2.0)
-    a1, a2, a3, a4, a5 = (0.254829592, -0.284496736, 1.421413741,
-                           -1.453152027, 1.061405429)
-    p = 0.3275911
-    x_abs = np.abs(x)
-    t = 1.0 / (1.0 + p * x_abs)
-    erf_approx = 1.0 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1) * t * np.exp(-x_abs**2)
-    return 0.5 * (1.0 + np.sign(x) * erf_approx)
+from .numpy_stats import normal_cdf as _ndtr
 
 # z-multipliers for common confidence levels
 _LEVEL_Z = {

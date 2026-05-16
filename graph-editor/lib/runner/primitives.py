@@ -196,9 +196,15 @@ class WeightedEvidenceRow:
     """A single primitive-local row after arrival_weight[U] binding.
 
     n / k are the integer counts admitted (equivalent to a row from
-    evidence_merge.EvidenceSet.points). arrival_weight is the normalised
-    arrival_weight[U][observed_date] entry. n_weighted = n * arrival_weight;
-    same for k_weighted.
+    evidence_merge.EvidenceSet.points). ``arrival_weight`` is the
+    scalar (marginal-mean) normalised arrival_weight[U][observed_date]
+    entry; ``arrival_weight_draws`` is the per-draw sibling of shape
+    ``(S,)``. ``n_weighted`` / ``k_weighted`` are the scalar products
+    and ``n_weighted_draws`` / ``k_weighted_draws`` are the per-draw
+    products consumed by primitive conditioning and the empirical
+    evidence operator. Per Phase 6 §3.2 / §4.9 the per-draw arrays
+    are the load-bearing surface — the scalar fields are retained for
+    diagnostics and legacy consumers.
     """
     observed_date: str
     retrieved_at: Optional[str]
@@ -207,6 +213,9 @@ class WeightedEvidenceRow:
     arrival_weight: float
     n_weighted: float
     k_weighted: float
+    arrival_weight_draws: np.ndarray
+    n_weighted_draws: np.ndarray
+    k_weighted_draws: np.ndarray
     root_day_shares: Mapping[str, float] = field(default_factory=dict)
 
 
@@ -219,9 +228,18 @@ class WeightedPrimitiveEvidenceView:
     point n_weighted/k_weighted produced by multiplying admitted rows by
     their normalised arrival_weight[U] entry. Stage 2 may not change merge
     callers until this contract is recorded.
+
+    Per Phase 6 §3.2 / §4.9, per-draw totals
+    (``n_weighted_total_draws``, ``k_weighted_total_draws``, shape
+    ``(S,)``) carry the load-bearing per-draw aggregate consumed by
+    primitive conditioning's IS likelihood and Beta-conjugate update.
+    The scalar totals are retained for diagnostics and legacy paths.
     """
     n_weighted_total: float
     k_weighted_total: float
+    n_weighted_total_draws: np.ndarray
+    k_weighted_total_draws: np.ndarray
+    draw_count: int
     rows: Tuple[WeightedEvidenceRow, ...]
     arrival_weight_summary: Mapping[str, Any]
     binding_policy: str
@@ -352,6 +370,21 @@ class ConditionedTransitionPrimitive:
     prior_source: Optional[str]
     skipped_evidence_summary: Mapping[str, Any] = field(default_factory=dict)
     notes: Tuple[str, ...] = ()
+    # Phase 6 §4.7 row-presence mask, shape (S, T_p). None means
+    # "F-mode unconditioned overlay" — composer defaults to all-ones.
+    # CONDITIONED paths populate the per-(draw, age) presence array; a
+    # CONDITIONED path with zero admitted rows MUST set this to an
+    # explicit all-zeros array (not None) so the composer does not
+    # silently claim full observation.
+    observation_mask_draws: Optional[np.ndarray] = None
+    # Source-day-specific row-presence masks, keyed by observed_date
+    # (YYYY-MM-DD). This is the load-bearing Phase 6 §4.7 surface:
+    # row presence is per (edge, source_day, age), not age-only. The
+    # aggregate `observation_mask_draws` remains for provenance and for
+    # legacy/manual tests that do not need source-day discrimination.
+    observation_mask_draws_by_source_day: Mapping[str, np.ndarray] = field(
+        default_factory=dict
+    )
 
     def probability_draws(self) -> np.ndarray:
         if self.probability_posterior is None or \

@@ -103,6 +103,9 @@ def _weighted_view(
                 arrival_weight=0.6,
                 n_weighted=6.0,
                 k_weighted=2.4,
+                arrival_weight_draws=np.array([0.6], dtype=np.float64),
+                n_weighted_draws=np.array([6.0], dtype=np.float64),
+                k_weighted_draws=np.array([2.4], dtype=np.float64),
             ),
             WeightedEvidenceRow(
                 observed_date="2026-01-22",
@@ -112,11 +115,17 @@ def _weighted_view(
                 arrival_weight=0.6,
                 n_weighted=6.0,
                 k_weighted=2.1,
+                arrival_weight_draws=np.array([0.6], dtype=np.float64),
+                n_weighted_draws=np.array([6.0], dtype=np.float64),
+                k_weighted_draws=np.array([2.1], dtype=np.float64),
             ),
         )
     return WeightedPrimitiveEvidenceView(
         n_weighted_total=n_total,
         k_weighted_total=k_total,
+        n_weighted_total_draws=np.array([n_total], dtype=np.float64),
+        k_weighted_total_draws=np.array([k_total], dtype=np.float64),
+        draw_count=1,
         rows=rows,
         arrival_weight_summary={"normalised": True, "support_days": 2},
         binding_policy="weighted_day_binding",

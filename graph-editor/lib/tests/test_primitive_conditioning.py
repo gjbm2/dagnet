@@ -76,6 +76,7 @@ from runner.primitives import (
     TransitionIdentity,
 )
 from runner.timing_span import TimingTransitionPrimitive
+from runner.timing_particles import EdgeTimingParticles, build_per_draw_edge_cdf
 
 
 # ─── Fixture helpers ───────────────────────────────────────────────────
@@ -97,6 +98,28 @@ def _prim(p=0.7, *, mu=0.0, sigma=0.0, onset=0.0) -> TimingTransitionPrimitive:
         p_sd=0.0, mu_sd=0.0, sigma_sd=0.0, onset_sd=0.0,
         source='test_synthetic',
     )
+
+
+def test_timing_particles_use_row_aligned_cdf_with_same_day_mass():
+    """Phase 6 Appendix A: continuous timing kernels use row buckets.
+
+    Endpoint sampling would give G(0)=0 for a lognormal with onset 0,
+    producing no age-0 mass. Row-aligned B(0)=∫_0^1 G(v)dv is positive
+    and matches the empirical same-day row convention.
+    """
+    particles = EdgeTimingParticles(
+        mu_draws=np.asarray([np.log(1.0)], dtype=np.float64),
+        sigma_draws=np.asarray([0.5], dtype=np.float64),
+        onset_draws=np.asarray([0.0], dtype=np.float64),
+        draw_count=1,
+    )
+
+    cdf = build_per_draw_edge_cdf(particles, horizon_len=4)
+
+    assert cdf.shape == (1, 4)
+    assert cdf[0, 0] > 0.0
+    assert cdf[0, 1] > cdf[0, 0]
+    assert cdf[0, 3] < 1.0
 
 
 def _identity(
@@ -185,9 +208,13 @@ def _build_resolution(
     transitions=None,
     edge_id='e-u-v',
     src='U', dst='V',
+    draw_count=2000,
 ) -> PrimitiveEvidenceResolution:
     """Build a Stage 2 PrimitiveEvidenceResolution for U→V with single-day
-    arrival weights so n_weighted_total == sum of raw n."""
+    arrival weights so n_weighted_total == sum of raw n. ``draw_count``
+    must match the conditioning options' draw_count downstream (per
+    Phase 6 §3.2 request-scoped draw-count invariant); tests overriding
+    ``ConditioningPolicyOptions.draw_count`` pass the same value here."""
     if root_day_weights is None:
         root_day_weights = {'2026-03-15': 1.0}
     if transitions is None:
@@ -199,6 +226,7 @@ def _build_resolution(
         root_node_id=root,
         root_day_weights=root_day_weights,
         transitions=transitions,
+        draw_count=int(draw_count),
         identity=_identity(request_root=root),
         max_tau=60,
     )
@@ -574,11 +602,13 @@ def test_non_latency_compat_fields_are_provenance_only():
 
 
 def test_latent_primitive_emits_lognormal_cdf_mean():
-    """plan §583: latent primitives carry the differenced CDF mean.
-    For sigma > 0, the cdf_mean must rise from 0 to ~1 across the
-    horizon (not Dirac-at-zero)."""
+    """plan §583 + Phase 6 Appendix A: latent primitives carry the
+    row-aligned cumulative timing surface. For sigma > 0, cdf_mean
+    carries positive same-day bucket mass at τ=0 and saturates across
+    the horizon (not Dirac-at-zero)."""
     res = _build_resolution(
         candidates=[_candidate(observed_date='2026-03-15', n=50, k=20)],
+        draw_count=200,
     )
     rm = _resolved_model(
         alpha=1.0, beta=1.0, n_effective=None,
@@ -591,7 +621,7 @@ def test_latent_primitive_emits_lognormal_cdf_mean():
     assert prim.timing_family == TimingFamily.LATENT
     assert prim.timing_posterior is not None
     cdf = prim.timing_posterior.cdf_mean
-    assert cdf[0] == pytest.approx(0.0)  # No mass at tau=0 for sigma>0.
+    assert cdf[0] > 0.0  # Same-day row-bucket mass under Appendix A.
     assert cdf[-1] > 0.99  # Saturates by tau=90 for mu=2, sigma=0.5.
 
 

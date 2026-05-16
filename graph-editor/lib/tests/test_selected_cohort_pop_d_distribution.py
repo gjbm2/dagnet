@@ -232,6 +232,8 @@ def _weighted_primitive(*, edge_id, source, dest, rows):
         WeightedPrimitiveEvidenceView,
     )
 
+    import numpy as np
+
     weighted_rows = tuple(
         WeightedEvidenceRow(
             observed_date=str(row["observed_date"]),
@@ -241,13 +243,29 @@ def _weighted_primitive(*, edge_id, source, dest, rows):
             arrival_weight=float(row.get("arrival_weight", 1.0)),
             n_weighted=float(row.get("n_weighted", row.get("n", 0))),
             k_weighted=float(row.get("k_weighted", row.get("k", 0))),
+            arrival_weight_draws=np.array(
+                [float(row.get("arrival_weight", 1.0))], dtype=np.float64,
+            ),
+            n_weighted_draws=np.array(
+                [float(row.get("n_weighted", row.get("n", 0)))],
+                dtype=np.float64,
+            ),
+            k_weighted_draws=np.array(
+                [float(row.get("k_weighted", row.get("k", 0)))],
+                dtype=np.float64,
+            ),
             root_day_shares=dict(row.get("root_day_shares", {})),
         )
         for row in rows
     )
+    n_total = float(sum(r.n_weighted for r in weighted_rows))
+    k_total = float(sum(r.k_weighted for r in weighted_rows))
     weighted = WeightedPrimitiveEvidenceView(
-        n_weighted_total=float(sum(r.n_weighted for r in weighted_rows)),
-        k_weighted_total=float(sum(r.k_weighted for r in weighted_rows)),
+        n_weighted_total=n_total,
+        k_weighted_total=k_total,
+        n_weighted_total_draws=np.array([n_total], dtype=np.float64),
+        k_weighted_total_draws=np.array([k_total], dtype=np.float64),
+        draw_count=1,
         rows=weighted_rows,
         arrival_weight_summary={"topology_case": "test"},
         binding_policy="test_binding",
@@ -1504,7 +1522,11 @@ def _make_test_subject_primitive(*, edge_id, source, dest):
         timing_family=TimingFamily.LATENT,
         raw_evidence_scope_key=f"s:{edge_id}",
         weighted_evidence=WeightedPrimitiveEvidenceView(
-            n_weighted_total=0.0, k_weighted_total=0.0, rows=(),
+            n_weighted_total=0.0, k_weighted_total=0.0,
+            n_weighted_total_draws=np.zeros(1, dtype=np.float64),
+            k_weighted_total_draws=np.zeros(1, dtype=np.float64),
+            draw_count=1,
+            rows=(),
             arrival_weight_summary={"topology_case": "test"},
             binding_policy="t", evidence_scope_key=f"s:{edge_id}",
         ),

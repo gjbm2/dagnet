@@ -28,7 +28,7 @@ import { aggregateLatencyStats } from '../windowAggregationService';
 // ── Tolerances ──────────────────────────────────────────────────────────────
 // These are tight: the implementations must agree to high precision.
 const TOL = 1e-9;       // mu, sigma, blended mean (pure arithmetic)
-const TOL_CDF = 1e-6;   // CDF (FE Acklam approx vs BE scipy — ~7 decimal agreement)
+const TOL_CDF = 1e-6;   // CDF (FE and BE approximations agree to ~7 decimals)
 const TOL_T95 = 1e-4;   // t95 (exp amplifies CDF approximation differences)
 
 // ── Vector 1: fitLagDistribution ────────────────────────────────────────────

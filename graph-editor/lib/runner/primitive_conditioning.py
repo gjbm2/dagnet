@@ -60,7 +60,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date as _date
 from pathlib import Path as _Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -88,6 +88,11 @@ from .primitives import (
     WeightedPrimitiveEvidenceView,
     make_rng,
 )
+from .timing_particles import (
+    build_row_aligned_lognormal_cdf_from_draws,
+    sample_timing_particles_from_params,
+)
+from .numpy_stats import normal_cdf
 
 
 # ─── Process-memory cache ──────────────────────────────────────────────
@@ -459,6 +464,18 @@ def _condition_primitive_uncached(
         timing_prior=timing_obj,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
+        observation_mask_draws=_build_observation_mask_from_weighted_view(
+            weighted_view,
+            options.draw_count,
+            options.timing_cdf_max_tau + 1,
+        ),
+        observation_mask_draws_by_source_day=(
+            _build_observation_masks_by_source_day_from_weighted_view(
+                weighted_view,
+                options.draw_count,
+                options.timing_cdf_max_tau + 1,
+            )
+        ),
         skipped_evidence_summary={
             'raw_point_count': resolution.diagnostics.raw_point_count,
             'bound_point_count': resolution.diagnostics.bound_point_count,
@@ -720,6 +737,57 @@ def _weights_and_ess(
     return (weights, ess)
 
 
+def _build_observation_mask_from_weighted_view(
+    weighted_view: 'WeightedPrimitiveEvidenceView',
+    draw_count: int,
+    T_p: int,
+) -> np.ndarray:
+    """Aggregate row-presence mask of shape ``(draw_count, T_p)``.
+
+    Retained for diagnostics and legacy/manual tests. The load-bearing
+    composer surface is now source-day-aware; see
+    ``_build_observation_masks_by_source_day_from_weighted_view``.
+    """
+    age_mask = np.zeros(T_p, dtype=np.float64)
+    for row in weighted_view.rows:
+        age = _row_age_days(row)
+        if age is None:
+            continue
+        if 0 <= age < T_p:
+            age_mask[age] = 1.0
+    return np.tile(age_mask, (draw_count, 1))
+
+
+def _build_observation_masks_by_source_day_from_weighted_view(
+    weighted_view: 'WeightedPrimitiveEvidenceView',
+    draw_count: int,
+    T_p: int,
+) -> Mapping[str, np.ndarray]:
+    """Source-day row-presence masks — Phase 6 §4.7.
+
+    ``mask_by_source_day[day][s, age] = 1`` iff an admitted row exists
+    for that exact ``(day, age)`` cell. Covered-positive and covered-zero
+    both set the mask to 1; absent cells remain 0. The mask is shared
+    across draws because row presence is an admission fact, not a draw
+    outcome.
+    """
+    masks_1d: Dict[str, np.ndarray] = {}
+    for row in weighted_view.rows:
+        age = _row_age_days(row)
+        if age is None:
+            continue
+        if 0 <= age < T_p:
+            mask = masks_1d.setdefault(
+                str(row.observed_date),
+                np.zeros(T_p, dtype=np.float64),
+            )
+            mask[age] = 1.0
+    return {
+        day: np.tile(mask, (draw_count, 1))
+        for day, mask in masks_1d.items()
+    }
+
+
 def _row_age_days(row: 'WeightedEvidenceRow') -> Optional[int]:
     """Days between the row's observation date and its snapshot timestamp.
 
@@ -757,7 +825,15 @@ def _row_age_days(row: 'WeightedEvidenceRow') -> Optional[int]:
 
 @dataclass(frozen=True)
 class _CohortLatest:
-    """Latest retrieval per (observed_date) within a primitive's evidence view."""
+    """Latest retrieval per (observed_date) within a primitive's evidence view.
+
+    Per-draw fields (``n_weighted_draws``, ``k_weighted_draws``, shape
+    ``(S,)``) carry the per-draw arrival-weighted counts produced by
+    ``bind_primitive_evidence``. Phase 6 §3.2 / §4.9 single-source-of-
+    truth: these are the load-bearing surface for the per-draw IS
+    likelihood and Beta-conjugate update; the scalar fields are
+    retained for diagnostics and legacy paths.
+    """
 
     observed_date: str
     retrieved_at: Optional[str]
@@ -765,6 +841,8 @@ class _CohortLatest:
     k_raw: int
     n_weighted: float
     k_weighted: float
+    n_weighted_draws: np.ndarray
+    k_weighted_draws: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -784,6 +862,13 @@ class _CohortBucket:
     ``last_k_weighted`` is the cumulative weighted observed count at
     the trajectory's final retrieval; residual count is
     ``n_weighted − last_k_weighted`` (clamped at 0).
+
+    Per-draw fields: ``n_weighted_draws`` is shape ``(S,)``;
+    ``increments_draws`` carries one ``(tau_idx, k_increment_draws)``
+    per retrieval where ``k_increment_draws`` is shape ``(S,)``;
+    ``last_k_weighted_draws`` is shape ``(S,)``. The IS likelihood
+    loop consumes the per-draw arrays directly so per-row arrival
+    weighting flows into the per-particle likelihood.
     """
 
     observed_date: str
@@ -791,6 +876,9 @@ class _CohortBucket:
     increments: Tuple[Tuple[int, float], ...]
     last_observed_tau_idx: int
     last_k_weighted: float
+    n_weighted_draws: np.ndarray
+    increments_draws: Tuple[Tuple[int, np.ndarray], ...]
+    last_k_weighted_draws: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -813,6 +901,9 @@ class _CohortLikelihoodPlan:
     cohort_buckets: Tuple[_CohortBucket, ...]
     cohort_n_weighted_total: float
     cohort_k_weighted_total: float
+    cohort_n_weighted_total_draws: np.ndarray
+    cohort_k_weighted_total_draws: np.ndarray
+    draw_count: int
     m_S_doc52: float
     row_level_n_weighted_total: float
     row_level_k_weighted_total: float
@@ -951,6 +1042,7 @@ def _build_cohort_likelihood_plan(
     # Pass 1 proper: pick latest retrieved_at per cohort from the
     # deduped trajectory. Multiple retrievals per cohort is the normal
     # case under the per-retrieval merge — not flagged as a "conflict".
+    S = int(weighted_view.draw_count)
     cohort_latest_list: list[_CohortLatest] = []
     for od, deduped_rows in by_obs_deduped.items():
         sorted_rows = sorted(
@@ -966,10 +1058,20 @@ def _build_cohort_likelihood_plan(
             k_raw=int(latest.k),
             n_weighted=float(latest.n_weighted),
             k_weighted=float(latest.k_weighted),
+            n_weighted_draws=np.asarray(latest.n_weighted_draws, dtype=np.float64),
+            k_weighted_draws=np.asarray(latest.k_weighted_draws, dtype=np.float64),
         ))
 
     cohort_n_total = float(sum(c.n_weighted for c in cohort_latest_list))
     cohort_k_total = float(sum(c.k_weighted for c in cohort_latest_list))
+    cohort_n_total_draws = (
+        np.sum(np.stack([c.n_weighted_draws for c in cohort_latest_list], axis=0), axis=0)
+        if cohort_latest_list else np.zeros(S, dtype=np.float64)
+    )
+    cohort_k_total_draws = (
+        np.sum(np.stack([c.k_weighted_draws for c in cohort_latest_list], axis=0), axis=0)
+        if cohort_latest_list else np.zeros(S, dtype=np.float64)
+    )
     m_S_doc52 = float(sum(c.n_raw for c in cohort_latest_list))
 
     # ── Pass 2: τ-bucket construction (latent only) ──
@@ -1021,11 +1123,17 @@ def _build_cohort_likelihood_plan(
                     deduped.append(same_tau_latest)
                 i = j
             n_d = float(deduped[-1][1].n_weighted)
+            n_d_draws = np.asarray(
+                deduped[-1][1].n_weighted_draws, dtype=np.float64,
+            )
             last_observed_tau_idx = int(deduped[-1][0])
             increments: list[tuple[int, float]] = []
+            increments_draws: list[tuple[int, np.ndarray]] = []
             prev_k = 0.0
+            prev_k_draws = np.zeros(S, dtype=np.float64)
             for tau_idx, row in deduped:
                 k = float(row.k_weighted)
+                k_draws = np.asarray(row.k_weighted_draws, dtype=np.float64)
                 if k < prev_k:
                     provenance.append(
                         f'monotone_k_clamp_fired['
@@ -1033,22 +1141,35 @@ def _build_cohort_likelihood_plan(
                         f'k_observed={k:.6f},k_clamped_to={prev_k:.6f}]'
                     )
                     k = prev_k
+                # Apply the same monotone-k clamp per draw — the
+                # cumulative k_weighted across retrievals of one cohort
+                # is monotone non-decreasing by construction; per-draw
+                # weighting preserves that monotonicity except for
+                # numerical floor cases the scalar path also clamps.
+                k_draws = np.maximum(k_draws, prev_k_draws)
                 inc = k - prev_k
+                inc_draws = k_draws - prev_k_draws
                 # Append every retrieval (positive AND zero increments).
                 # Zero cells contribute 0·log(p·ΔF) = 0 to the
                 # likelihood but must remain in the trajectory so the
                 # next positive cell uses the correct ΔF lower bound.
                 increments.append((tau_idx, inc))
+                increments_draws.append((tau_idx, inc_draws))
                 prev_k = k
+                prev_k_draws = k_draws
             if not increments:
                 continue
             last_k = min(prev_k, n_d)
+            last_k_draws = np.minimum(prev_k_draws, n_d_draws)
             cohort_buckets_list.append(_CohortBucket(
                 observed_date=od,
                 n_weighted=n_d,
                 increments=tuple(increments),
                 last_observed_tau_idx=last_observed_tau_idx,
                 last_k_weighted=last_k,
+                n_weighted_draws=n_d_draws,
+                increments_draws=tuple(increments_draws),
+                last_k_weighted_draws=last_k_draws,
             ))
 
     # ── Reason precedence: no_evidence wins regardless of family ──
@@ -1068,6 +1189,9 @@ def _build_cohort_likelihood_plan(
         cohort_buckets=tuple(cohort_buckets_list),
         cohort_n_weighted_total=cohort_n_total,
         cohort_k_weighted_total=cohort_k_total,
+        cohort_n_weighted_total_draws=cohort_n_total_draws,
+        cohort_k_weighted_total_draws=cohort_k_total_draws,
+        draw_count=S,
         m_S_doc52=m_S_doc52,
         row_level_n_weighted_total=row_level_n_total,
         row_level_k_weighted_total=row_level_k_total,
@@ -1129,12 +1253,24 @@ def _evaluate_likelihood_plan(
 
     if plan.timing_family == TimingFamily.NON_LATENT:
         # F ≡ 1 degeneration: cohort-level Beta-Binomial conjugate on
-        # cohort-distinct totals (Σ n_weighted_d, Σ kₘ_weighted).
-        n_w = plan.cohort_n_weighted_total
-        k_w = plan.cohort_k_weighted_total
-        cond_alpha = max(prior_alpha + k_w, 1e-12)
-        cond_beta = max(prior_beta + (n_w - k_w), 1e-12)
-        cond_p = p_rng.beta(cond_alpha, cond_beta, size=draw_count)
+        # cohort-distinct totals (Σ n_weighted_d, Σ kₘ_weighted). The
+        # per-draw arrival weighting from Phase 6 §3.2 / §4.9 makes
+        # (α, β) per-draw: each draw s gets a Beta(α[s], β[s])
+        # posterior whose parameters consume that draw's arrival-
+        # weighted (n, k). Sampling one p per draw with its own (α[s],
+        # β[s]) produces the conditioned p_draws under the per-draw
+        # latency map. When all per-draw weights coincide (legacy
+        # scalar-arrival data degeneracy) every Beta(α[s], β[s])
+        # collapses to a single Beta and the S samples are iid from
+        # the same posterior — no separate code path.
+        n_w_draws = plan.cohort_n_weighted_total_draws
+        k_w_draws = plan.cohort_k_weighted_total_draws
+        cond_alpha_draws = np.maximum(prior_alpha + k_w_draws, 1e-12)
+        cond_beta_draws = np.maximum(
+            prior_beta + (n_w_draws - k_w_draws), 1e-12,
+        )
+        # Per-draw sample: one p per (α[s], β[s]) pair.
+        cond_p = p_rng.beta(cond_alpha_draws, cond_beta_draws)
         prior_p = p_rng.beta(prior_alpha_safe, prior_beta_safe, size=draw_count)
         # When the plan is unevaluable (empty evidence, no timing grid,
         # no latent rows) the conjugate update is a numerical no-op and
@@ -1167,41 +1303,44 @@ def _evaluate_likelihood_plan(
     proposal_p_draws = p_rng.beta(proposal_alpha, proposal_beta, size=draw_count)
     prior_p_draws = p_rng.beta(prior_alpha_safe, prior_beta_safe, size=draw_count)
 
-    timing_rng = make_rng(draw_family_key, 'primitive_timing_draws')
-    mu = float(resolved_latency.mu)
-    sigma = float(resolved_latency.sigma)
-    onset = float(resolved_latency.onset_delta_days)
-    mu_sd = float(resolved_latency.mu_sd or 0.0)
-    sigma_sd = float(resolved_latency.sigma_sd or 0.0)
-    onset_sd = float(resolved_latency.onset_sd or 0.0)
-    onset_mu_corr = float(resolved_latency.onset_mu_corr or 0.0)
+    # Per Phase 6 §3.2 single source of truth: timing particles come
+    # from the unified keyed-RNG helper, which prefix-arrival uses to
+    # build the per-draw arrival map. Identical key → identical
+    # particles in both places. The zero-dispersion data case is an
+    # algebraic degeneracy of the same multivariate sample (cov=0 ⇒
+    # numpy SVD returns the mean), not a separate code path.
+    mu_draws, sigma_draws, onset_draws = sample_timing_particles_from_params(
+        mu=float(resolved_latency.mu),
+        sigma=float(resolved_latency.sigma),
+        onset=float(resolved_latency.onset_delta_days),
+        mu_sd=float(resolved_latency.mu_sd or 0.0),
+        sigma_sd=float(resolved_latency.sigma_sd or 0.0),
+        onset_sd=float(resolved_latency.onset_sd or 0.0),
+        onset_mu_corr=float(resolved_latency.onset_mu_corr or 0.0),
+        draw_family_key=draw_family_key,
+        draw_count=draw_count,
+    )
 
-    has_dispersions = (mu_sd > 0.0 or sigma_sd > 0.0 or onset_sd > 0.0)
-    if has_dispersions:
-        means = np.array([mu, sigma, onset], dtype=np.float64)
-        sds = np.array([
-            max(mu_sd, 1e-10),
-            max(sigma_sd, 1e-10),
-            max(onset_sd, 1e-10),
-        ], dtype=np.float64)
-        cov = np.diag(sds ** 2)
-        cov[2, 0] = cov[0, 2] = onset_mu_corr * sds[2] * sds[0]
-        timing_particles = timing_rng.multivariate_normal(
-            means, cov, size=draw_count,
-        )
-        mu_draws = timing_particles[:, 0]
-        sigma_draws = np.clip(timing_particles[:, 1], 0.01, 20.0)
-        onset_draws = np.maximum(timing_particles[:, 2], 0.0)
-    else:
-        mu_draws = np.full(draw_count, mu)
-        sigma_draws = np.full(draw_count, max(sigma, 0.01))
-        onset_draws = np.full(draw_count, max(onset, 0.0))
-
+    # Two CDF surfaces from the same particles:
+    #   - proposal_cdf_draws: endpoint G(τ). The chart-published "value
+    #     at age τ" surface. Resampled into cond_cdf_draws / kept as
+    #     prior_cdf_draws for TimingPosterior.cdf_draws.
+    #   - proposal_cdf_draws_row_aligned: day-averaged B(τ) =
+    #     ∫_τ^{τ+1} G(v) dv (Phase 6 Appendix A / §4.9). Local to the
+    #     IS likelihood — snapshot rows are daily buckets, so cell
+    #     probabilities are formed against the integrated CDF. Does
+    #     NOT propagate to TimingPosterior.
     proposal_cdf_draws = _build_per_draw_cdf(
         mu_draws=mu_draws,
         sigma_draws=sigma_draws,
         onset_draws=onset_draws,
         T=T,
+    )
+    proposal_cdf_draws_row_aligned = build_row_aligned_lognormal_cdf_from_draws(
+        mu_draws=mu_draws,
+        sigma_draws=sigma_draws,
+        onset_draws=onset_draws,
+        horizon_len=T,
     )
 
     # Per-cohort multinomial likelihood over τ-cells (proposal §3):
@@ -1223,25 +1362,34 @@ def _evaluate_likelihood_plan(
     # The residual cell uses ``bucket.last_observed_tau_idx`` —
     # equivalently ``bucket.increments[-1][0]`` once zero cells are
     # preserved. Named explicitly here to make the §3 mapping obvious.
+    # Per-draw multinomial cell likelihood: ``inc_k`` and the residual
+    # weight are themselves draw-indexed (Phase 6 §3.2 / §4.9). The
+    # per-draw arrival weight propagates into the per-particle
+    # likelihood without changing the cell-by-cell formula — each
+    # draw contributes ``inc_k_draws[s] * log(p[s] * (F[s,τᵢ] − F[s,τᵢ₋₁]))``
+    # to its own likelihood, and the residual cell uses
+    # ``(n_draws[s] − last_k_draws[s]) * log(1 − p[s]·F[s,τₘ])``.
+    # Zero per-draw increments are algebraic degeneracies of the same
+    # multiply (``0 * log(cell_prob) = 0``); no inc_k > 0 branch.
     log_lik = np.zeros(draw_count, dtype=np.float64)
     for bucket in plan.cohort_buckets:
         prev_F = np.zeros(draw_count, dtype=np.float64)
-        for tau_idx, inc_k in bucket.increments:
-            cur_F = proposal_cdf_draws[:, tau_idx]
-            if inc_k > 0.0:
-                cell_prob = np.clip(
-                    proposal_p_draws * (cur_F - prev_F),
-                    1e-15, 1.0 - 1e-15,
-                )
-                log_lik += inc_k * np.log(cell_prob)
+        for tau_idx, inc_k_draws in bucket.increments_draws:
+            cur_F = proposal_cdf_draws_row_aligned[:, tau_idx]
+            cell_prob = np.clip(
+                proposal_p_draws * (cur_F - prev_F),
+                1e-15, 1.0 - 1e-15,
+            )
+            log_lik += inc_k_draws * np.log(cell_prob)
             prev_F = cur_F
         p_arrived_total = np.clip(
-            proposal_p_draws * proposal_cdf_draws[:, bucket.last_observed_tau_idx],
+            proposal_p_draws * proposal_cdf_draws_row_aligned[:, bucket.last_observed_tau_idx],
             1e-15, 1.0 - 1e-15,
         )
-        residual = bucket.n_weighted - bucket.last_k_weighted
-        if residual > 0.0:
-            log_lik += residual * np.log1p(-p_arrived_total)
+        residual_draws = np.maximum(
+            bucket.n_weighted_draws - bucket.last_k_weighted_draws, 0.0,
+        )
+        log_lik += residual_draws * np.log1p(-p_arrived_total)
 
     is_target_ess = 20.0
     best_w: Optional[np.ndarray] = None
@@ -1266,6 +1414,8 @@ def _evaluate_likelihood_plan(
             draw_count, size=draw_count, replace=True, p=best_w,
         )
         cond_p_draws = proposal_p_draws[indices]
+        # Posterior and prior chart surfaces use endpoint G(τ); the
+        # row-aligned B(τ) stays inside the IS likelihood scope.
         cond_cdf_draws = proposal_cdf_draws[indices, :]
         return _ConditioningOutcome(
             status='conditioned',
@@ -1305,22 +1455,26 @@ def _build_per_draw_cdf(
     onset_draws: np.ndarray,
     T: int,
 ) -> np.ndarray:
-    """Shifted log-normal CDF on a (S, T) grid for the joint particles.
+    """Endpoint shifted log-normal CDF on a (S, T) grid for joint particles.
 
     ``cdf[s, t] = Φ((log(t - onset_s) - μ_s) / σ_s)`` for ``t > onset_s``,
-    zero otherwise. Vectorised across draws and tau via
-    ``scipy.special.erfc``."""
-    from scipy.special import erfc as _erfc
+    zero otherwise. This is the chart-published "value at age τ" surface
+    consumed via ``TimingPosterior.cdf_draws``; the day-averaged
+    row-aligned integral ``B(τ) = ∫_τ^{τ+1} G(v) dv`` is a Phase 6 §4.9
+    convention for differencing against snapshot rows and must stay
+    local to the IS likelihood — it does not flow onto the timing
+    posterior. Uses ``numpy_stats.normal_cdf`` to keep the prod runtime
+    dependency-light.
+    """
     tau_grid = np.arange(T, dtype=np.float64)[None, :]  # (1, T)
     onset = onset_draws[:, None]  # (S, 1)
     model_age = tau_grid - onset
-    safe_age = np.where(model_age > 0.0, model_age, 1.0)
+    positive = model_age > 0.0
+    safe_age = np.where(positive, model_age, 1.0)
     log_age = np.log(safe_age)
-    sigma = np.where(sigma_draws[:, None] > 0.0, sigma_draws[:, None], 1.0)
-    z = (log_age - mu_draws[:, None]) / sigma
-    cdf = 0.5 * _erfc(-z / math.sqrt(2.0))
-    cdf = np.where(model_age > 0.0, cdf, 0.0)
-    return np.clip(cdf, 0.0, 1.0)
+    z = (log_age - mu_draws[:, None]) / sigma_draws[:, None]
+    cdf = normal_cdf(z)
+    return np.where(positive, cdf, 0.0)
 
 
 def _make_prior_only_primitive(
@@ -1372,6 +1526,13 @@ def _make_prior_only_primitive(
         sd=float(prior_posterior.sd) if prior_posterior.sd is not None else 0.0,
         draws=prior_draws,
     )
+    # CONDITIONED-path-with-zero-admitted-rows MUST emit an explicit
+    # all-zeros mask, not None — None is reserved for the F-mode
+    # unconditioned-overlay path. The conditioning locus consulted the
+    # evidence and found none; coverage/exposure consumers downstream
+    # must see "no observation" rather than "fully observed".
+    T_p = len(timing_obj.cdf_mean)
+    mask_zeros = np.zeros((draw_count, T_p), dtype=np.float64)
     return ConditionedTransitionPrimitive(
         transition=transition,
         scope=scope,
@@ -1395,6 +1556,7 @@ def _make_prior_only_primitive(
         timing_prior=timing_obj,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
+        observation_mask_draws=mask_zeros,
         skipped_evidence_summary=(
             {
                 **(
@@ -1457,6 +1619,13 @@ def _make_degraded_primitive(
         sd=float(prior_posterior.sd) if prior_posterior.sd is not None else 0.0,
         draws=prior_draws,
     )
+    # DEGRADED is a conditioned-path outcome (arrival weights were
+    # consulted; every row rejected off-clock). Per the contract, emit
+    # all-zeros so downstream coverage/exposure correctly report
+    # zero observation — None is reserved for F-mode overlays that
+    # bypass evidence binding entirely.
+    T_p = len(timing_obj.cdf_mean)
+    mask_zeros = np.zeros((draw_count, T_p), dtype=np.float64)
     return ConditionedTransitionPrimitive(
         transition=transition,
         scope=scope,
@@ -1475,6 +1644,7 @@ def _make_degraded_primitive(
         timing_prior=timing_obj,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
+        observation_mask_draws=mask_zeros,
         skipped_evidence_summary={},
         notes=(note,),
     )
@@ -1672,6 +1842,11 @@ def make_unconditioned_primitive(
         structural_identity_compat=timing_obj_prior.structural_identity_compat,
     )
 
+    # F-mode unconditioned overlay bypasses evidence binding by design —
+    # no rows are consulted. observation_mask_draws=None signals to the
+    # composer "use all-ones default"; this is safe because coverage/
+    # exposure are never read from this path (Phase 6 §4.8 reads them
+    # from the conditioned operator).
     return ConditionedTransitionPrimitive(
         transition=transition,
         scope=primitive_scope,
@@ -1697,6 +1872,7 @@ def make_unconditioned_primitive(
         timing_prior=timing_obj_prior,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
+        observation_mask_draws=None,
         skipped_evidence_summary={},
         notes=tuple(
             n for n in (

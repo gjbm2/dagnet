@@ -65,6 +65,23 @@ Shadow comparison (running new alongside legacy under `--diag`) is an **optional
 
 ---
 
+## Implementation progress
+
+<!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
+
+- [x] Stage 1 — Prep — completed 16-May-26
+- [x] Stage 2 — Build — completed 16-May-26
+  - [x] Stage 2(a) — atoms 2.1–2.3 (per-anchor outputs) + core 2.4/2.5 tests — landed 16-May-26
+  - [x] Stage 2(b) — Atom 2.3 row-level fields (strict, adjusted, rate row-level aggregations with admissibility filter and IPW divide) + §6.1/§6.2/§5.6 invariant tests + MCAR battery — landed 16-May-26
+  - **16-May-26 review note** — Atom 2.1 source-day mask defect fixed after review: conditioned support/exposure now read row presence by source day where the primitive binding supplies source-day masks, while preserving local-clock aggregate masks for identity/window helper bindings.
+  - **§5.6 adjusted-evidence note** — the reducer-owned adjusted numerator now deliberately avoids strict forward-fill before the IPW divide. Treat this as the intended resolution of the §5.6 / §4.9 interaction, pending contract text cleanup; do not regress it back to `strict / coverage`.
+  - **16-May-26 kernel-construction resolution** — the Appendix A discretisation question is answered in code by separating two surfaces from the same per-draw particles: endpoint `G(τ)` is what lives on `TimingPosterior.cdf_draws` (the chart-published "value at age τ" surface, consumed by the composer and the legacy reducer); day-averaged `B(τ) = ∫_τ^{τ+1} G(v) dv` stays local to the IS likelihood cell-differencing in `primitive_conditioning._run_is_proposal` so cell probabilities are formed against the daily-bucket convention snapshot rows already use. The two helpers (`_build_per_draw_cdf` for endpoint, `timing_particles.build_row_aligned_lognormal_cdf_from_draws` for row-aligned) are both scipy-free via `numpy_stats.normal_cdf`. The earlier failure mode — feeding the row-aligned `B(τ)` onto `TimingPosterior.cdf_draws` — shifted the model curve ~½ day forward and was visible as the no-evidence single-hop oracle mismatch in `test_no_evidence_single_hop_matches_unconditioned_fw_convolution_midline` and the two `test_v3_empty_frames_*` contract tests.
+- [ ] Stage 3 — Cut over (blocked on §5.6 contract text cleanup)
+- [ ] Stage 4 — Clean up
+- [ ] Stage 5 — FE / output follow-ups
+
+---
+
 ## Stage 1 — Prep
 
 ### Atom 1.1 — Photocopy
@@ -215,7 +232,7 @@ New file: `graph-editor/lib/tests/test_model_span_spine_selected_cohort.py`. Cov
 
 ### Atom 2.5 — MCAR sparsity outside-in oracle (new test family)
 
-New file: `graph-editor/lib/tests/test_mcar_sparsity_recovery_outside_in.py`. Synthetic-graph oracle that injects missing-completely-at-random sparsity into a fully-observed baseline and verifies the adjusted readout recovers the dense-data baseline within a stated noise tolerance. The dense baseline is the ground truth; sparsity injection is the deviation; IPW under MCAR is the claim that the adjusted output reverts to baseline.
+New file: `graph-editor/lib/tests/test_mcar_sparsity_recovery.py`. Synthetic-graph oracle that injects missing-completely-at-random sparsity into a fully-observed baseline and verifies the adjusted readout recovers the dense-data baseline within a stated noise tolerance. The dense baseline is the ground truth; sparsity injection is the deviation; IPW under MCAR is the claim that the adjusted output reverts to baseline.
 
 **Fixture shape**:
 
@@ -235,7 +252,7 @@ New file: `graph-editor/lib/tests/test_mcar_sparsity_recovery_outside_in.py`. Sy
 **Tolerance derivation**: the IPW estimator's variance is `Var[evidence_adjusted] ≈ Σ_A (evidence_strict_A)² × Var[1/coverage_A] ≈ Σ_A evidence_strict_A² × p_drop × (1 − p_drop) / (n_admitted_A × coverage_A²)` per Horvitz-Thompson. Use this to set a per-τ tolerance band; pass iff the observed delta is within ~3 standard deviations.
 
 **Build acceptance** (in addition to the existing tests):
-- `test_mcar_sparsity_recovery_outside_in.py` all green across `p_drop ∈ {0.1, 0.3, 0.5}` variants.
+- `test_mcar_sparsity_recovery.py` all green across `p_drop ∈ {0.1, 0.3, 0.5}` variants.
 - A "stress" variant with `p_drop = 0.8` confirmed to fail the standard tolerance but still bias-free in mean over many fixture seeds — proving the variance-blowup story without claiming pointwise accuracy.
 
 Tests are blind — expected numerics from first principles, not from current production output. Tolerance: float precision where deterministic (empirical operator); sampling-noise tolerance where MC (conditioned operator).
@@ -273,6 +290,89 @@ There is an unresolved question about the **conditioned** operator's per-edge ke
 ### Optional: shadow diagnostic during build
 
 The implementer may add a temporary `--diag`-only call site in `_project_runtime_rows` that runs `project_selected_cohort_rows` alongside `_selected_cohort_group_rate_draws` and logs per-(draw, τ) deltas for triage. Use it to categorise pre-cutover deltas as legacy bug / display difference / new-path defect. It is **diagnostic-only — not a gate**. It is removed in Stage 3.
+
+---
+
+## Stage 2(a) and Stage 2(b) — explicit sub-stage split
+
+Stage 2's atoms were partially landed on 16-May-26 in a context-constrained pass that delivered the load-bearing code (atoms 2.1, 2.2, 2.3) plus a focused subset of the test coverage atoms 2.4 and 2.5 prescribe. The remaining test coverage is **plan-required** (called out by the Build acceptance section above) and must land before the call-site flip in Stage 3 — running Stage 3 against an incomplete blind-test net is the AP59 closure pattern this plan exists to avoid.
+
+To keep that boundary explicit, Stage 2 is split into two sub-stages:
+
+- **Stage 2(a)** — landed 16-May-26. Atoms 2.1, 2.2, 2.3 fully delivered. Atoms 2.4 and 2.5 landed a focused core (9 reducer tests + 2 directional MCAR tests respectively) — sufficient to prove the code shape works but NOT sufficient to discharge Atom 2.4 / 2.5 acceptance.
+- **Stage 2(b)** — outstanding. Completes Atom 2.4 and Atom 2.5 to the plan's original acceptance criteria. Entry condition: Stage 2(a) is in working order (113 tests passing across substrate + new modules + reducer + minimal MCAR). Exit condition: every bullet in the Build acceptance section above is green.
+
+The Stage 2(a) split is not a re-scope — the plan's Build acceptance section is unchanged. Stage 2(b) is the path back to plan compliance, not a deferral.
+
+### Stage 2(b) — outstanding work
+
+This sub-stage is the bookkeeping that completes Stage 2's blind test obligations. The code surfaces from Stage 2(a) (`empirical_evidence_operator.py`, `project_selected_cohort_rows` in `model_span_spine.py`, `observation_mask_draws` on `ConditionedTransitionPrimitive`) are the substrate every Stage 2(b) test consumes — no code changes here, only new tests.
+
+**Outstanding test work** — distinct files / fixtures:
+
+1. **Atom 2.4 — Phase 6 §6.1 invariants 1–12 against the conditioned operator**. Add to `lib/tests/test_model_span_spine_selected_cohort.py`. Source: [phase-6-evidence-operator-contract.md §6.1](phase-6-evidence-operator-contract.md#61-invariants). Each invariant is a separate test asserting an algebraic identity on the reducer's conditioned-operator outputs (`rate_draws_model`, `x_draws_model`, `y_draws_model`, plus the per-anchor coverage/exposure surfaces). Tests are blind — expected numerics from the §6.1 contract, not from running the reducer and recording outputs.
+
+2. **Atom 2.4 — Phase 6 §6.2 W1–W4 against the conditioned operator**. Same file. Source: [phase-6-evidence-operator-contract.md §6.2](phase-6-evidence-operator-contract.md#62-window-and-cohort-mode-invariants). Four window-mode degeneracy invariants — identity carrier, single-hop, multi-hop, A=X collapse. Blind, derived from §6.2 contract.
+
+3. **Atom 2.4 — Same-data parity (rich evidence + good fit) test**. Same file. Construct a fixture where the parametric posterior closely matches the empirical rate (alpha+k ≈ k_obs, beta+n-k ≈ n_obs−k_obs). At saturation, `y_draws_model[s, -1].mean()` and `evidence_y_strict_by_anchor_tau[anchor][-1]` must agree within sampling noise (≤ 2σ derived from the IS proposal's effective sample size). This proves the two surfaces converge at the limit even though they're separate.
+
+4. **Atom 2.4 — Strict vs adjusted decomposition variants (Phase 6 §5.6)**. Same file. Per the plan's Atom 2.4 spec:
+   - Full-coverage fixture: with `coverage_y_A = 1.0` everywhere, `evidence_y_adjusted = Σ_admissible evidence_y_strict_A`. The IPW divide is a no-op.
+   - Partial-coverage fixture: with `coverage_y_A ∈ (0, 1)`, `evidence_y_adjusted = Σ evidence_y_strict_A / coverage_y_A` recovers the model-projected mass exactly when the empirical kernel is identical to the conditioned kernel (sanity check on the IPW formula).
+   - Admissibility filter: cohorts with `exposure_y_A[τ] = 0` contribute neither to strict nor adjusted sums at τ.
+   - Per-terminal coverage: `coverage_x_A` and `coverage_y_A` are read at distinct nodes (X and Z). Active-cohort fixture verifies `coverage_y_A ≤ coverage_x_A` in mass-weighted terms.
+
+5. **Atom 2.5 — MCAR `p_drop ∈ {0.1, 0.3, 0.5}` battery against a latent multi-hop fixture**. Add to `lib/tests/test_mcar_sparsity_recovery.py`. The Stage 2(a) σ=0 fixture is too degenerate for the IPW story to express; needs a synthetic multi-hop graph (3–4 edges, latent edges with σ ∈ [1, 2]) with deterministic calibrated edge probabilities so the dense baseline is analytic. Inject MCAR sparsity at the row level (drop independently per (edge, source-day, age) cell with probability `p_drop`); verify directionals from the plan's Atom 2.5 spec — strict shows drop, coverage drops proportionally, adjusted recovers dense within Horvitz-Thompson tolerance.
+
+6. **Atom 2.5 — Stress variant `p_drop = 0.8`**. Same file. Confirm the standard tolerance fails (variance is too large for pointwise accuracy) but the bias is centred on zero over ≥ 20 fixture seeds — proves the variance-blowup story per Phase 6 §5.6 rather than claiming pointwise accuracy.
+
+7. **Atom 2.5 — Horvitz-Thompson per-τ variance bound derivation**. Same file. Implement the IPW variance estimator from the plan's Atom 2.5 spec: `Var[evidence_adjusted] ≈ Σ_A (evidence_strict_A)² × p_drop × (1 − p_drop) / (n_admitted_A × coverage_A²)`. Use it to set per-τ tolerance bands; pass iff the observed delta is within ~3σ.
+
+### Stage 2(b) acceptance
+
+- All seven outstanding items above land as new tests; existing Stage 2(a) tests remain green.
+- The Build acceptance section above is fully discharged with no remaining "deferred" or "scope-reduced" caveats in the tracking ledger.
+- The progress block shows `[x] Stage 2(b)` only after the test suite passes end-to-end.
+
+### Stage 2(b) entry condition
+
+Read this section, then the Stage 2(a) tests already in the tree (`test_empirical_evidence_operator.py`, `test_model_span_spine_selected_cohort.py`, `test_mcar_sparsity_recovery.py`) — they are the working examples of fixture construction (the σ=0 limitation noted in MCAR is the trap to avoid for Atom 2.5's outstanding work; switch to σ > 0 latent fixtures). Then load Phase 6 contract §6.1 / §6.2 / §5.6 from [phase-6-evidence-operator-contract.md](phase-6-evidence-operator-contract.md) — those define the expected numerics for items 1, 2, 4.
+
+### Stage 2(b) discovery — §5.6 IPW unbiasedness vs §4.9 forward-fill
+
+**Surfaced**: 16-May-26 during Stage 2(b) test landing. **Resolution direction accepted 16-May-26**: adjusted evidence should not be computed as literal `strict / coverage` where `strict` is the forward-filled empirical cumulative. The reducer-owned adjusted numerator uses observed adjacent increments only, then applies the IPW divide by the conditioned coverage stream. This preserves strict as "what was literally observed under latest-at-or-before" while giving adjusted a non-forward-filled numerator appropriate for the MCAR recovery claim.
+
+**The discrepancy.** The Stage 2(b) MCAR test battery surfaces evidence that the §5.6 `adjusted = strict / coverage` formula, applied against the §4.9 forward-fill empirical kernel, does not satisfy the §5.6 unbiasedness claim under MCAR. Forward-fill imputes the latest observed `k` across absent ages — a local degeneracy that makes the cumulative approximately insensitive to per-cell dropout at saturation, while coverage drops as a function of mass-weighted mask presence. The IPW divide therefore appears to overshoot the dense baseline rather than recover it.
+
+The Stage 2(b) tests now pin the intended reducer contract at the engine level: strict remains forward-filled; adjusted is reducer-owned and must not be recomputed as `strict / coverage`; the HT tolerance helpers and MCAR battery check the accepted adjusted-output semantics. The contract document still needs wording cleanup because Phase 6 §5.6 currently states the older `strict / coverage` formula.
+
+**Contract cleanup required before Stage 3**:
+
+- Update Phase 6 §5.6 so "adjusted evidence" is defined from the adjusted empirical numerator, not from the strict forward-filled cumulative.
+- Preserve the display distinction: E mode reads strict; E+F mode reads adjusted plus model; neither mode reintroduces the old row-level `empirical × coverage + model × (1 − coverage)` blend.
+- Keep the MCAR/HT tests as the acceptance guard for the adjusted numerator; do not weaken them or replace them with a tautological recomputation from reducer outputs.
+
+**Stage 2 status**: The Atom 2.3 row-level fields (`evidence_x_strict`, `evidence_y_strict`, `rate_strict`, `evidence_x_adjusted`, `evidence_y_adjusted`, `rate_adjusted`) are built with the accepted strict-vs-adjusted split. The source-day mask defect below is fixed; Stage 3 cannot enter until the Phase 6 §5.6 prose is updated to match the accepted reducer contract.
+
+**Empirical operator dependency note**: across this section and §5.6, the empirical operator is described as sharing inputs with the conditioned operator. To be precise: both operators share the *same admitted candidate rows* and the *same pre-conditioning arrival-map weighting* (the role-clock latency map built upstream of primitive conditioning). The empirical operator does NOT read conditioned probability, value-stream, coverage, exposure, or any posterior-conditioned output. Phrasings that suggest otherwise (e.g. "depends on the conditioned operator") are imprecise — the correct framing is "shares the pre-conditioning arrival-map input used by evidence binding".
+
+### Stage 2 review defect — source-day-aware conditioned mask
+
+**Surfaced**: 16-May-26 code review after Stage 2(b) tests passed.
+
+**Fixed**: 16-May-26. `ConditionedTransitionPrimitive` now carries `observation_mask_draws_by_source_day`; conditioned primitives build that map from admitted rows; `subject_span_composer` selects source-day masks during support/exposure DP propagation. Value/model mass still uses the original unmasked DP. Identity/window-local bindings preserve the aggregate age mask when a propagated calendar day has no source-day entry, because window helpers are local-clock primitives; composed/active bindings treat missing source-day entries as absent.
+
+**Defect**: Atom 2.1 and Phase 6 §4.7 define the observation mask per concrete edge and per `(source_day, age)` cell. The current conditioned-path mask is age-only: `_build_observation_mask_from_weighted_view` sets `age_mask[age] = 1` if any admitted source day has a row at that age, then tiles that mask across draws. In a multi-source-day or active-cohort case, a row for source day `s1` at age `a` can incorrectly mark source day `s2` at age `a` as observed. Downstream, the conditioned support/exposure streams overstate coverage along wavefront cells that route through `s2`.
+
+**Fix scope**:
+
+- Carry source-day-aware row presence through the conditioned operator, not just the empirical operator. The representation can mirror the empirical operator's `*_by_source_day` maps or another source-day-indexed structure, but the composer must be able to select the mask matching the actual source day reached by the wavefront.
+- Update `subject_span_composer.compose_primitive_span` so support/exposure propagation reads the source-day-specific mask when convolving from a source node. Padding/truncation must not use CDF saturation padding for masks; absent future cells remain absent unless an explicit row exists at that age/source-day.
+- Keep F-mode unconditioned overlays as the only all-ones default (`observation_mask_draws=None`). Conditioned prior-only / degraded paths with zero admitted rows remain all-zero.
+- Add a blind regression in `test_model_span_spine_selected_cohort.py` or `test_subject_span_composer.py`: two source days, same edge, row present at `(s1, age=a)` and absent at `(s2, age=a)`; seed mass routed through both source days; assert coverage/support drops only for the `s2` wavefront and remains observed for `s1`.
+- Add an active-carrier-style regression where carrier timing lands mass at multiple X source days and subject evidence is sparse by source day. This is the high-risk production shape because the current age-only mask can look correct in single-source-day window tests.
+
+**Exit condition**: focused Stage 2 tests still pass, plus the new source-day-mask regression protects against the age-only collapse. The remaining Stage 2 blocker is Phase 6 §5.6 prose cleanup for the accepted adjusted-evidence semantics.
 
 ---
 
@@ -514,6 +614,7 @@ Halt if:
 - **The plan is about to source coverage or exposure from the empirical operator.** Per Phase 6 §4.9 coverage paragraph, the empirical kernel is zero exactly where the mask is zero, so support/value collapses to 1 — coverage from the empirical operator is meaningless. Coverage and exposure must come from the conditioned operator with the row-presence mask (§4.8), read at X and Z. Hard stop.
 - **The two-surface separation test (Atom 2.4) fails** because `rate_draws_model` and the strict empirical readout (`evidence_y_strict_by_anchor_tau` / `evidence_x_strict_by_anchor_tau`) are numerically equal where they shouldn't be. This means the operators have been wired with the same kernel family by mistake. The operator construction in Atom 2.2 has collapsed; fix before continuing.
 - **Appendix A (discretisation kernel) of the Phase 6 contract has not closed** for the conditioned operator. Stage 2 cannot finalise the conditioned operator's kernel construction until that closes. The empirical operator can be built and tested independently while Appendix A is open.
+- **A patch reverts adjusted evidence to literal `strict / coverage` using the forward-filled strict cumulative.** The accepted Stage 2(b) resolution uses a separate adjusted empirical numerator with adjacent observed increments only, then applies IPW. The Phase 6 prose must be updated to match; code should not be regressed to the old prose.
 - A Phase 6 §6.1 / §6.2 blind test fails and the failure is not pinned to a Stage 2 mask-plumbing or reducer defect.
 - An outside-in failure at Stage 3 cannot be triaged into one of the three categories (new-path defect, legacy-was-accidentally-right, legacy-was-wrong).
 - A new code path is needed inside the reducer (`if mode == ...`, `if carrier_is_identity ...`, `if window_or_a_equals_x ...`). The spine's degeneracy-by-data principle has broken; fix the spine before continuing.
@@ -527,17 +628,52 @@ Halt if:
 
 | Item | Status | Notes |
 |---|---|---|
-| 1.1 photocopy | — | stash name: _record on completion_ |
-| 1.2 baseline | ✓ passing | record outside-in pass count + xfail count |
-| 1.3 strict-xfail ledger | — | list strict xfails citing this cutover here |
-| 2.1 mask plumbing | — | |
-| 2.2 empirical operator | — | |
-| 2.3 row reducer in spine | — | |
-| 2.4 blind algebra tests | — | including strict / adjusted decomposition tests |
-| 2.5 MCAR sparsity oracle | — | test outside-in IPW recovery across p_drop variants |
+| 1.1 photocopy | waived 16-May-26 | at HEAD; user waived |
+| 1.2 baseline | ✓ green 16-May-26 | |
+| 1.3 strict-xfail ledger | ✓ 16-May-26 | see [Atom 1.3 strict-xfail ledger](#atom-13-strict-xfail-ledger) |
+| 2.1 mask plumbing | ✓ fixed 16-May-26 | `observation_mask_draws_by_source_day` added; composer support/exposure DP selects source-day masks for composed bindings and preserves aggregate local-clock masks for identity/window helpers. Regression: `test_composer_masks_support_by_source_day_not_age_only`. |
+| 2.2 empirical operator | ✓ 16-May-26 | `empirical_evidence_operator.py` + 11 blind tests + spine integration |
+| 2.3 row reducer in spine | ✓ 16-May-26 | `project_selected_cohort_rows` in `model_span_spine.py` with per-anchor maps (Stage 2(a)) + row-level strict, adjusted, rate fields (Stage 2(b)). Adjusted uses the accepted non-forward-filled numerator + IPW semantics; Phase 6 §5.6 prose still needs cleanup. |
+| 2.4 blind algebra tests | ✓ 16-May-26 (Stage 2(a) + 2(b)) | 9 core tests (Stage 2(a)) + §6.1/§6.2/§5.6 blind tests (Stage 2(b)). |
+| 2.5 MCAR sparsity oracle | ✓ 16-May-26 (Stage 2(b), engine-level) | Stage 2(a) directional tests + Stage 2(b) engine-level MCAR/HT battery. Acceptance now pins adjusted as a reducer-owned non-forward-filled numerator plus IPW, not `strict / coverage` over the strict forward-filled cumulative. |
 | 3.2 call-site flip | — | _commit sha_ |
 | 3.4 outside-in gate | — | pass count + which strict xfails XPASSed and were deleted |
 | 4.2 deletions | — | post-cutover `wc -l cohort_forecast_v3.py`: _N_ |
 | 4.6 codebase docs | — | |
 | 5.2 FE rateAdjusted switch | — | E+F mode reads rate_adjusted from row dict |
 | 5.6 glossary updates | — | codebase + public glossaries |
+
+---
+
+## Atom 1.3 strict-xfail ledger
+
+Survey of `strict=True` markers in `graph-editor/lib/tests/` captured 16-May-26 via `grep -rn 'strict=True' graph-editor/lib/tests/`.
+
+### Flip-to-green triggers for this cutover
+
+Strict xfails whose `reason=` names this cutover (Pop D/C deletion, mode-blind reducer, mask plumbing, multi-hop evidence parity). Each MUST XPASS by Stage 3 acceptance and the marker MUST be deleted in the same commit — XPASS without deletion is not closure (AP59).
+
+| # | Test | Location | Trigger phrase from `reason=` |
+|---|---|---|---|
+| 1 | `test_first_latency_edge_with_nonlatent_chain_observed_collapses_to_window` | `test_cohort_factorised_outside_in.py:2339` | "Active-cohort row pipeline derives observed-prefix mass from the carrier-reclock surface (`SelectedAClockEvidence` + `_join_conditioned_carrier_backmap`) instead of reading realised X-day counts directly. … forks on `is_active_carrier`. … Flips green when the case-fork is removed and the row pipeline degenerates algebraically — one formula whose carrier-reach factor structurally vanishes under δ(0)." |
+
+### Non-trigger strict xfails (record for context; not in scope for this cutover)
+
+These markers do **not** name this cutover and are unrelated workstreams. Listed only so we can detect surprise XPASS / XFAIL flips during the baseline gate.
+
+| # | Test | Location | Owning workstream |
+|---|---|---|---|
+| 2 | `test_cli_single_hop_downstream_cohort_parity_and_admitted_provenance` | `test_cohort_factorised_outside_in.py:2841` | Doc 60 WP8 (cohort admission provenance) |
+| 4 | `test_surprise_gauge_prefers_temporal_candidate_regime` | `test_cf_query_scoped_degradation.py:268` | Doc 60 WP8 (cohort regime selection) |
+| 5 | `test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split` | `test_doc56_phase0_behaviours.py:613` | 73q Phase 5a (surprise_gauge migration to `ResolvedCFRuntime`) |
+
+(Index #3 is a docstring-only mention of a previously-removed marker at `test_cohort_factorised_outside_in.py:4022`, not an active xfail.)
+
+### Strict xfails affected by Stage 4 deletions (disposition required at Stage 4)
+
+These markers cite 73q Phases 2-3, NOT this cutover, but their test bodies reference symbols this cutover deletes at Atom 4.2 (e.g. `_build_selected_source_day_mass`, per-source-day forward-fill quadrature). They will fail to even import after deletion and require explicit disposition during Stage 4 cleanup (rewrite against new APIs, delete entirely, or migrate as part of a `73q` follow-up). Not a Stage 3 flip-to-green trigger.
+
+| # | Test | Location | Affected symbol(s) |
+|---|---|---|---|
+| 6 | `test_per_source_day_forward_fill_preserves_monotonicity_under_sparse` | `test_selected_cohort_pop_d_distribution.py:1308` | per-source-day forward-fill machinery (Atom 4.2 quadrature deletions) |
+| 7 | `test_m_select_construction_for_multi_hop_downstream_node` | `test_selected_cohort_pop_d_distribution.py:1608` | imports `_build_selected_source_day_mass` (deleted at Atom 4.2) |

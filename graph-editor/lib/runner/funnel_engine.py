@@ -6,7 +6,7 @@ Three regimes on a linear path of edges:
 - e+f — path product of CF-conditioned means for bars; moment-matched Beta
         draws for bands; striation = (e, (e+f) − e)
 
-No forecast-engine imports, no network calls, no scipy. The scoped CF
+No forecast-engine imports, no network calls, no heavy statistics stack. The scoped CF
 invocation for e+f mode is performed outside this module; the response
 is passed in as `cf_per_edge`.
 
@@ -58,7 +58,7 @@ class FunnelStageBars:
 def wilson_ci(k: int, n: int, alpha: float = 0.10) -> tuple[float, float]:
     """Wilson score interval for a Binomial proportion.
 
-    Closed-form arithmetic; no scipy. Default alpha=0.10 gives a 90 % CI.
+    Closed-form arithmetic. Default alpha=0.10 gives a 90 % CI.
     Returns (lo, hi) clipped to [0, 1]. When n <= 0 returns (0, 0).
     """
     if n <= 0:

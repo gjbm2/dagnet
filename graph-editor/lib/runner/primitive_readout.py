@@ -8,6 +8,8 @@ from typing import Any, Mapping, Optional, Sequence
 from datetime import date as _date, timedelta as _timedelta
 from typing import Dict, Tuple
 
+import numpy as np
+
 from evidence_merge import (
     EvidenceCandidate,
     EvidenceRole,
@@ -38,6 +40,7 @@ from .primitives import (
     PrimitiveScope,
     TransitionIdentity,
 )
+from .timing_particles import build_request_timing_particles
 from .subject_span_composer import (
     ComposedPrimitiveSpan,
     ComposeOptions,
@@ -159,14 +162,23 @@ def _resolved_to_timing_transition(
         mu_sd=float(lat.mu_sd),
         sigma_sd=float(lat.sigma_sd),
         onset_sd=float(lat.onset_sd),
+        onset_mu_corr=float(getattr(lat, 'onset_mu_corr', 0.0) or 0.0),
         source=f'prior_{resolved.source}',
     )
 
 
 def _window_identity_arrival_weights(
     primitive_scope: PrimitiveScope,
+    *,
+    draw_count: int,
 ) -> NodeArrivalWeights:
-    """Identity arrival weights for window-mode local-clock binding."""
+    """Identity arrival weights for window-mode local-clock binding.
+
+    Identity weights at a primitive's source clock are the same under
+    every draw — there is no latency to randomise. The per-draw axis
+    is therefore a broadcast of the scalar identity surface
+    (algebraic degeneracy of zero-latency arrival).
+    """
     weights: Dict[str, float] = {}
     start = _date.fromisoformat(primitive_scope.date_from)
     end = _date.fromisoformat(primitive_scope.date_to)
@@ -174,8 +186,14 @@ def _window_identity_arrival_weights(
     while cur <= end:
         weights[cur.isoformat()] = 1.0
         cur = cur + _timedelta(days=1)
+    weights_draws: Dict[str, np.ndarray] = {
+        day: np.full(int(draw_count), float(weight), dtype=np.float64)
+        for day, weight in weights.items()
+    }
     return NodeArrivalWeights(
         weights=weights,
+        weights_draws=weights_draws,
+        draw_count=int(draw_count),
         reach_from_root=1.0,
         provenance=NodeArrivalProvenance(
             topology_case='identity',
@@ -199,8 +217,24 @@ def _build_request_arrival_map(
     edge_resolutions: Sequence[Tuple[TransitionIdentity, ResolvedModelParams]],
     identity: PrefixArrivalIdentity,
     max_tau: int,
+    scenario_seed: int,
+    draw_count: int,
+    primitive_scopes: Optional[
+        Mapping[Tuple[str, str], PrimitiveScope]
+    ] = None,
 ) -> PrefixArrivalMap:
-    """Build a request-scoped prefix-arrival map."""
+    """Build a request-scoped prefix-arrival map.
+
+    ``primitive_scopes`` keys per-edge PrimitiveScope into the same
+    ``DrawFamilyKey`` that primitive conditioning will use; this is
+    how the shared timing-particle invariant (Phase 6 §3.2) is
+    realised between prefix-arrival composition and conditioning.
+    When the caller does not have per-edge scopes available (e.g.
+    legacy paths that resolve scope downstream), the window-local
+    scope is broadcast across all edges — an algebraic degeneracy
+    that yields draw-coherent particles within this map while staying
+    consistent across calls under the same request scope.
+    """
     edge_resolution_by_key = {
         (transition.source_node, transition.destination_node): (transition, resolved)
         for transition, resolved in edge_resolutions
@@ -211,6 +245,17 @@ def _build_request_arrival_map(
         )
         for edge_key, (transition, resolved) in edge_resolution_by_key.items()
     }
+    transition_identities: Dict[Tuple[str, str], TransitionIdentity] = {
+        edge_key: transition
+        for edge_key, (transition, _resolved) in edge_resolution_by_key.items()
+    }
+    if primitive_scopes is None:
+        scopes_resolved: Dict[Tuple[str, str], PrimitiveScope] = {
+            edge_key: primitive_scope_for_window
+            for edge_key in edge_resolution_by_key.keys()
+        }
+    else:
+        scopes_resolved = dict(primitive_scopes)
     target_node_ids = tuple(dict.fromkeys(
         node
         for transition, _resolved in edge_resolutions
@@ -225,11 +270,20 @@ def _build_request_arrival_map(
         root_day_weights[cur.isoformat()] = 1.0
         cur = cur + _timedelta(days=1)
 
+    timing_particles = build_request_timing_particles(
+        transitions=transitions,
+        primitive_scopes=scopes_resolved,
+        transition_identities=transition_identities,
+        scenario_seed=scenario_seed,
+        draw_count=draw_count,
+    )
+
     return build_prefix_arrival_map(
         graph=dict(graph),
         root_node_id=root_node_id,
         root_day_weights=root_day_weights,
         transitions=transitions,
+        timing_particles=timing_particles,
         identity=identity,
         max_tau=max_tau,
         target_node_ids=target_node_ids,

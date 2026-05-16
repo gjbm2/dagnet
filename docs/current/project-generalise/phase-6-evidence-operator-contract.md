@@ -553,9 +553,11 @@ This is the mapping the intuition needs to hold onto: **the spine is one machine
 
 ### 5.6 Strict vs adjusted evidence readout
 
+> ⚠ **UNDER REVIEW (16-May-26).** The IPW unbiasedness claim below has not been independently re-derived against the §4.9 forward-fill empirical kernel. The forward-fill mechanism imputes the latest observed `k` across absent ages — a local degeneracy that may make the cumulative approximately insensitive to per-cell dropout (especially near saturation). Whether the `adjusted = strict / coverage` formula remains an unbiased estimator of the dense cumulative under §4.9's specific kernel form is open. A first-principles review is required before this section can be treated as load-bearing for the cutover. No specific resolution is prescribed here; the body below is the intended formulation pending review.
+
 The chart consumes two distinct evidence quantities at the row level: **strict** and **adjusted**. Both derive from the empirical kernel of §4.9 and the parametric kernel's coverage signal of §4.8. They differ in policy at the row reducer.
 
-**Strict evidence** is the empirical operator's per-anchor terminal cumulative summed across admissible anchors, with no scaling. Admissibility per `(anchor, τ)` is `exposure_A(τ) > 0`:
+**Strict evidence** is the empirical operator's per-anchor terminal cumulative summed across admissible anchors, with no scaling. Admissibility per `(anchor, τ)` is `exposure_y_A(τ) > 0`:
 
 ```
 admissible(A, τ)        ⇔ exposure_y_A(τ) > 0

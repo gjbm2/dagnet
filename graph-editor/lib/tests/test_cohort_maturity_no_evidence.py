@@ -10,8 +10,8 @@ must track the closed-form analytic anticipation:
     model_curve_midpoint  ≈ Beta_median(α, β)        × CDF(τ)
     model_midpoint        ≈ Beta_median(α_pred, β_pred) × CDF(τ)
 
-Beta_median is ``scipy.stats.beta.ppf(0.5, ·, ·)`` (closed form via
-inverse CDF). CDF is the shifted lognormal at the prior's mean params.
+Beta_median is the inverse Beta CDF at 0.5. CDF is the shifted
+lognormal at the prior's mean params.
 No MC is invoked by the oracle.
 
 Multi-hop variants are intentionally out of scope — composing the
@@ -148,8 +148,8 @@ def _shifted_lognormal_cdf(tau: int, *, onset: float, mu: float, sigma: float) -
 
 
 def _beta_median(alpha: float, beta: float) -> float:
-    from scipy.stats import beta as _beta_dist
-    return float(_beta_dist.ppf(0.5, alpha, beta))
+    from runner.numpy_stats import beta_ppf
+    return float(beta_ppf(0.5, alpha, beta))
 
 
 def _read_sidecar_prior(sidecar_path: Path, edge_param_id: str) -> dict[str, float]:
