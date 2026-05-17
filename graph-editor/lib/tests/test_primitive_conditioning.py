@@ -602,10 +602,9 @@ def test_non_latency_compat_fields_are_provenance_only():
 
 
 def test_latent_primitive_emits_lognormal_cdf_mean():
-    """plan §583 + Phase 6 Appendix A: latent primitives carry the
-    row-aligned cumulative timing surface. For sigma > 0, cdf_mean
-    carries positive same-day bucket mass at τ=0 and saturates across
-    the horizon (not Dirac-at-zero)."""
+    """plan §583: latent primitives carry the differenced CDF mean.
+    For sigma > 0, the cdf_mean must rise from 0 to ~1 across the
+    horizon (not Dirac-at-zero)."""
     res = _build_resolution(
         candidates=[_candidate(observed_date='2026-03-15', n=50, k=20)],
         draw_count=200,
@@ -621,7 +620,7 @@ def test_latent_primitive_emits_lognormal_cdf_mean():
     assert prim.timing_family == TimingFamily.LATENT
     assert prim.timing_posterior is not None
     cdf = prim.timing_posterior.cdf_mean
-    assert cdf[0] > 0.0  # Same-day row-bucket mass under Appendix A.
+    assert cdf[0] == pytest.approx(0.0)  # No mass at tau=0 for sigma>0.
     assert cdf[-1] > 0.99  # Saturates by tau=90 for mu=2, sigma=0.5.
 
 

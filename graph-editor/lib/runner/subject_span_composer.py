@@ -484,17 +484,11 @@ def _compose_draws(
     edge_exposure_contribution_draws = _new_edge_stack()
 
     span_p_draws = np.zeros(S, dtype=np.float64)
-    cdf_arr = np.zeros((S, T), dtype=np.float64)
-
+    # Per-draw expected reach decouples the asymptotic span probability
+    # from the finite horizon T. Sibling edges with the same endpoint pair
+    # contribute additively (the cohort's reach at V is the sum of
+    # per-sibling probabilities).
     for s in range(S):
-        value_densities_s = {
-            edge_key: value_kernels_by_edge[edge_key][s, :]
-            for edge_key in value_kernels_by_edge
-        }
-        # Per-draw expected reach decouples the asymptotic span
-        # probability from the finite horizon T. Sibling edges with the
-        # same endpoint pair contribute additively (the cohort's reach
-        # at V is the sum of per-sibling probabilities).
         edge_probs_s_by_pair: Dict[Tuple[str, str], float] = {}
         for ce in topo.concrete_edges:
             pair = (ce.from_id, ce.to_id)
@@ -502,53 +496,50 @@ def _compose_draws(
                 edge_probs_s_by_pair.get(pair, 0.0)
                 + float(p_draws_by_edge[ce.edge_key][s])
             )
-        expected_reach_s = _topological_reach(topo, edge_probs_s_by_pair)
+        span_p_draws[s] = _topological_reach(topo, edge_probs_s_by_pair)
 
-        # Run value through the standard DP. Support and exposure use the
-        # same topology, but select row-presence masks by source day at
-        # each concrete edge before applying the edge kernel.
-        trace_value = _run_dp_density_trace(topo, value_densities_s, T)
-        trace_support = _run_masked_dp_density_trace(
-            topo=topo,
-            base_kernels_by_edge=value_kernels_by_edge,
-            primitive_by_edge=primitive_by_edge,
-            draw_index=s,
-            T=T,
-        )
-        trace_exposure = _run_masked_dp_density_trace(
-            topo=topo,
-            base_kernels_by_edge=exposure_shapes_by_edge,
-            primitive_by_edge=primitive_by_edge,
-            draw_index=s,
-            T=T,
-        )
+    # Run the same topology over the full draw axis. Support and exposure
+    # select row-presence masks by source day at each concrete edge before
+    # applying the edge kernel.
+    trace_value = _run_dp_density_trace(
+        topo,
+        lambda ce, _source_index: value_kernels_by_edge[ce.edge_key],
+        S,
+        T,
+    )
+    trace_support = _run_masked_dp_density_trace(
+        topo=topo,
+        base_kernels_by_edge=value_kernels_by_edge,
+        primitive_by_edge=primitive_by_edge,
+        S=S,
+        T=T,
+    )
+    trace_exposure = _run_masked_dp_density_trace(
+        topo=topo,
+        base_kernels_by_edge=exposure_shapes_by_edge,
+        primitive_by_edge=primitive_by_edge,
+        S=S,
+        T=T,
+    )
 
-        for node_id, density in trace_value.node_density_by_node.items():
-            node_density_draws[node_id][s, :] = density
-        for edge_key, contribution in trace_value.edge_contribution_by_edge.items():
-            edge_contribution_draws[edge_key][s, :] = contribution
-        for node_id, density in trace_support.node_density_by_node.items():
-            node_support_draws[node_id][s, :] = density
-        for edge_key, contribution in trace_support.edge_contribution_by_edge.items():
-            edge_support_contribution_draws[edge_key][s, :] = contribution
-        for node_id, density in trace_exposure.node_density_by_node.items():
-            node_exposure_draws[node_id][s, :] = density
-        for edge_key, contribution in trace_exposure.edge_contribution_by_edge.items():
-            edge_exposure_contribution_draws[edge_key][s, :] = contribution
+    node_density_draws.update(trace_value.node_density_by_node)
+    edge_contribution_draws.update(trace_value.edge_contribution_by_edge)
+    node_support_draws.update(trace_support.node_density_by_node)
+    edge_support_contribution_draws.update(trace_support.edge_contribution_by_edge)
+    node_exposure_draws.update(trace_exposure.node_density_by_node)
+    edge_exposure_contribution_draws.update(trace_exposure.edge_contribution_by_edge)
 
-        terminal_density = trace_value.node_density_by_node[topo.y_node_id]
-        density_cdf = np.cumsum(terminal_density)
-        # 0/0 at expected_reach_s == 0 is genuine algebraic degeneracy
-        # (no mass propagates); emit 0 there to match the upstream
-        # degraded-timing contract. Anywhere reach is positive the
-        # division is unguarded.
-        cdf_arr[s, :] = np.divide(
-            density_cdf,
-            expected_reach_s,
-            out=np.zeros_like(density_cdf),
-            where=expected_reach_s > 0.0,
-        )
-        span_p_draws[s] = expected_reach_s
+    terminal_density = trace_value.node_density_by_node[topo.y_node_id]
+    density_cdf = np.cumsum(terminal_density, axis=1)
+    # 0/0 at expected reach == 0 is genuine algebraic degeneracy (no mass
+    # propagates); emit 0 there to match the upstream degraded-timing
+    # contract. Anywhere reach is positive the division is unguarded.
+    cdf_arr = np.divide(
+        density_cdf,
+        span_p_draws[:, None],
+        out=np.zeros_like(density_cdf),
+        where=span_p_draws[:, None] > 0.0,
+    )
 
     span_p_mean = float(np.mean(span_p_draws))
     span_p_sd = float(np.std(span_p_draws))
@@ -591,7 +582,7 @@ def _run_masked_dp_density_trace(
     topo: SpanTopology,
     base_kernels_by_edge: Mapping[str, np.ndarray],
     primitive_by_edge: Mapping[str, ConditionedTransitionPrimitive],
-    draw_index: int,
+    S: int,
     T: int,
 ) -> SpanDPTrace:
     """Forward DP where each edge kernel is masked by source day.
@@ -602,41 +593,21 @@ def _run_masked_dp_density_trace(
     `(edge, source_day, age)`, so the edge kernel selected for a wavefront
     bucket depends on the source day that bucket reached the edge source.
     """
-    node_density: Dict[str, np.ndarray] = {
-        node: np.zeros(T, dtype=np.float64) for node in topo.on_path
-    }
-    node_density[topo.x_node_id][0] = 1.0
-    edge_contribution: Dict[str, np.ndarray] = {}
-
-    for node in topo.topo_order:
-        for ce in topo.incoming_concrete_edges.get(node, ()):
-            primitive = primitive_by_edge[ce.edge_key]
-            source_density = node_density[ce.from_id]
-            contribution = np.zeros(T, dtype=np.float64)
-            for source_index in np.flatnonzero(source_density):
-                source_index_int = int(source_index)
-                source_mass = float(source_density[source_index_int])
-                source_day = _source_day_for_index(primitive, source_index_int)
-                mask = _mask_for_source_day(
-                    primitive=primitive,
-                    source_day=source_day,
-                    draw_index=draw_index,
-                    T=T,
-                    edge_key=ce.edge_key,
-                )
-                kernel = (
-                    base_kernels_by_edge[ce.edge_key][draw_index, :] * mask
-                )
-                remaining = T - source_index_int
-                contribution[source_index_int:] += (
-                    source_mass * kernel[:remaining]
-                )
-            edge_contribution[ce.edge_key] = contribution
-            node_density[node] += contribution
-
-    return SpanDPTrace(
-        node_density_by_node=node_density,
-        edge_contribution_by_edge=edge_contribution,
+    return _run_dp_density_trace(
+        topo,
+        lambda ce, source_index: (
+            base_kernels_by_edge[ce.edge_key]
+            * _mask_for_source_day(
+                primitive=primitive_by_edge[ce.edge_key],
+                source_day=_source_day_for_index(
+                    primitive_by_edge[ce.edge_key], source_index,
+                ),
+                T=T,
+                edge_key=ce.edge_key,
+            )
+        ),
+        S,
+        T,
     )
 
 
@@ -665,7 +636,6 @@ def _mask_for_source_day(
     *,
     primitive: ConditionedTransitionPrimitive,
     source_day: str,
-    draw_index: int,
     T: int,
     edge_key: str,
 ) -> np.ndarray:
@@ -678,7 +648,7 @@ def _mask_for_source_day(
     aggregate mask for compatibility.
     """
     if primitive.observation_mask_draws is None:
-        return np.ones(T, dtype=np.float64)
+        return np.ones((primitive.draw_count, T), dtype=np.float64)
 
     masks_by_day = primitive.observation_mask_draws_by_source_day
     raw_mask = masks_by_day.get(source_day) if masks_by_day else None
@@ -689,7 +659,7 @@ def _mask_for_source_day(
             else None
         )
         if topology_case != 'identity':
-            return np.zeros(T, dtype=np.float64)
+            return np.zeros((primitive.draw_count, T), dtype=np.float64)
     if raw_mask is None:
         raw_mask = primitive.observation_mask_draws
     if raw_mask.ndim != 2 or raw_mask.shape[0] != primitive.draw_count:
@@ -697,7 +667,7 @@ def _mask_for_source_day(
             f"primitive {edge_key!r} observation mask has shape "
             f"{raw_mask.shape}; expected ({primitive.draw_count}, *)"
         )
-    return _align_mask_grid(raw_mask, T)[draw_index, :]
+    return _align_mask_grid(raw_mask, T)
 
 
 def _align_mask_grid(mask_arr: np.ndarray, T: int) -> np.ndarray:

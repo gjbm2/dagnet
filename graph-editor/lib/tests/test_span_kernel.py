@@ -464,6 +464,19 @@ class TestRunDpDensityTrace:
         tau_grid = np.arange(T, dtype=float)
         return _edge_sub_probability_density(tau_grid, p, 0.0, mu, sigma)
 
+    @staticmethod
+    def _trace(topo, densities, T):
+        batched = {
+            edge_key: density[None, :]
+            for edge_key, density in densities.items()
+        }
+        return _run_dp_density_trace(
+            topo,
+            lambda ce, _source_index: batched[ce.edge_key],
+            1,
+            T,
+        )
+
     def test_root_node_density_is_delta_at_tau_zero(self):
         T = 200
         graph = _make_graph(
@@ -478,8 +491,8 @@ class TestRunDpDensityTrace:
             'x->y#0': self._density(0.5, 1.0, 0.5, T),
             'y->z#0': self._density(0.5, 1.0, 0.5, T),
         }
-        trace = _run_dp_density_trace(topo, densities, T)
-        root_density = trace.node_density_by_node['x']
+        trace = self._trace(topo, densities, T)
+        root_density = trace.node_density_by_node['x'][0]
         assert root_density[0] == pytest.approx(1.0)
         assert np.sum(root_density[1:]) == pytest.approx(0.0, abs=1e-12)
 
@@ -501,13 +514,13 @@ class TestRunDpDensityTrace:
             'y1->z#0': self._density(0.7, 1.0, 0.5, T),
             'y2->z#0': self._density(0.8, 1.0, 0.5, T),
         }
-        trace = _run_dp_density_trace(topo, densities, T)
+        trace = self._trace(topo, densities, T)
         z_from_edges = (
-            trace.edge_contribution_by_edge['y1->z#0']
-            + trace.edge_contribution_by_edge['y2->z#0']
+            trace.edge_contribution_by_edge['y1->z#0'][0]
+            + trace.edge_contribution_by_edge['y2->z#0'][0]
         )
         np.testing.assert_allclose(
-            trace.node_density_by_node['z'], z_from_edges, atol=1e-12,
+            trace.node_density_by_node['z'][0], z_from_edges, atol=1e-12,
         )
 
     def test_coincident_siblings_have_separate_per_edge_contributions(self):
@@ -526,15 +539,15 @@ class TestRunDpDensityTrace:
             'u->v#0': kernel_a,
             'u->v#1': kernel_b,
         }
-        trace = _run_dp_density_trace(topo, densities, T)
-        contrib_a = trace.edge_contribution_by_edge['u->v#0']
-        contrib_b = trace.edge_contribution_by_edge['u->v#1']
+        trace = self._trace(topo, densities, T)
+        contrib_a = trace.edge_contribution_by_edge['u->v#0'][0]
+        contrib_b = trace.edge_contribution_by_edge['u->v#1'][0]
         # Each sibling's contribution is its kernel convolved with δ(0),
         # which equals the kernel itself.
         np.testing.assert_allclose(contrib_a, kernel_a, atol=1e-12)
         np.testing.assert_allclose(contrib_b, kernel_b, atol=1e-12)
         np.testing.assert_allclose(
-            trace.node_density_by_node['v'],
+            trace.node_density_by_node['v'][0],
             kernel_a + kernel_b,
             atol=1e-12,
         )
@@ -561,7 +574,56 @@ class TestRunDpDensityTrace:
             ('x', 'y'): kernel_xy,
             ('y', 'z'): kernel_yz,
         }
-        trace = _run_dp_density_trace(topo, densities_by_edge_key, T)
-        cdf_from_trace = np.cumsum(trace.node_density_by_node['z'])
+        trace = self._trace(topo, densities_by_edge_key, T)
+        cdf_from_trace = np.cumsum(trace.node_density_by_node['z'][0])
         cdf_from_grid = _run_dp_density_grid(topo, densities_by_pair, T)
         np.testing.assert_allclose(cdf_from_trace, cdf_from_grid, atol=1e-12)
+
+    def test_batched_dp_matches_per_draw_source_index_selection(self):
+        """The batched DP is a rank lift of the scalar draw loop. Kernel
+        providers may depend on the source-day index; for every draw, the
+        batched output must match the same shifted update done manually."""
+        T = 8
+        S = 3
+        graph = _make_graph(
+            ['x', 'y', 'z'],
+            [
+                _make_edge('x', 'y', 0.6, mu=1.0, sigma=0.5),
+                _make_edge('y', 'z', 0.7, mu=1.2, sigma=0.5),
+            ],
+        )
+        topo = _build_span_topology(graph, 'x', 'z')
+
+        xy_kernel = np.zeros((S, T), dtype=np.float64)
+        xy_kernel[:, 0] = np.array([0.2, 0.3, 0.4])
+        xy_kernel[:, 2] = np.array([0.1, 0.2, 0.3])
+
+        yz_by_source = {}
+        for source_index in range(T):
+            kernel = np.zeros((S, T), dtype=np.float64)
+            kernel[:, 1] = np.array([0.5, 0.4, 0.3]) + (0.01 * source_index)
+            kernel[:, 3] = np.array([0.2, 0.1, 0.05])
+            yz_by_source[source_index] = kernel
+
+        def _provider(ce, source_index):
+            if ce.edge_key == 'x->y#0':
+                return xy_kernel
+            return yz_by_source[int(source_index)]
+
+        trace = _run_dp_density_trace(topo, _provider, S, T)
+
+        expected_y = xy_kernel
+        expected_z = np.zeros((S, T), dtype=np.float64)
+        for source_index in np.flatnonzero(np.any(expected_y != 0.0, axis=0)):
+            remaining = T - int(source_index)
+            expected_z[:, int(source_index):] += (
+                expected_y[:, int(source_index), None]
+                * yz_by_source[int(source_index)][:, :remaining]
+            )
+
+        np.testing.assert_allclose(
+            trace.node_density_by_node['y'], expected_y, atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            trace.node_density_by_node['z'], expected_z, atol=1e-12,
+        )

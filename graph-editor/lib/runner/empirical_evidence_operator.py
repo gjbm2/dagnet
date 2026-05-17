@@ -65,7 +65,7 @@ from .primitives import (
 )
 from .span_kernel import ConcreteEdge, _build_span_topology
 from .subject_span_composer import ComposedPrimitiveSpan
-from .timing_span import SpanDPTrace
+from .timing_span import _run_dp_density_trace
 
 
 __all__ = [
@@ -448,62 +448,55 @@ def compose_empirical_span(
         for ce in topo.concrete_edges
     }
 
-    span_p_draws = np.zeros(S, dtype=np.float64)
-    cdf_arr = np.zeros((S, T), dtype=np.float64)
     origin_day = _infer_empirical_origin_day(edge_primitives)
 
-    for s in range(S):
-        trace_value = _run_empirical_source_day_dp_trace(
-            topo=topo,
-            edge_primitives=edge_primitives,
-            stream_name="value",
-            draw_index=s,
-            T=T,
-            origin_day=origin_day,
-        )
-        trace_support = _run_empirical_source_day_dp_trace(
-            topo=topo,
-            edge_primitives=edge_primitives,
-            stream_name="support",
-            draw_index=s,
-            T=T,
-            origin_day=origin_day,
-        )
-        trace_exposure = _run_empirical_source_day_dp_trace(
-            topo=topo,
-            edge_primitives=edge_primitives,
-            stream_name="exposure",
-            draw_index=s,
-            T=T,
-            origin_day=origin_day,
-        )
+    trace_value = _run_empirical_source_day_dp_trace(
+        topo=topo,
+        edge_primitives=edge_primitives,
+        stream_name="value",
+        S=S,
+        T=T,
+        origin_day=origin_day,
+    )
+    trace_support = _run_empirical_source_day_dp_trace(
+        topo=topo,
+        edge_primitives=edge_primitives,
+        stream_name="support",
+        S=S,
+        T=T,
+        origin_day=origin_day,
+    )
+    trace_exposure = _run_empirical_source_day_dp_trace(
+        topo=topo,
+        edge_primitives=edge_primitives,
+        stream_name="exposure",
+        S=S,
+        T=T,
+        origin_day=origin_day,
+    )
 
-        for node_id, density in trace_value.node_density_by_node.items():
-            node_density_draws[node_id][s, :] = density
-        for ek, contribution in trace_value.edge_contribution_by_edge.items():
-            edge_contribution_draws[ek][s, :] = contribution
-        for node_id, density in trace_support.node_density_by_node.items():
-            node_support_draws[node_id][s, :] = density
-        for ek, contribution in trace_support.edge_contribution_by_edge.items():
-            edge_support_contribution_draws[ek][s, :] = contribution
-        for node_id, density in trace_exposure.node_density_by_node.items():
-            node_exposure_draws[node_id][s, :] = density
-        for ek, contribution in trace_exposure.edge_contribution_by_edge.items():
-            edge_exposure_contribution_draws[ek][s, :] = contribution
+    node_density_draws.update(trace_value.node_density_by_node)
+    edge_contribution_draws.update(trace_value.edge_contribution_by_edge)
+    node_support_draws.update(trace_support.node_density_by_node)
+    edge_support_contribution_draws.update(trace_support.edge_contribution_by_edge)
+    node_exposure_draws.update(trace_exposure.node_density_by_node)
+    edge_exposure_contribution_draws.update(trace_exposure.edge_contribution_by_edge)
 
-        terminal_density = trace_value.node_density_by_node[topo.y_node_id]
-        density_cdf = np.cumsum(terminal_density)
-        expected_reach_s = float(density_cdf[-1]) if T > 0 else 0.0
-        # 0/0 at expected_reach_s == 0 is genuine algebraic degeneracy
-        # (no empirical mass propagates); emit 0 to match the spine's
-        # documented convention.
-        cdf_arr[s, :] = np.divide(
-            density_cdf,
-            expected_reach_s,
-            out=np.zeros_like(density_cdf),
-            where=expected_reach_s > 0.0,
-        )
-        span_p_draws[s] = expected_reach_s
+    terminal_density = trace_value.node_density_by_node[topo.y_node_id]
+    density_cdf = np.cumsum(terminal_density, axis=1)
+    span_p_draws = (
+        density_cdf[:, -1].copy()
+        if T > 0 else np.zeros(S, dtype=np.float64)
+    )
+    # 0/0 at expected reach == 0 is genuine algebraic degeneracy (no
+    # empirical mass propagates); emit 0 to match the spine's documented
+    # convention.
+    cdf_arr = np.divide(
+        density_cdf,
+        span_p_draws[:, None],
+        out=np.zeros_like(density_cdf),
+        where=span_p_draws[:, None] > 0.0,
+    )
 
     span_p_mean = float(np.mean(span_p_draws))
     span_p_sd = float(np.std(span_p_draws))
@@ -577,7 +570,6 @@ def _kernel_for_source_day(
     primitive: EmpiricalEvidencePrimitive,
     *,
     stream_name: str,
-    draw_index: int,
     source_day: str,
 ) -> np.ndarray:
     if stream_name == "value":
@@ -594,7 +586,7 @@ def _kernel_for_source_day(
     kernel = by_day.get(source_day)
     if kernel is None:
         kernel = aggregate
-    return kernel[draw_index, :]
+    return kernel
 
 
 def _run_empirical_source_day_dp_trace(
@@ -602,39 +594,18 @@ def _run_empirical_source_day_dp_trace(
     topo,
     edge_primitives: Sequence[Tuple[ConcreteEdge, EmpiricalEvidencePrimitive]],
     stream_name: str,
-    draw_index: int,
+    S: int,
     T: int,
     origin_day: date,
-) -> SpanDPTrace:
-    node_density: Dict[str, np.ndarray] = {
-        node: np.zeros(T, dtype=np.float64) for node in topo.on_path
-    }
-    node_density[topo.x_node_id][0] = 1.0
-    edge_contribution: Dict[str, np.ndarray] = {}
+) -> Any:
     primitive_by_edge = {ce.edge_key: prim for ce, prim in edge_primitives}
-
-    for node in topo.topo_order:
-        for ce in topo.incoming_concrete_edges.get(node, ()):
-            primitive = primitive_by_edge[ce.edge_key]
-            source_density = node_density[ce.from_id]
-            contribution = np.zeros(T, dtype=np.float64)
-            for source_index in np.flatnonzero(source_density):
-                source_mass = float(source_density[int(source_index)])
-                source_day = _source_day_for_index(origin_day, int(source_index))
-                kernel = _kernel_for_source_day(
-                    primitive,
-                    stream_name=stream_name,
-                    draw_index=draw_index,
-                    source_day=source_day,
-                )
-                remaining = T - int(source_index)
-                contribution[int(source_index):] += (
-                    source_mass * kernel[:remaining]
-                )
-            edge_contribution[ce.edge_key] = contribution
-            node_density[node] += contribution
-
-    return SpanDPTrace(
-        node_density_by_node=node_density,
-        edge_contribution_by_edge=edge_contribution,
+    return _run_dp_density_trace(
+        topo,
+        lambda ce, source_index: _kernel_for_source_day(
+            primitive_by_edge[ce.edge_key],
+            stream_name=stream_name,
+            source_day=_source_day_for_index(origin_day, source_index),
+        ),
+        S,
+        T,
     )

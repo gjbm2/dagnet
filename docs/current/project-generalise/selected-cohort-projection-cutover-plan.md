@@ -285,6 +285,8 @@ Single-hop X-clock preserves admitted `window()` evidence exactly (no transforma
 
 ### ⚠ Open: discretisation kernel construction (conditioned operator only)
 
+> **✅ Resolved 16-May-26.** Two surfaces, two callers, one set of particles. Endpoint `G(τ)` from `_build_per_draw_cdf` lives on `TimingPosterior.cdf_draws` and drives every chart-published curve (composer input, F-mode overlay, conditioned posterior CDF). Day-averaged `B(τ) = ∫_τ^{τ+1} G(v) dv` from `timing_particles.build_row_aligned_lognormal_cdf_from_draws` stays local to the IS likelihood's cell-differencing loop in `primitive_conditioning._run_is_proposal`, where snapshot rows are themselves daily buckets and the integrated form is the right comparand. Both helpers are scipy-free via `numpy_stats.normal_cdf`. The earlier failure mode — feeding the row-aligned `B(τ)` onto `TimingPosterior.cdf_draws` — produced a ~½-day model-curve advance, visible as the no-evidence single-hop oracle mismatch and the `test_v3_empty_frames_*` contract drift; both go green after the separation. Phase 6 Appendix A contract text still needs the matching update.
+
 There is an unresolved question about the **conditioned** operator's per-edge kernel construction. See [phase-6-evidence-operator-contract.md Appendix A](phase-6-evidence-operator-contract.md#appendix-a--under-review-discretisation-kernel-construction) (UNDER REVIEW). It does NOT affect the empirical operator: the empirical kernel reads observed cumulative rates which integrate same-day conversions by construction (matches Phase 6 §3.1 directly). The discretisation question is whether the parametric posterior CDF, evaluated at integer τ, gives the right per-day kernel — and whether a half-day shift is needed. **Stage 2 of this plan blocks at the kernel-construction question for the conditioned operator until Appendix A closes.** The empirical operator can be built in parallel; it has no such question.
 
 ### Optional: shadow diagnostic during build
@@ -548,6 +550,19 @@ The legacy `rate_blended = empirical × coverage + model × (1 − coverage)` li
 - [KNOWN_ANTI_PATTERNS.md](../codebase/KNOWN_ANTI_PATTERNS.md) AP58 — record the realised closure of the BE cohort-forecast row reducer fork and the `rate_blended` → `rate_adjusted` supersession.
 - [cf-defensive-coding-audit.md](cf-defensive-coding-audit.md) — mark H-5, F-1, H-1, H-4, M-1 closed.
 - Cross-check: `grep -rn 'rate_blended\|coverage-blended\|linear blend' docs/current/` returns only superseded-as-of references.
+
+### Atom 4.7 — Performance / vectorisation review
+
+After the legacy reducer and shadow paths are unreachable, profile the single steady-state reducer path and decide whether the remaining draw-axis loops should be vectorised. Focus on batched convolution in `project_selected_cohort_rows`, conditioned/empirical span composition over `(S, T)`, and source-day-aware masked DP; do not optimise pre-cutover scaffolding or reintroduce a second arithmetic authority.
+
+### Atom 4.8 — Span-core defensive-guard audit
+
+Audit and remove defensive conditionals inside the shared span core (`timing_span.py` and `subject_span_composer.py`). These files are not boundary code; they are algebra-only. They receive valid kernels/primitives by construction. Malformed inputs should crash naturally. The span core must not degrade, clamp, pad, truncate, substitute masks, validate shapes, reject inputs, or emit compatibility fallbacks. Specific hotspots to eliminate after cutover:
+
+- `timing_span.py`: `_degraded_timing` return paths for no-path / zero-reach / missing-transition / horizon-inadequate cases; `resolve_timing_transitions_from_graph` returning `None`; `np.clip` on composed CDFs / MC CDFs; density padding/truncation in `compose_timing_span_from_densities`; `p_mean <= 0` / `sigma < 0` silent refusal.
+- `subject_span_composer.py`: deterministic-shift validity branch; draw/CDF shape guards that should be producer invariants; `cdf_renorm_tolerance` / `np.where` row-sum substitution; CDF and mask padding/truncation helpers; `_mask_for_source_day` aggregate-mask fallback and missing-source-day zero substitution.
+
+Exit condition: every remaining conditional in these two files is pure algebraic case structure such as latency-family kernel construction or zero-edge identity. Shape checks, validity checks, missing-data handling, and refusal decisions are gone. No branch may return a degraded span, fabricated zeros, clipped values, padded kernels, compatibility fallback, or rejection from inside the span core.
 
 ---
 

@@ -9,7 +9,7 @@ module owns the DAG density DP and conditional-CDF construction.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -468,29 +468,40 @@ class SpanDPTrace:
 
 def _run_dp_density_trace(
     topo: SpanTopology,
-    densities_by_edge_key: Mapping[str, np.ndarray],
+    edge_kernel_provider: Callable[[ConcreteEdge, int], np.ndarray],
+    S: int,
     T: int,
 ) -> SpanDPTrace:
     """Forward DAG DP that retains per-node arrival density and per-edge
-    contribution. Densities are keyed by concrete edge key, so coincident
-    sibling edges are separate entries in the trace.
+    contribution. Kernels are provided per concrete edge and source-day
+    index so coincident siblings and source-day-specific masks remain
+    distinct.
 
     The DP shape is uniform: pre-initialise every on-path node's density
-    to a zero array, seed the root with δ(0) as part of initialisation,
-    then iterate the topological order accumulating
-    `convolve(node_density[U], kernel[e])` into the destination node's
-    density for every incoming concrete edge.
+    to a zero ``(S, T)`` array, seed the root with δ(0) as part of
+    initialisation, then iterate the topological order accumulating
+    shifted edge-kernel contributions into the destination node's density
+    for every incoming concrete edge.
     """
     node_density: Dict[str, np.ndarray] = {
-        node: np.zeros(T, dtype=np.float64) for node in topo.on_path
+        node: np.zeros((S, T), dtype=np.float64) for node in topo.on_path
     }
-    node_density[topo.x_node_id][0] = 1.0
+    node_density[topo.x_node_id][:, 0] = 1.0
     edge_contribution: Dict[str, np.ndarray] = {}
 
     for node in topo.topo_order:
         for ce in topo.incoming_concrete_edges.get(node, ()):
-            f_edge = densities_by_edge_key[ce.edge_key]
-            contribution = np.convolve(node_density[ce.from_id], f_edge)[:T]
+            source_density = node_density[ce.from_id]
+            contribution = np.zeros((S, T), dtype=np.float64)
+            source_indices = np.flatnonzero(np.any(source_density != 0.0, axis=0))
+            for source_index in source_indices:
+                source_index_int = int(source_index)
+                remaining = T - source_index_int
+                kernel = edge_kernel_provider(ce, source_index_int)
+                contribution[:, source_index_int:] += (
+                    source_density[:, source_index_int, None]
+                    * kernel[:, :remaining]
+                )
             edge_contribution[ce.edge_key] = contribution
             node_density[node] += contribution
 
@@ -515,11 +526,16 @@ def _run_dp_density_grid(
     """
     zero = np.zeros(T, dtype=np.float64)
     densities_by_edge_key = {
-        ce.edge_key: densities.get((ce.from_id, ce.to_id), zero)
+        ce.edge_key: densities.get((ce.from_id, ce.to_id), zero)[None, :]
         for ce in topo.concrete_edges
     }
-    trace = _run_dp_density_trace(topo, densities_by_edge_key, T)
-    return np.cumsum(trace.node_density_by_node[topo.y_node_id])
+    trace = _run_dp_density_trace(
+        topo,
+        lambda ce, _source_index: densities_by_edge_key[ce.edge_key],
+        1,
+        T,
+    )
+    return np.cumsum(trace.node_density_by_node[topo.y_node_id][0])
 
 
 def _topological_reach(
