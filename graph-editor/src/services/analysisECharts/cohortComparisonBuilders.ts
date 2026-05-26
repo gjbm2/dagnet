@@ -101,9 +101,13 @@ const BAND_PATTERN_ICONS: Record<BandPattern, string> = {
  *  - 'e': evidence only (no forecast)
  *  - 'f': forecast only (projected_rate as a single dashed line)
  *
- * Renders F-mode predictive bands (`model_*` row fields) when scenario
- * visibility is 'f', and an optional epistemic model curve (`model_curve_*`
- * row fields) when `settings.show_model_curve` is true.
+ * Renders F mode — the unspliced query-conditioned model surface with
+ * epistemic bands (`model_*` row fields) — when scenario visibility is
+ * 'f'. Also renders the optional model overlay — the existing
+ * unconditioned model curve with epistemic bands (`model_curve_*` row
+ * fields, Appendix B of the FC chart-surface proposal) — when
+ * `settings.show_model_curve` is true. Note: per Appendix B the
+ * optional model overlay is an explicit overlay, not a display mode.
  */
 export function buildCohortMaturityEChartsOption(
   result: any,
@@ -184,8 +188,6 @@ export function buildCohortMaturityEChartsOption(
     evidenceY: number | null;
     evidenceX: number | null;
     coverage: number | null;
-    evidenceXCoverage: number | null;
-    evidenceYCoverage: number | null;
     forecastY: number | null;
     forecastX: number | null;
     ratePure: number | null;
@@ -238,8 +240,6 @@ export function buildCohortMaturityEChartsOption(
       evidenceY: parse(r?.evidence_y),
       evidenceX: parse(r?.evidence_x),
       coverage: parse(r?.coverage),
-      evidenceXCoverage: parse(r?.evidence_x_coverage),
-      evidenceYCoverage: parse(r?.evidence_y_coverage),
       forecastY: parse(r?.forecast_y),
       forecastX: parse(r?.forecast_x),
       ratePure: parse(r?.rate_pure),
@@ -392,16 +392,18 @@ export function buildCohortMaturityEChartsOption(
       evidenceY: p.evidenceY,
       evidenceX: p.evidenceX,
       coverage: p.coverage,
-      evidenceXCoverage: p.evidenceXCoverage,
-      evidenceYCoverage: p.evidenceYCoverage,
       forecastY: p.forecastY,
       forecastX: p.forecastX,
     });
 
     if (mode === 'f') {
-      // Forecast-only mode: unconditional model prediction.
-      // Midpoint = median of p × CDF(tau) across posterior draws.
-      // Fan = quantiles of those draws (parameter uncertainty only).
+      // F mode renders the unspliced query-conditioned model surface
+      // (FC plan Appendix B: "F mode"). `model_midpoint` /
+      // `model_bands` row fields carry that surface on the epistemic
+      // operator basis (post-Atom-1). The legacy unconditioned
+      // predictive overlay no longer renders here; the unconditioned
+      // model curve survives as the optional model overlay via
+      // `model_curve_*` (Atom 7, see the show_model_curve block below).
       const modelMidPts = points
         .filter(p => p.modelMidpoint !== null)
         .map(p => ({ value: [p.tauDays, p.modelMidpoint] as [number, number | null], ...toMeta(p) }));
@@ -415,30 +417,34 @@ export function buildCohortMaturityEChartsOption(
       // (mode !== 'e' gate lets it through).
     }
 
-    // Optional epistemic model-curve overlay (toggle: show_model_curve).
-    // Tighter posterior-uncertainty-only bands; gated by user setting,
-    // independent of mode. Distinct dot-dash pattern to differentiate
-    // from F-mode predictive bands. Bands rendered inline here (the
-    // shared fan section keys off mode for predictive vs blended).
+    // Optional model overlay (FC plan Appendix B): the existing
+    // unconditioned model curve with epistemic bands. It is an explicit
+    // overlay, not a display mode — gated by the user setting
+    // `show_model_curve` independent of E / F / E+F selection. Uses a
+    // distinct dot-dash pattern to differentiate from F mode's
+    // conditioned-model bands. Bands rendered inline here (the shared
+    // fan section keys off mode for forecast-layer vs evidence-only
+    // rendering).
     if (settings.show_model_curve) {
       const modelCurveMidPts = points
         .filter(p => p.modelCurveMidpoint !== null)
         .map(p => ({ value: [p.tauDays, p.modelCurveMidpoint] as [number, number | null], ...toMeta(p) }));
       const sModelCurveMid = mkLine({
         id: `${scenarioId}::modelCurveMidpoint`,
-        name: `${name} (model curve)`,
+        name: `${name} (model overlay)`,
         colour, lineType: 'dotted', opacity: 0.85,
         data: modelCurveMidPts,
         smooth: true,
       });
       if (sModelCurveMid) seriesOut.push(sModelCurveMid);
 
-      // Model-curve bands use the established stipple pattern (the
-      // default promoted-source styling pre-73n). Distinct from F-mode
-      // predictive bands which use solid alpha fills, so both render
-      // simultaneously and remain visually distinguishable.
-      // Always 90% — the model curve is a fixed-level epistemic overlay,
-      // not a user-tunable surface like the F-mode fan.
+      // Optional model overlay bands use the established stipple
+      // pattern (the default promoted-source styling pre-73n). Distinct
+      // from F mode's conditioned-model bands which use solid alpha
+      // fills, so both render simultaneously and remain visually
+      // distinguishable. Always 90% — the optional model overlay is a
+      // fixed-level epistemic overlay, not a user-tunable surface like
+      // the F-mode fan.
       const stroke = colour || (c.text === '#e0e0e0' ? '#c8c8c8' : '#646464');
       {
         const level = '90';
@@ -613,7 +619,9 @@ export function buildCohortMaturityEChartsOption(
         // For the f+e fan we filter to τ ≥ sSolidMax — epoch A's fan
         // would coincide with the solid E line (zero width / collapsed)
         // and shouldn't render. The F-mode fan (`mode === 'f'`) renders
-        // across all τ since it's the unconditioned predictive overlay.
+        // across all τ — it's the unspliced conditioned model surface
+        // (FC plan Atom 1; `model_bands` now carries that, not the old
+        // unconditioned overlay).
         const poly: Array<[number, number, number]> = [];
         for (const p of points) {
           if (mode !== 'f' && p.tauDays < sSolidMax) continue;
@@ -811,11 +819,11 @@ export function buildCohortMaturityEChartsOption(
   // Model overlay neutral colour — always in scope for legend data builder.
   const modelColour = c.text === '#e0e0e0' ? '#9ca3af' : '#6b7280'; // grey-400 / grey-500
 
-  // Model curve rendering happens inline per-scenario above (see the
-  // `if (settings.show_model_curve)` block in the per-scenario loop).
-  // The legacy metadata.model_curves rendering path was deleted post-73n
-  // along with the source-curves / method-B / per-source-band data shapes
-  // it consumed.
+  // Optional model overlay rendering happens inline per-scenario above
+  // (see the `if (settings.show_model_curve)` block in the per-scenario
+  // loop). The legacy metadata.model_curves rendering path was deleted
+  // post-73n along with the source-curves / method-B / per-source-band
+  // data shapes it consumed.
 
   // Y-axis max: scan ONLY rendered series in seriesOut.  Everything in
   // seriesOut is visible; everything not in seriesOut is hidden.  No raw
@@ -894,8 +902,9 @@ export function buildCohortMaturityEChartsOption(
           : `As at ${bd}`;
 
         // Per-scenario series IDs carry a `::scenarioId` suffix; strip before
-        // filtering. Model midline series (predictive F-mode + optional
-        // epistemic curve) get rendered separately below.
+        // filtering. Model midline series (F mode's conditioned-model
+        // surface + the optional model overlay) get rendered separately
+        // below.
         const modelBaseIds = new Set(['modelMidpoint', 'modelCurveMidpoint']);
         const scenarioItems = items.filter((it: any) => {
           const sid = String(it?.seriesId || '');
@@ -914,8 +923,9 @@ export function buildCohortMaturityEChartsOption(
           const fRate = meta.forecastX > 0 ? meta.forecastY / meta.forecastX : null;
           extra_.push(`forecast n=${meta.forecastX.toFixed(1)}, k=${meta.forecastY.toFixed(1)} (${fmtPercent(fRate)})`);
         }
-        // Model midline items (predictive F-mode and optional epistemic
-        // curve). One line per visible scenario per model layer.
+        // Model midline items (F mode's conditioned-model surface and
+        // the optional model overlay). One line per visible scenario
+        // per model layer.
         const modelItems = items.filter((it: any) => {
           const sid = String(it?.seriesId || '');
           const baseSid = sid.split('::')[0];

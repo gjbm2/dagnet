@@ -191,6 +191,75 @@ class TestSimulateGraphStructure:
                         f"Cohort y={r['y']} > a={r['a']} on {r['anchor_day']}"
                     )
 
+    def test_non_latency_edges_preserve_same_day_window_handoff(self):
+        """Structurally non-latency edges are point masses, not fast
+        lognormals. A->B window y must equal B->C window x on the same
+        source day and retrieval when both edges have latency disabled."""
+        graph = {
+            "nodes": [
+                _node("node-a", is_start=True),
+                _node("node-b"),
+                _node("node-c", absorbing=True),
+            ],
+            "edges": [
+                _edge("edge-a-b", "node-a", "node-b", "param-a-b", p_mean=0.7),
+                _edge("edge-b-c", "node-b", "node-c", "param-b-c", p_mean=0.6),
+            ],
+        }
+        topology = analyse_topology(graph)
+        truth = {
+            "edges": {
+                "param-a-b": {
+                    "p": 0.7,
+                    "onset": 0.0,
+                    "mu": 0.0,
+                    "sigma": 0.0,
+                    "latency_parameter": False,
+                },
+                "param-b-c": {
+                    "p": 0.6,
+                    "onset": 0.0,
+                    "mu": 0.0,
+                    "sigma": 0.0,
+                    "latency_parameter": False,
+                },
+            },
+        }
+        rows, _stats = simulate_graph(
+            graph,
+            topology,
+            truth,
+            {
+                **DEFAULT_SIM_CONFIG,
+                "n_days": 25,
+                "mean_daily_traffic": 500,
+                "kappa_sim_default": 1000.0,
+                "failure_rate": 0.0,
+                "seed": 123,
+                "base_date": "2025-11-01",
+            },
+            _make_hash_lookup(topology),
+        )
+
+        ab_window = {
+            (r["anchor_day"], r["retrieved_at"]): r
+            for r in rows["edge-a-b"]
+            if r["slice_key"] == "window()"
+        }
+        bc_window = {
+            (r["anchor_day"], r["retrieved_at"]): r
+            for r in rows["edge-b-c"]
+            if r["slice_key"] == "window()"
+        }
+
+        shared = sorted(set(ab_window) & set(bc_window))
+        assert shared, "expected shared same-day window rows"
+        for key in shared:
+            assert ab_window[key]["y"] == bc_window[key]["x"], (
+                f"non-latency handoff drifted at {key}: "
+                f"A->B.y={ab_window[key]['y']} B->C.x={bc_window[key]['x']}"
+            )
+
     def test_nightly_fetch_model_produces_multiple_retrieval_ages(self):
         """Each anchor_day should be observed at multiple retrieval ages
         (once per successful fetch night after the anchor day)."""

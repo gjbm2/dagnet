@@ -122,18 +122,19 @@ def _run_analyse(graph: str, dsl: str) -> dict[str, Any]:
 
 
 def _mature_midpoint(payload: dict[str, Any]) -> Optional[float]:
-    """Average of the last 5 non-null `rate_blended` values in result.data, or None.
+    """Average of the last 5 non-null `midpoint` values in result.data, or None.
 
-    `rate_blended` is the unified augmented-E-line surface: empirical mature
-    rate where coverage allows, conditioned model curve where it doesn't.
-    Single curve across epochs A/B/C, populated wherever any cohort is
-    applicable at τ. Composition parity is a structural property of the
-    model, so this surface is the right one — composes correctly under
-    abundant evidence (where it tracks Σy/Σx) and under zero evidence
-    (where it tracks the conditioned model curve).
+    `midpoint` is the per-cohort calibrated E+F surface emitted across all
+    epochs (A/B/C): empirical mature rate where evidence is abundant,
+    conditioned model curve where it isn't. Composition parity is a
+    structural property of the model, so this surface is the right one —
+    composes correctly under abundant evidence (where it tracks Σy/Σx) and
+    under zero evidence (where it tracks the conditioned model curve).
+    Replaces the prior `rate_blended` field, which is no longer emitted by
+    cohort_forecast_v3.
     """
     rows = (payload.get("result") or {}).get("data") or []
-    values = [float(r["rate_blended"]) for r in rows if r.get("rate_blended") is not None]
+    values = [float(r["midpoint"]) for r in rows if r.get("midpoint") is not None]
     if len(values) < 5:
         return None
     tail = values[-5:]

@@ -27,6 +27,7 @@ edges:
     onset: 1.0
     mu: 2.2
     sigma: 0.5
+    latency_parameter: true
   cf-fix-diamond-a-to-c:
     from: cf-fix-diamond-a
     to: cf-fix-diamond-c
@@ -34,6 +35,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   cf-fix-diamond-b-to-d:
     from: cf-fix-diamond-b
     to: cf-fix-diamond-d
@@ -41,6 +43,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   cf-fix-diamond-c-to-d:
     from: cf-fix-diamond-c
     to: cf-fix-diamond-d
@@ -48,6 +51,7 @@ edges:
     onset: 2.0
     mu: 2.4
     sigma: 0.6
+    latency_parameter: true
 simulation:
   mean_daily_traffic: 2000
   n_days: 100

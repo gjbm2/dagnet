@@ -15,7 +15,7 @@ This doc is the entry point an agent needs to read **before** opening `primitive
 
 **Branching by case is the recurring failure mode** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58). `window` vs `cohort`, single-hop vs multi-hop, latency vs non-latency, identity carrier vs active carrier — these are **degeneracies of one runtime object**, not different code paths. If you find yourself reaching for `if mode == ...` near the centre of a function, the factoring is wrong; fix the factoring, not the case.
 
-The maintainer **constantly polices these patterns**. Where they already exist they are **debt to be retired gradually**, not precedent to extend. [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) catalogues 21 known violations (7 HIGH, 9 MEDIUM, 5 LOW); every one of them is on the remediation list. **Adding a new one will be reverted.** If existing code seems to justify a fallback ("the surrounding function does this already"), you are looking at debt — match the substrate's discipline, not the legacy code's.
+The maintainer **constantly polices these patterns**. Where they already exist they are **debt to be retired gradually**, not precedent to extend. Rules: [CF_ENGINE_DISCIPLINE.md](CF_ENGINE_DISCIPLINE.md). Known violations: [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) (21: 7 HIGH, 9 MEDIUM, 5 LOW). **Adding a new one will be reverted.** If existing code seems to justify a fallback ("the surrounding function does this already"), you are looking at debt — match the substrate's discipline, not the legacy code's.
 
 When in doubt: **let it raise, let it propagate as NaN, let composition refuse**. Algebraic degenerate is the contract.
 
@@ -122,7 +122,7 @@ This is what makes the primitive object a unit of work the result cache can key.
 
 ### 3.2 No fallbacks in the engine
 
-"All defence at the perimeter; the engine is a mathematical object that degenerates algebraically." This is the user's stated principle, the audit's measuring stick, and the rule the codebase mostly honours and occasionally violates — see [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) for the 21 known violations. I-47.
+"All defence at the perimeter; the engine is a mathematical object that degenerates algebraically." This is the user's stated principle, the audit's measuring stick, and the rule the codebase mostly honours and occasionally violates — see [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) for the 21 known violations. I-47.
 
 The audit captures all `or 0.0`, `np.clip`, `try/except` swallow, and `if x is None: return` patterns inside Layers 1–5 and the consumers of their output. New code in this area should be reviewed against the same rubric.
 
@@ -274,7 +274,7 @@ Most cited:
 - `cohort-maturity-evidence-coverage-design.md` — the coverage signal in row buckets.
 - `selected-a-clock-retrieval-frontier-provenance-proposal.md` — strict observation-support frontiers per anchor.
 - `snapshot-fetch-envelope-design.md` — fetch envelope construction at the preparation layer.
-- `cf-defensive-coding-audit.md` — defensive-coding inventory; see [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md).
+- [`cf-defensive-coding-audit.md`](../project-generalise/cf-defensive-coding-audit.md) — defensive-coding inventory; tracker is [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md).
 
 ---
 
@@ -286,5 +286,5 @@ Most cited:
 - [FORECAST_RUNTIME_SEMANTIC_PSEUDOCODE.md](FORECAST_RUNTIME_SEMANTIC_PSEUDOCODE.md) — stage-by-stage semantic pseudo-code.
 - [DRAW_FAMILY_KEYING.md](DRAW_FAMILY_KEYING.md) — the keyed-RNG contract.
 - [CF_RESIDUAL_GUARD.md](CF_RESIDUAL_GUARD.md) — edge-requirement classification.
-- [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) — what the engine still gets wrong.
+- [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) — what the engine still gets wrong (tracker).
 - [INVARIANTS.md](INVARIANTS.md) — I-45, I-46, I-47, I-48.

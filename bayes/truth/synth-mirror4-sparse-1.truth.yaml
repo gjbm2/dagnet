@@ -72,6 +72,7 @@ edges:
     onset: 1.0
     mu: 1.0
     sigma: 0.3
+    latency_parameter: true
   synth-mirror4-sparse-1-created-to-delegated:
     from: created
     to: delegated
@@ -79,6 +80,7 @@ edges:
     onset: 1.0
     mu: 1.5
     sigma: 0.4
+    latency_parameter: true
   synth-mirror4-sparse-1-delegated-to-registered:
     from: delegated
     to: registered
@@ -86,6 +88,7 @@ edges:
     onset: 2.0
     mu: 2.0
     sigma: 0.5
+    latency_parameter: true
   synth-mirror4-sparse-1-registered-to-success:
     from: registered
     to: success
@@ -93,6 +96,7 @@ edges:
     onset: 1.0
     mu: 1.5
     sigma: 0.4
+    latency_parameter: true
 nodes:
   landing:
     start: true

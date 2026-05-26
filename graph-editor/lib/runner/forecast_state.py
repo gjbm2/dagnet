@@ -303,7 +303,12 @@ def _compose_rate_sd(
 # Cohort-mode upstream arrival state
 # ═══════════════════════════════════════════════════════════════════════
 
-_COHORT_MC_DRAWS = 2000
+# Request-scope MC draw count S. Reads forecasting_settings.mc_draws from
+# the request context bound by the API handler; outside a request the
+# dataclass default (1000) applies. See forecasting_settings.current_settings.
+# Module-level int default retained for legacy parameter defaults that
+# cannot easily call a function; production callers go via current_mc_draws.
+_COHORT_MC_DRAWS = 1000
 
 
 @dataclass
@@ -430,7 +435,7 @@ def build_node_arrival_cache(
     graph: Dict[str, Any],
     anchor_id: str,
     max_tau: int = 400,
-    num_draws: int = _COHORT_MC_DRAWS,
+    num_draws: Optional[int] = None,
 ) -> Dict[str, NodeArrivalState]:
     """Build per-node arrival cache.
 
@@ -444,13 +449,17 @@ def build_node_arrival_cache(
     consumers (whole-graph CF, scoped CF, surprise-gauge per-node
     arrival lookups) keep working.
     """
-    from .timing_span import compose_timing_span_from_graph
+    from .timing_span import compose_timing_span_from_graph_with_mc
     from .primitives import (
         DrawFamilyKey,
         PrimitiveScope,
         TransitionIdentity,
+        current_mc_draws,
         make_rng,
     )
+
+    if num_draws is None:
+        num_draws = current_mc_draws()
 
     nodes = graph.get('nodes', [])
 
@@ -502,17 +511,17 @@ def build_node_arrival_cache(
         if not node_id or node_id == anchor_id:
             continue
 
-        timing = compose_timing_span_from_graph(
+        timing = compose_timing_span_from_graph_with_mc(
             graph=graph,
             root_node_id=anchor_id,
             end_node_id=node_id,
             max_tau=max_tau,
-            horizon_blocking_floor=0.95,
             num_draws=num_draws,
             rng=rng,
+            min_horizon_ratio=0.95,
         )
 
-        if timing.is_composed:
+        if timing.is_composed and timing.horizon_ratio >= 0.95:
             det_cdf = (
                 timing.conditional_cdf.tolist()
                 if timing.conditional_cdf is not None
@@ -735,8 +744,9 @@ class ForecastTrajectory:
     legacy_non_latency_router_bypassed: bool = False
 
 
-# Default draw count for the sweep — same as v2's MC_SAMPLES.
-_SWEEP_DRAWS = 2000
+# Default draw count for the sweep. Aligned with the request-scope
+# forecasting_settings.mc_draws default; see _COHORT_MC_DRAWS note above.
+_SWEEP_DRAWS = 1000
 # Temporary forensic stash — last sweep's forensic data.
 _last_forensic: Optional[Dict[str, Any]] = None
 _SWEEP_DRIFT_FRACTION = 0.20
@@ -1029,7 +1039,7 @@ def compute_forecast_trajectory(
     cohorts: List[CohortEvidence],
     max_tau: int,
     from_node_arrival: Optional[NodeArrivalState] = None,
-    num_draws: int = _SWEEP_DRAWS,
+    num_draws: Optional[int] = None,
     mc_cdf_arr: Optional[np.ndarray] = None,
     mc_p_s: Optional[np.ndarray] = None,
     span_alpha: Optional[float] = None,
@@ -1088,9 +1098,14 @@ def compute_forecast_trajectory(
         cohorts: per-cohort evidence with obs_x/obs_y trajectories.
         max_tau: display τ range (0..max_tau inclusive).
         from_node_arrival: upstream carrier (cohort mode only).
-        num_draws: MC draw count.
+        num_draws: MC draw count. Defaults to the request-scope
+            ``forecasting_settings.mc_draws`` when None.
     """
     from .numpy_stats import expit as _expit, logit as _logit
+    from .primitives import current_mc_draws
+
+    if num_draws is None:
+        num_draws = current_mc_draws()
 
     if runtime_bundle is not None:
         resolved = runtime_bundle.resolved_params or resolved

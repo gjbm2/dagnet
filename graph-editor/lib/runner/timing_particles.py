@@ -29,6 +29,7 @@ import numpy as np
 
 from .primitives import DrawFamilyKey, PrimitiveScope, TransitionIdentity, make_rng
 from .timing_span import TimingTransitionPrimitive
+from .bucket_transition import cdf_to_bucket_transition
 
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     'sample_timing_particles_from_params',
     'build_request_timing_particles',
     'build_per_draw_edge_cdf',
+    'build_endpoint_lognormal_cdf_from_draws',
     'build_row_aligned_lognormal_cdf_from_draws',
 ]
 
@@ -198,24 +200,57 @@ def build_per_draw_edge_cdf(
     particles: EdgeTimingParticles,
     horizon_len: int,
 ) -> np.ndarray:
-    """Row-aligned shifted log-normal cumulative on the ``(S, T)`` grid.
+    """Bucket-centred shifted log-normal cumulative on the ``(S, T)`` grid.
 
-    Per Phase 6 Appendix A, chart-facing continuous timing must be
-    converted to the same calendar-row convention as empirical snapshot
-    rows before the composer differences it:
-
-        B(τ) = ∫_τ^{τ+1} G(v) dv
-
-    The composer can continue to compute the daily kernel as
-    ``diff(cdf, prepend=0)``; here ``cdf`` means row-aligned cumulative
-    ``B``, not endpoint sample ``G(τ)``.
+    This surface is for output-path composition. It samples the
+    continuous CDF into the shared bucket-K placement convention, so
+    downstream ``diff`` sees the same bucket-centred transition mass as
+    the model and empirical operators. The primitive likelihood builds
+    its own endpoint CDF for snapshot-row likelihood evaluation.
     """
-    return build_row_aligned_lognormal_cdf_from_draws(
+    endpoint_cdf = build_endpoint_lognormal_cdf_from_draws(
         mu_draws=particles.mu_draws,
         sigma_draws=particles.sigma_draws,
         onset_draws=particles.onset_draws,
         horizon_len=horizon_len,
     )
+    return np.cumsum(
+        cdf_to_bucket_transition(
+            "timing_particles",
+            endpoint_cdf,
+            family="timing_particles",
+        ).value,
+        axis=1,
+    )
+
+
+def build_endpoint_lognormal_cdf_from_draws(
+    *,
+    mu_draws: np.ndarray,
+    sigma_draws: np.ndarray,
+    onset_draws: np.ndarray,
+    horizon_len: int,
+) -> np.ndarray:
+    """Evaluate shifted log-normal CDF at integer endpoints per draw."""
+    sigma_arr = np.asarray(sigma_draws, dtype=np.float64)
+    if np.any(sigma_arr <= 0.0):
+        raise ValueError('endpoint lognormal CDF requires sigma > 0')
+
+    mu_arr = np.asarray(mu_draws, dtype=np.float64)[:, None]
+    onset_arr = np.asarray(onset_draws, dtype=np.float64)[:, None]
+    sigma_grid = sigma_arr[:, None]
+    age_grid = np.arange(int(horizon_len), dtype=np.float64)[None, :]
+    model_age = age_grid - onset_arr
+
+    cdf_values = np.zeros_like(model_age, dtype=np.float64)
+    positive = model_age > 0.0
+    mu_b = np.broadcast_to(mu_arr, model_age.shape)
+    sigma_b = np.broadcast_to(sigma_grid, model_age.shape)
+    z_positive = (np.log(model_age[positive]) - mu_b[positive]) / sigma_b[positive]
+    from .numpy_stats import normal_cdf
+
+    cdf_values[positive] = normal_cdf(z_positive)
+    return cdf_values
 
 
 def build_row_aligned_lognormal_cdf_from_draws(
@@ -250,11 +285,10 @@ def build_row_aligned_lognormal_cdf_from_draws(
 
     cdf_values = np.zeros_like(model_age, dtype=np.float64)
     positive = model_age > 0.0
-    log_age = np.zeros_like(model_age, dtype=np.float64)
-    log_age[positive] = np.log(model_age[positive])
-    z = (log_age - mu_arr) / sigma_grid
+    mu_b = np.broadcast_to(mu_arr, model_age.shape)
+    sigma_b = np.broadcast_to(sigma_grid, model_age.shape)
+    z_positive = (np.log(model_age[positive]) - mu_b[positive]) / sigma_b[positive]
     from .numpy_stats import normal_cdf
 
-    cdf_positive = normal_cdf(z)
-    cdf_values[positive] = cdf_positive[positive]
+    cdf_values[positive] = normal_cdf(z_positive)
     return np.sum(cdf_values * scaled_weights[None, None, :], axis=2)

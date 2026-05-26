@@ -196,7 +196,7 @@ The envelope plan can be built in two places:
 
 2. **Runtime inline fallback**: `build_resolved_cf_runtime` ([cohort_forecast_v3.py:1353-1376](graph-editor/lib/runner/cohort_forecast_v3.py#L1353-L1376)) builds the plan inline in active mode when `envelope_plan is None`. This is the "legacy/test entry points still work" path the runtime's docstring mentions ([:1261-1262](graph-editor/lib/runner/cohort_forecast_v3.py#L1261-L1262)).
 
-Both paths call `build_request_envelope_plan` with the same arguments, but the duplication is real: same construction logic, two sites. Production requests go through the preparation layer; tests and legacy callers occasionally trigger the runtime inline. This is tracked as case-fork debt in [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) and should consolidate when every caller routes through preparation.
+Both paths call `build_request_envelope_plan` with the same arguments, but the duplication is real: same construction logic, two sites. Production requests go through the preparation layer; tests and legacy callers occasionally trigger the runtime inline. This is tracked as case-fork debt in [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) and should consolidate when every caller routes through preparation.
 
 ### 5.3 Window mode
 

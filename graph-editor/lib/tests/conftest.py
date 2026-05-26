@@ -152,9 +152,57 @@ def load_graph_json(
 
 @functools.lru_cache(maxsize=None)
 def _load_db_hashes_by_mode_cached(graph_name: str) -> dict[str, dict[str, list[str]]]:
-    """Map each edge UUID to its window/cohort snapshot hashes."""
+    """Map each edge UUID to the current synth window/cohort hashes.
+
+    Synth fixtures publish the FE-computed hash contract in
+    `<graph>.synth-meta.json`. Use that exact contract when present.
+    Do not discover candidates from `param_id LIKE`: snapshot `param_id`
+    is not a semantic index, and suffix matching admits sibling/stale
+    synth families into one evidence read.
+    """
     _ensure_db_connection_env()
     graph = json.loads(_load_graph_text(graph_name))
+    repo = _resolve_data_repo_dir()
+
+    if repo is not None:
+        meta_path = repo / "graphs" / f"{graph_name}.synth-meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+            except Exception:
+                meta = {}
+            edge_hashes = meta.get("edge_hashes") or {}
+            result: dict[str, dict[str, list[str]]] = {}
+            for edge in graph.get("edges", []):
+                p_id = edge.get("p", {}).get("id", "")
+                edge_uuid = edge.get("uuid")
+                if not p_id or not edge_uuid:
+                    continue
+                file_id = (
+                    p_id.replace("parameter-", "")
+                    if p_id.startswith("parameter-")
+                    else p_id
+                )
+                hashes = edge_hashes.get(file_id) or edge_hashes.get(p_id) or {}
+                window_hashes = [
+                    str(hashes.get("window_hash") or "").strip(),
+                ]
+                cohort_hashes = [
+                    str(hashes.get("cohort_hash") or "").strip(),
+                ]
+                for key, value in hashes.items():
+                    if str(key).startswith("cohort_hash_anchor_"):
+                        cohort_hashes.append(str(value or "").strip())
+
+                window_hashes = [h for h in window_hashes if h]
+                cohort_hashes = [h for h in cohort_hashes if h]
+                if window_hashes or cohort_hashes:
+                    result[edge_uuid] = {
+                        "window": window_hashes,
+                        "cohort": cohort_hashes,
+                    }
+            if result:
+                return result
 
     from snapshot_service import _pooled_conn
 
@@ -167,11 +215,11 @@ def _load_db_hashes_by_mode_cached(graph_name: str) -> dict[str, dict[str, list[
                 continue
             cur.execute(
                 "SELECT DISTINCT core_hash, slice_key FROM snapshots "
-                "WHERE param_id LIKE %s AND core_hash != '' "
+                "WHERE param_id = ANY(%s) AND core_hash != '' "
                 "AND core_hash NOT LIKE 'PLACEHOLDER%%' "
                 "AND slice_key NOT LIKE 'context%%' "
                 "ORDER BY core_hash",
-                (f"%{p_id}",),
+                ([p_id, f"parameter-{p_id}"],),
             )
             rows = cur.fetchall()
             if not rows:

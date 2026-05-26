@@ -23,10 +23,9 @@ Key design constraints (plan §597-629, baseline §3.2):
     (plan §"Stop condition" line 629; baseline §1.13 WP8 default-off
     record). A test pins this so the WP8 non-goal cannot drift in.
   - The retrieval-superset planner returns the date span the BE evidence
-    fetch must cover so all primitive-local clocks are admissible. The
-    per-primitive binding layer then admits rows on each primitive's
-    local arrival support and rejects others — the superset rows must
-    not leak between primitives.
+    fetch must cover. The per-primitive binding layer keeps every
+    merge-admitted row and assigns arrival-clock weights; rows outside
+    the clock support contribute zero rather than being clipped.
   - The request-scoped registry is keyed by ``(transition identity,
     primitive scope, prefix-arrival identity)``. Two scenarios with the
     same edge but different induced local clocks therefore cannot
@@ -172,13 +171,12 @@ class PrimitiveBindingDiagnostics:
 
     Surfaces the topology case from the prefix-arrival map, the count of
     raw ``EvidenceSet`` points the merge layer admitted, the count of
-    points the binding admitted onto the primitive-local clock, and the
-    count it rejected (off-clock rows produced by the retrieval
-    superset that don't apply to this primitive)."""
+    rows carried into the weighted view, and the count whose clock weight
+    is zero."""
     topology_case: str
     raw_point_count: int
     bound_point_count: int
-    off_clock_rejection_count: int
+    zero_clock_weight_row_count: int
     arrival_weight_summary: Mapping[str, Any]
     note: str = ''
 
@@ -234,10 +232,10 @@ def bind_primitive_evidence(
     case) and composed arrival weights (multi-hop) take exactly the
     same code path. Empty candidates produce an empty raw EvidenceSet
     which produces an empty weighted view; degraded weights produce
-    zero-weighted rows that are all rejected as off-clock. In every
-    case the result is one ``PrimitiveEvidenceResolution`` of identical
-    shape — the conditioner branches on ``has_live_evidence`` if it
-    needs to, but the binder does not (plan §605, 73g spirit).
+    zero-weighted rows. In every case the result is one
+    ``PrimitiveEvidenceResolution`` of identical shape — the conditioner
+    branches on ``has_live_evidence`` if it needs to, but the binder does
+    not (plan §605, 73g spirit).
 
     WP8 default-off enforcement: ``evidence_scope.role`` must be a
     ``WINDOW_SUBJECT_HELPER`` (plan §"Stop condition" line 629). Any
@@ -254,24 +252,18 @@ def bind_primitive_evidence(
 
     S = int(arrival_weights.draw_count)
     rows: list[WeightedEvidenceRow] = []
-    rejected = 0
     n_total_draws = np.zeros(S, dtype=np.float64)
     k_total_draws = np.zeros(S, dtype=np.float64)
+    zero_clock_weight_row_count = 0
     for point in raw.points:
         observed = point.candidate.coordinate.observed_date
         weight = arrival_weights.weight_on(observed)
         weight_draws = arrival_weights.weight_draws_on(observed)
-        # Admit a row when EITHER the scalar mean weight is positive OR
-        # any per-draw weight is positive (some draws may place mass on
-        # this day even when the marginal mean rounds to zero). The
-        # admission test is on the union of the two surfaces so a row
-        # whose conditional per-draw mass is non-zero under some draw
-        # still feeds the per-draw likelihood. The off-clock reject
-        # path stays at the perimeter — never inside conditioning.
-        any_per_draw = bool(weight_draws.size and np.any(weight_draws > 0.0))
-        if weight <= 0.0 and not any_per_draw:
-            rejected += 1
-            continue
+        has_draw_weight = bool(
+            weight_draws.size and np.any(weight_draws > 0.0)
+        )
+        if weight <= 0.0 and not has_draw_weight:
+            zero_clock_weight_row_count += 1
         n_w = float(point.n) * float(weight)
         k_w = float(point.k) * float(weight)
         n_w_draws = float(point.n) * weight_draws
@@ -320,7 +312,7 @@ def bind_primitive_evidence(
         topology_case=arrival_weights.provenance.topology_case,
         raw_point_count=len(raw.points),
         bound_point_count=len(rows),
-        off_clock_rejection_count=rejected,
+        zero_clock_weight_row_count=zero_clock_weight_row_count,
         arrival_weight_summary=dict(weighted.arrival_weight_summary),
     )
     return PrimitiveEvidenceResolution(
@@ -457,14 +449,22 @@ class RequestPrimitiveRegistry:
                     'date_to': res.primitive_scope.date_to,
                     'as_at': res.primitive_scope.as_at,
                     'topology_case': res.diagnostics.topology_case,
-                    'raw_total_n': res.raw_evidence_set.totals.n,
-                    'raw_total_k': res.raw_evidence_set.totals.k,
-                    'weighted_total_n': res.weighted_view.n_weighted_total,
-                    'weighted_total_k': res.weighted_view.k_weighted_total,
-                    'raw_point_count': res.diagnostics.raw_point_count,
-                    'bound_point_count': res.diagnostics.bound_point_count,
-                    'off_clock_rejection_count':
-                        res.diagnostics.off_clock_rejection_count,
+                    # Pre-clock candidate-bag diagnostics. These are NOT
+                    # cohort evidence totals for composed/clocked
+                    # primitives; they exist only to audit the unweighted
+                    # rows available before arrival-map binding.
+                    'preclock_candidate_total_n': res.raw_evidence_set.totals.n,
+                    'preclock_candidate_total_k': res.raw_evidence_set.totals.k,
+                    'preclock_candidate_point_count': res.diagnostics.raw_point_count,
+                    # Clock-bound evidence diagnostics consumed by
+                    # conditioning and empirical operator construction.
+                    'clocked_weighted_total_n': res.weighted_view.n_weighted_total,
+                    'clocked_weighted_total_k': res.weighted_view.k_weighted_total,
+                    'clocked_bound_point_count': res.diagnostics.bound_point_count,
+                    'zero_clock_weight_row_count':
+                        res.diagnostics.zero_clock_weight_row_count,
+                    'skipped_counts_by_reason':
+                        dict(res.weighted_view.skipped_counts_by_reason),
                 }
                 for key, res in self._entries.items()
             ],

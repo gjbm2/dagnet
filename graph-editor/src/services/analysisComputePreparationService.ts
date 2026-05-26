@@ -204,6 +204,8 @@ export interface PreparedAnalysisComputeReady {
   signature: string;
   /** Compute-affecting display settings forwarded to the backend. */
   displaySettings?: Record<string, unknown>;
+  /** Optional forecasting settings overrides forwarded to the backend. */
+  forecastingSettings?: Record<string, unknown>;
   /** MECE dimension names for regime selection aggregation safety (doc 30). */
   meceDimensions?: string[];
   /**
@@ -237,6 +239,8 @@ type SharedParams = {
   workspace?: { repository: string; branch: string };
   /** Canvas analysis display bag — compute-affecting keys are forwarded to the backend. */
   display?: Record<string, unknown> | null;
+  /** Optional forecasting settings overrides forwarded to the backend. */
+  forecastingSettings?: Record<string, unknown> | null;
   /** Parameter-file resolver for per-scenario request-graph contexting +
    *  engorgement (doc 73b §3.2a, Stage 4(a)/4(b)). Required after Stage 4(b)
    *  removes the persistent `_posteriorSlices` stash; without it scenario
@@ -771,6 +775,7 @@ export async function prepareAnalysisComputeInputs(
     scenarios,
     signature: createPreparedSignature(analysisType, analyticsDsl, scenarios, displaySettings),
     displaySettings,
+    forecastingSettings: params.forecastingSettings || undefined,
     meceDimensions,
     skipBackendCalls: params.skipBackendCalls === true ? true : undefined,
   };
@@ -893,6 +898,7 @@ async function runBackendAnalysis(
       })),
       analyticsDsl: prepared.analyticsDsl,
       displaySettings: prepared.displaySettings,
+      forecastingSettings: prepared.forecastingSettings,
     });
   }
 
@@ -911,6 +917,7 @@ async function runBackendAnalysis(
       prepared.analysisType,
       prepared.displaySettings,
       prepared.meceDimensions,
+      prepared.forecastingSettings,
     );
   }
 
@@ -927,5 +934,6 @@ async function runBackendAnalysis(
     scenario.candidate_regimes_by_edge,
     prepared.displaySettings,
     prepared.meceDimensions,
+    prepared.forecastingSettings,
   );
 }

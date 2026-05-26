@@ -166,7 +166,7 @@ See [`CF_HOLD_OUT_ENGINES.md`](CF_HOLD_OUT_ENGINES.md) for migration status.
 
 | Need | Doc |
 |---|---|
-| Defensive coding rules / known violations | [`CF_DEFENSIVE_FINDINGS.md`](CF_DEFENSIVE_FINDINGS.md) |
+| Defensive-coding rules for engine code | [`CF_ENGINE_DISCIPLINE.md`](CF_ENGINE_DISCIPLINE.md) (tracker: [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md)) |
 | Edge requirement classification | [`CF_RESIDUAL_GUARD.md`](CF_RESIDUAL_GUARD.md) |
 | RNG keying / draw families | [`DRAW_FAMILY_KEYING.md`](DRAW_FAMILY_KEYING.md) |
 | Hold-out engines / migration status | [`CF_HOLD_OUT_ENGINES.md`](CF_HOLD_OUT_ENGINES.md) |
@@ -185,7 +185,7 @@ Across the CF docs you will see banner warnings about defensive coding inside th
 
 - **No fallbacks inside the engine.** `or 0.0`, `np.clip`, `try/except: pass`, `if x is None: return` are anti-patterns. Defence lives at the perimeter.
 - **No case-forks near the centre.** `is_window`, `is_identity_carrier`, single-hop vs multi-hop, latent vs non-latent are **degeneracies of one runtime object**, not separate paths.
-- **Engine degenerates algebraically.** Missing values propagate as NaN; missing keys raise; out-of-shape inputs refuse at the perimeter. The 21 known violations ([`CF_DEFENSIVE_FINDINGS.md`](CF_DEFENSIVE_FINDINGS.md)) are debt to retire, not precedent.
+- **Engine degenerates algebraically.** Missing values propagate as NaN; missing keys raise; out-of-shape inputs refuse at the perimeter. Rules: [`CF_ENGINE_DISCIPLINE.md`](CF_ENGINE_DISCIPLINE.md). The 21 known violations are debt to retire, not precedent.
 
 This applies wherever you edit `cohort_forecast_v3.py`, the `primitive_*` modules, `subject_span_composer.py`, `prefix_arrival.py`, `timing_span.py`, or `span_kernel.py`.
 

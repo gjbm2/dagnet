@@ -57,8 +57,6 @@ When in doubt, this glossary points at the canonical doc; that doc is the source
 - **rhat / R̂** — Gelman-Rubin convergence diagnostic. `<1.01` good.
 - **ELBO** — Evidence Lower Bound. SVI optimisation target.
 - **EWMA** — Exponentially Weighted Moving Average. Recency-biased aggregator used for snapshot smoothing and per-window evidence weighting where applicable.
-- **IPW** — Inverse Probability Weighting. Each observed contribution is scaled by `1 / Pr(observed)` to recover an unbiased estimator of the full-population quantity. Used in the cohort-maturity row reducer to derive `evidence_*_adjusted` from `evidence_*_strict` divided by per-anchor coverage, per Phase 6 §5.6.
-- **MCAR** — Missing Completely At Random. Sparsity is uncorrelated with the underlying quantity being measured (e.g. snapshot-row presence is driven by retrieval timing and capture infrastructure, not by cohort or edge conversion behaviour). Under MCAR, IPW is an unbiased estimator. The variance-blow-up at low coverage is bias-free; epoch B dashing communicates the higher variance, not bias.
 - **completeness** — Fraction of eventual converters observed by a given cohort age. `LogNormalCDF(age − onset, μ, σ)`.
 - **τ_observed / `tau_observed`** — Maximum observed cohort age. Drives epoch boundaries in cohort maturity charts.
 
@@ -78,17 +76,41 @@ When in doubt, this glossary points at the canonical doc; that doc is the source
 
 ---
 
-## Cohort-maturity chart display modes
+## Cohort-maturity chart display modes and surfaces
 
-The `cohort_maturity_v3` chart can render three trajectory modes per scenario, selected in the FE chart UI. They differ in which forecast-engine output series they read from each row:
+Terminology is fixed by the frontier-conditioned chart-surface proposal,
+[frontier-conditioned-chart-surface-proposal-21-May-26.md](../project-generalise/frontier-conditioned-chart-surface-proposal-21-May-26.md)
+Appendix B. **E, F, and E+F name display modes only; `ef_*` / `f_*` / overlay name internal surfaces.** The maintained surface-vs-mode contract:
 
-- **F mode** (model-only forecast) — reads `model_midpoint` / `model_fan_*` / `model_bands`. Pure-model projection: aggregate posterior `p` (from the resolved source-ledger model) times the latency CDF at τ. Decoupled from per-cohort observed slices — invariant under query window choice for a given fixture/posterior. F is `compute_forecast_trajectory.model_rate_draws` aggregated by `np.median` per τ.
-- **E+F mode** (evidence + forecast) — reads `midpoint` / `fan_*` / `fan_bands`. Data-conditioned trajectory: cohort-loop output with IS conditioning on per-cohort observed slices, doc-52-blended with the IS-off twin where evidence is sparse. Pulls toward local evidence; varies sharply by query window.
-- **E mode** (evidence-only) — reads `evidence_y` / `evidence_x` (Σy, Σx aggregated across cohorts contributing observation at τ). The chart shows the observed slice without model projection.
+### Display modes
+
+- **E mode** — Chart display that renders only the strict evidence layer where evidence support exists. Reads `evidence_y` / `evidence_x` (Σy, Σx aggregated across cohorts contributing observation at τ).
+- **F mode** — Chart display that renders the **conditioned model surface** (`f_*`) with epistemic bands. Reads `model_midpoint` / `model_fan_*` / `model_bands` row fields, sourced from `selected_projection.f_rate_draws` (the spine's unspliced query-conditioned model surface on the epistemic operator basis). Decoupled from per-cohort observed slices but conditioned on the query's evidence binding.
+- **E+F mode** — Chart display that renders the **evidence layer** in epochs A/B plus the **forecast layer** in epochs B/C. Reads `rate` / `evidence_y` / `evidence_x` for the evidence layer and `midpoint` / `fan_*` / `fan_bands` for the forecast layer. Epoch B is the overlap region; in epoch C only the forecast layer remains visible (no evidence support).
+
+### Internal surfaces
+
+- **Strict evidence surface** — Strict empirical row fields (`rate`, `evidence_x`, `evidence_y`). Supplies E mode and the evidence layer in E+F mode.
+- **Evidence layer** — The visual layer in E+F mode that renders the strict evidence surface. Visible only where observed or partially observed evidence support exists (epochs A/B); absent in epoch C.
+- **Forecast layer** — The second visual layer in E+F mode (curve + bands rendered in epochs B/C). Reads the FC surface (`ef_*`) post-Atom-6. The output layer suppresses the forecast layer in epoch A only; the spine still emits `ef_*` across the full tau sweep so prefix-pinning and continuity are testable internally.
+- **Conditioned model surface** (`f_*`) — Full-root query-conditioned model surface generated from conditioned primitives on the epistemic operator basis. F mode renders this surface. Carried by row fields `model_midpoint` / `model_fan_*` / `model_bands`.
+- **FC surface** (`ef_*`) — Internal frontier-conditioned surface generated by `model_span_spine.project_selected_cohort_rows`. Prefix-pinned to strict evidence through each Cohort's frontier; continues unresolved mass after the frontier on the predictive operator basis. Generated for the full tau sweep regardless of display gating. Carried by row fields `midpoint` / `fan_*` / `fan_bands` / `projected_rate` and the future-residual surfaces `forecast_x` / `forecast_y` (sourced from `ef_forecast_x` / `ef_forecast_y`).
+- **Optional model overlay** — Existing unconditioned model curve with epistemic bands. Sourced from `runtime.unconditioned_overlays['epistemic']`; carried by row fields `model_curve_midpoint` / `model_curve_fan_*` / `model_curve_bands`. May remain as an explicit overlay via the display setting `show_model_curve`, but is **not a display mode** — it is rendered alongside whichever display mode is active.
+
+### Epoch mapping
+
+`tau_solid_max` and `tau_future_max` define the three epochs (see [CF_ROW_PIPELINE.md §6](CF_ROW_PIPELINE.md#6-the-epoch-model)). Public display rules:
+
+| Display mode | Epoch A (τ ≤ tau_solid_max) | Epoch B (tau_solid_max < τ ≤ tau_future_max) | Epoch C (τ > tau_future_max) |
+|---|---|---|---|
+| **E mode** | strict evidence surface | strict evidence surface (dwindling cohort coverage) | no evidence layer |
+| **F mode** | conditioned model surface | conditioned model surface | conditioned model surface |
+| **E+F mode** | evidence layer only (forecast layer suppressed in epoch A) | evidence + forecast layers | forecast layer only |
+| **Optional model overlay** | overlay if enabled | overlay if enabled | overlay if enabled |
+
+The forecast layer's underlying `ef_*` arrays are generated across the full tau sweep; epoch-A suppression is an output-layer rendering choice, not a data gap. Within `ef_*`, every draw is pinned to strict evidence through each Cohort's frontier and only the unresolved future is continued.
 
 The bead display modes in [BEAD_DISPLAY_MODE.md](BEAD_DISPLAY_MODE.md) are a different concept (per-edge bead rendering), even though they reference "E or F mode" — those refer to which rate series feeds bead `k` values.
-
-The F vs E+F invariant: at τ = `tau_solid_max` both lines should agree (latency CDF still small leaves both ≈ 0 in the typical drift-free case); off-frontier they diverge under drift / window-localised evidence. The contract — that F is the model-only projection, NOT a re-render of cohort observations — was restored 1-May-26 (regression where `model_rate_draws` had been wired to the cohort-loop IS-off twin).
 
 ## CF substrate (primitive runtime)
 
@@ -103,24 +125,13 @@ The F vs E+F invariant: at τ = `tau_solid_max` both lines should agree (latency
 - **Legacy trajectory engine** — `forecast_state.compute_forecast_trajectory`. Pre-substrate cohort-loop projector. Post-73n status: "DO NOT ADD NEW CALLERS". Two surviving callers: `surprise_gauge` and `daily_conversions` row annotation. See [CF_HOLD_OUT_ENGINES.md](CF_HOLD_OUT_ENGINES.md) §"The legacy trajectory engine".
 - **Residual guard** — `primitive_residual_guard.classify_edge_requirement`. Refuses adjacency `1−p` derivation, residual closure, and rejected prepared spans by emitting `UNSUPPORTED_RESIDUAL` primitives rather than silently computing them. See [CF_RESIDUAL_GUARD.md](CF_RESIDUAL_GUARD.md).
 
-## Evidence operator / coverage algebra
+## Evidence operator terms
 
-Terms from the Phase 6 evidence-operator contract ([phase-6-evidence-operator-contract.md](../project-generalise/phase-6-evidence-operator-contract.md)).
-
-- **Conditioned (model) operator** — Per-edge kernel `p × Δcdf` built from the fitted parametric posterior via `ConditionedTransitionPrimitive` / `condition_primitive`. Defined at every cell (continuous parametric fit). Drives model surfaces (`midpoint`, `fan_*`, `forecast_*`) and — with the row-presence mask — coverage and exposure. Phase 6 §4.1.
-- **Empirical (evidence) operator** — Per-edge kernel `Δk_emp / n_emp` built directly from admitted snapshot rows. Per-draw via arrival-weighted aggregation; forward-filled across absent ages (Δ = 0 at absent cells, structurally). Drives strict evidence cumulatives. Phase 6 §4.9.
-- **Value kernel** — `p × Δcdf` per edge from the conditioned operator. The "mass projection" kernel. Phase 6 §4.8.
-- **Support kernel** — `value_kernel × mask`. Cell-wise zeroed at absent (mask = 0) cells. Phase 6 §4.8.
-- **Exposure kernel** — `unit_density_shape × mask`. Independent of `p`. Distinguishes covered-zero (mask=1, value=0) from absent (mask=0) at terminal-zero cells. Phase 6 §4.8.
-- **Masked kernel** — Generic term for any kernel × row-presence mask. Support and exposure are both masked kernels with different value bases.
-- **Row-presence mask** — Per-cell `(edge, source_day, age)` indicator. `1` iff a snapshot row exists at that cell; `0` iff absent. Pure row-presence, independent of `k` / `n` values. Plumbed from `bind_primitive_evidence` through `condition_primitive` into the composer.
-- **Coverage** — `cumulative_support / cumulative_value` per `(anchor, τ)`. Mass-weighted fraction of the wavefront passing through fully-observed paths. Computed exclusively against the conditioned operator's value stream (the empirical kernel collapses the ratio to 1). Phase 6 §4.8.
-- **Per-terminal coverage** — Coverage read at distinct chain nodes. `coverage_x_A[τ]` at X (carrier terminal) drives `evidence_x_coverage` and the `evidence_x_adjusted` IPW factor. `coverage_y_A[τ]` at Z (chain terminal) drives `evidence_y_coverage` and the `evidence_y_adjusted` IPW factor. In window or `A=X` mode the carrier is identity and `coverage_x = 1` trivially.
-- **Exposure (signal)** — `cumulative_exposure` per `(anchor, τ)`. `> 0` iff at least one wavefront path reached `(anchor, τ)` through observed cells. Drives admissibility filtering at the reducer.
-- **Frontier (τ per anchor)** — `max τ where exposure_y_A[τ] > 0`. The last τ at which any wavefront path to the chain terminal is fully observed for that anchor.
-- **Admissibility** — Per-`(anchor, τ)` `exposure_y_A[τ] > 0`. Cohorts failing the admissibility check at τ contribute neither to strict nor adjusted row-level sums at that τ.
-- **Strict evidence** — `Σ_admissible evidence_y_strict_A[τ]` per τ, no scaling. The E-mode display fields `evidence_x`, `evidence_y`, `rate`. Falls naturally in epoch B with sparsity. Phase 6 §5.6.
-- **Adjusted evidence** — `Σ_admissible evidence_y_strict_A[τ] / coverage_y_A[τ]` per τ, IPW under MCAR. The E+F-mode display fields `evidence_x_adjusted`, `evidence_y_adjusted`, `rate_adjusted`. Supersedes legacy `rate_blended`. Phase 6 §5.6.
+- **Conditioned (model) operator** — Per-edge value kernel `p × Δcdf` built from the fitted parametric posterior via `ConditionedTransitionPrimitive` / `condition_primitive`. Drives model surfaces (`midpoint`, `fan_*`, `forecast_*`).
+- **Empirical (evidence) operator** — Per-edge value kernel `Δk_emp / n_emp` built directly from admitted snapshot rows. Per-draw via arrival-weighted aggregation; forward-filled across absent ages. Drives strict evidence cumulatives.
+- **Value kernel** — The per-edge mass-transfer kernel consumed by span composition.
+- **Coverage** — A simple Cohort applicability scalar used by cohort-maturity display opacity, not a DP-derived mask/support ratio.
+- **Strict evidence** — The unscaled observed evidence display fields `evidence_x`, `evidence_y`, and `rate`.
 
 ## Cohort/Window roles
 

@@ -31,7 +31,9 @@ _LEVEL_Z = {
     0.99: 2.576,
 }
 
-MC_SAMPLES = 2000
+# Module-level default retained for legacy callers; the request path goes
+# via forecasting_settings.mc_draws — see compute_confidence_band.
+MC_SAMPLES = 1000
 
 
 def _shifted_lognormal_cdf(t: float, onset: float, mu: float, sigma: float) -> float:
@@ -88,9 +90,10 @@ def compute_confidence_band(
     cov = np.diag(sds ** 2)
     cov[3, 1] = cov[1, 3] = onset_mu_corr * onset_sd * mu_sd
 
+    from .primitives import current_mc_draws
     theta_mean = np.array([p, mu, sigma, onset])
     rng = np.random.default_rng(42)
-    samples = rng.multivariate_normal(theta_mean, cov, size=MC_SAMPLES)
+    samples = rng.multivariate_normal(theta_mean, cov, size=current_mc_draws())
 
     # Clip to valid ranges
     samples[:, 0] = np.clip(samples[:, 0], 1e-6, 1 - 1e-6)  # p

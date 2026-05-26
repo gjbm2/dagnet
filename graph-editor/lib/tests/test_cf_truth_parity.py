@@ -66,14 +66,16 @@ requires_python_be = pytest.mark.skipif(
 )
 
 
-# Same fixture matrix as the bash original (lines 34-41 of cf-truth-parity.sh).
+# Representative fixture matrix. The bash original used several broad relative
+# windows; truth parity only needs non-vacuous in-fixture slices for each
+# topology class.
 _FIXTURES: list[tuple[str, str]] = [
-    ("synth-simple-abc", "window(-120d:)"),
-    ("cf-fix-linear-no-lag", "window(-60d:)"),
-    ("synth-mirror-4step", "cohort(7-Mar-26:21-Mar-26)"),
-    ("cf-fix-branching", "window(-60d:)"),
-    ("cf-fix-diamond-mixed", "window(-120d:)"),
-    ("cf-fix-deep-mixed", "window(-180d:)"),
+    ("synth-simple-abc", "window(1-Feb-26:14-Feb-26)"),
+    ("cf-fix-linear-no-lag", "window(1-Feb-26:14-Feb-26)"),
+    ("synth-mirror-4step", "cohort(7-Mar-26:10-Mar-26)"),
+    ("cf-fix-branching", "window(1-Feb-26:14-Feb-26)"),
+    ("cf-fix-diamond-mixed", "window(1-Feb-26:14-Feb-26)"),
+    ("cf-fix-deep-mixed", "window(1-Mar-26:14-Mar-26)"),
 ]
 
 
@@ -99,6 +101,7 @@ def _run_cf_analyse(graph: str, dsl: str) -> dict[str, Any]:
             "--name", graph,
             "--query", dsl,
             "--type", "conditioned_forecast",
+            "--mc-draws", "64",
             "--format", "json",
         ]
         try:
@@ -113,6 +116,7 @@ def _run_cf_analyse(graph: str, dsl: str) -> dict[str, Any]:
     cmd = [
         "bash", str(_ANALYSE_SH), graph, dsl,
         "--type", "conditioned_forecast",
+        "--mc-draws", "64",
         "--format", "json",
     ]
     result = subprocess.run(
@@ -168,10 +172,12 @@ def test_cf_truth_parity_per_edge(graph_name: str, dsl: str) -> None:
     cf = _run_cf_analyse(graph_name, dsl)
     truth_edges = _load_truth_edges(graph_name)
     cf_edges = (cf.get("scenarios") or [{}])[0].get("edges", [])
+    assert cf_edges, f"{graph_name} ({dsl}) returned no CF edges"
 
     rows: list[str] = []
     non_latency_fails: list[str] = []
     laggy_fails: list[str] = []
+    checked = 0
 
     for e in cf_edges:
         fn, tn = e.get("from_node"), e.get("to_node")
@@ -181,6 +187,7 @@ def test_cf_truth_parity_per_edge(graph_name: str, dsl: str) -> None:
         cf_p = e.get("p_mean")
         if cf_p is None:
             continue
+        checked += 1
         sigma = truth_info["sigma"]
         truth_p = truth_info["p"]
         delta = abs(truth_p - cf_p)
@@ -204,6 +211,8 @@ def test_cf_truth_parity_per_edge(graph_name: str, dsl: str) -> None:
             f"  {mark} {edge_label:<52}  {tag}  truth={truth_p:.4f}  "
             f"cf={cf_p:.4f}  |Δ|={delta:.4f}  {tol_label}"
         )
+
+    assert checked > 0, f"{graph_name} ({dsl}) produced no truth-matched CF edges"
 
     if non_latency_fails or laggy_fails:
         report = "\n".join([

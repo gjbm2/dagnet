@@ -2258,7 +2258,16 @@ export class UpdateManager {
         }
       }
       
-      // Apply evidence if provided
+      // Apply evidence if provided.
+      //
+      // `mean` and `stdev` are DERIVED from the counts (mean = k/n, stdev =
+      // binomial uncertainty), not independent fields. Any writer that
+      // refreshes n/k without also refreshing the derived scalars would
+      // leave them stale — the failure mode where CF projected fresh n/k
+      // over an old file-sync's mean=0, so the renderer (which keys off
+      // evidence.mean) collapsed the evidence lane. Enforce the invariant
+      // here, at the single port every edge write funnels through, so no
+      // individual writer (CF, FE topo, file sync) has to remember.
       if (update.evidence) {
         if (!targetP.evidence) {
           targetP.evidence = {};
@@ -2274,6 +2283,16 @@ export class UpdateManager {
         }
         if (update.evidence.stdev !== undefined) {
           targetP.evidence.stdev = update.evidence.stdev;
+        }
+        // Re-derive mean/stdev from the merged counts so they can never
+        // drift from n/k. Only when both counts are present and n > 0;
+        // a scalar-only evidence write (mean, no counts) stands as given.
+        const en = targetP.evidence.n;
+        const ek = targetP.evidence.k;
+        if (typeof en === 'number' && en > 0 && typeof ek === 'number') {
+          const m = ek / en;
+          targetP.evidence.mean = m;
+          targetP.evidence.stdev = Math.sqrt((m * (1 - m)) / en);
         }
       }
 

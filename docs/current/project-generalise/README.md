@@ -78,6 +78,8 @@ project-generalise/
 ├── multi-hop-window-evidence-rate-composition-design.md    (design)
 ├── multi-hop-window-evidence-rate-composition-implementation-plan.md
 ├── multi-hop-rate-composition-y-deficit-investigation.md   (post-implementation investigation)
+├── mask-coverage-ipw-removal-record-18-May-26.md           (masks/support/exposure/IPW retired; strict k/n evidence retained)
+├── checkpoint-frontier-coverage-proposal.md                (17-May-26 external-review proposal for cumulative snapshot coverage)
 │
 ├── cf-v3-snapshots/                                        (point-in-time copies of cohort_forecast_v3.py)
 │   ├── cf_v3_photocopy.py                                  (== stash@{0} content)

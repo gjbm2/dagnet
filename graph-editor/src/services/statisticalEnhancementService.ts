@@ -53,6 +53,7 @@ import {
   BAYES_TUNE,
   BAYES_CHAINS,
   BAYES_TARGET_ACCEPT,
+  MC_DRAWS,
   SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
   SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
 } from '../constants/latency';
@@ -1325,16 +1326,78 @@ export function computeEdgeLatencyStats(
   const pSd = totalK < 30 ? Math.max(pSdRaw, 0.10) : pSdRaw;
 
   // μ epistemic SD: t-posterior on μ, interval-matched at central 90%.
-  const muSd = epistemicMuSd(sigmaForSd, totalK);
+  const muSdNaive = epistemicMuSd(sigmaForSd, totalK);
 
   // σ epistemic SD: scaled inv-χ² posterior on σ², interval-matched over σ.
-  const sigmaSd = epistemicSigmaSd(sigmaForSd, totalK);
+  const sigmaSdNaive = epistemicSigmaSd(sigmaForSd, totalK);
 
-  // Onset SD and onset–mu correlation: separate from the t-posterior
-  // design; retained from the prior heuristic until a principled
-  // formulation lands. See archive/heuristic-dispersion-design.md §3.4–3.5.
+  // ── Latency-side overdispersion inflator ──────────────────────────
+  // Closes the latency-side §3.9 deferral that EPISTEMIC_DISPERSION_DESIGN
+  // §6 explicitly flagged as the next case to add when "the latency-side
+  // asymmetry bites analogously" to the rate side. Mirrors the §6 rate
+  // closure: Pearson chi-squared on per-day mean-log-lag residuals against
+  // the population MLE, moment-matched against the χ²_{df} expectation.
+  //
+  // Hierarchical model: ln(t_ij) = μ + u_i + ε_ij with u_i ~ N(0, τ²) and
+  // ε_ij ~ N(0, σ²). Under no per-day drift (τ² = 0), the test statistic
+  //   X² = Σ_i k_i · (μ̂_i − μ̂)² / σ̂²
+  // is χ²_{N_days − 1}-distributed. Under drift,
+  //   E[X²/(N_days − 1)] = 1 + (k_avg · τ²/σ²) ≡ φ̂
+  // The naive iid Student-t SE is inflated by √φ̂:
+  //   μ_sd_inflated = √max(1, φ̂) · μ_sd_naive
+  //
+  // No arbitrary constants. Inputs are data (per-day median_lag_days, k_i),
+  // the fitted σ̂, and an estimate of the within-day mean of ln(t). Using
+  // ln(median_lag − onset) as μ̂_i is exact for a lognormal whose median is
+  // observed; for the σ inflation the analogue test would need per-day σ_i
+  // estimates which the aggregated CohortData does not carry, so σ_sd
+  // remains at its naive epistemic value.
+  const onsetForOverdisp = onsetDeltaDays > 0 ? onsetDeltaDays : 0.0;
+  const perDayMuObs: { muHatI: number; kI: number }[] = [];
+  for (const c of cohorts) {
+    if (c.median_lag_days == null || c.k <= 0) continue;
+    const shifted = c.median_lag_days - onsetForOverdisp;
+    if (!(shifted > 0) || !Number.isFinite(shifted)) continue;
+    perDayMuObs.push({ muHatI: Math.log(shifted), kI: c.k });
+  }
+  let latencyOverdispersionPhi = 1.0;
+  if (perDayMuObs.length > 1 && sigmaForSd > 0) {
+    const totalKObs = perDayMuObs.reduce((s, p) => s + p.kI, 0);
+    const muHatPop = perDayMuObs.reduce((s, p) => s + p.kI * p.muHatI, 0) / totalKObs;
+    let chi2 = 0;
+    for (const p of perDayMuObs) {
+      const r = p.muHatI - muHatPop;
+      chi2 += p.kI * r * r;
+    }
+    chi2 /= (sigmaForSd * sigmaForSd);
+    const df = perDayMuObs.length - 1;
+    latencyOverdispersionPhi = chi2 / df;
+  }
+  const muSdInflation = Math.sqrt(Math.max(1.0, latencyOverdispersionPhi));
+  const muSd = muSdNaive * muSdInflation;
+  const sigmaSd = sigmaSdNaive;
+
+  // Onset SD: separate from the t-posterior design; retained from the
+  // prior heuristic until a principled formulation lands. See
+  // archive/heuristic-dispersion-design.md §3.4.
   const onsetSd = Math.min(1.0, Math.max(0.2, 0.10 * onsetDeltaDays));
-  const onsetMuCorr = onsetDeltaDays > 0 ? -0.3 : 0.0;
+
+  // Onset-μ correlation: closed-form asymptotic correlation of the MLE
+  // for the shifted lognormal T = onset + LogN(μ, σ). Derived from the
+  // Fisher information matrix:
+  //   I_θθ = (1 + 1/σ²) exp(-2μ + 2σ²)  (per obs)
+  //   I_μμ = 1/σ²
+  //   I_θμ = exp(-μ + σ²/2) / σ²
+  //   ρ(θ̂, μ̂) = -I_θμ / √(I_θθ · I_μμ) = -exp(-σ²/2) / √(σ² + 1)
+  // (Aitchison & Brown 1957; depends only on σ, independent of N.)
+  // For σ ∈ [0.4, 0.7] this yields ρ ∈ [-0.83, -0.71] — the
+  // identifiability ridge an MCMC posterior under flat priors also
+  // recovers. Replaces the prior -0.3 heuristic placeholder and closes
+  // the §3.9 analytic dispersion deferral on the latency-correlation
+  // axis (mirrors the §6 closure on the rate-predictive axis).
+  const onsetMuCorr = (onsetDeltaDays > 0 && sigmaForSd > 0)
+    ? -Math.exp(-(sigmaForSd * sigmaForSd) / 2) / Math.sqrt(sigmaForSd * sigmaForSd + 1)
+    : 0.0;
 
   // If no mature cohorts, forecast fallback is not available
   if (pInfinityEstimate === undefined) {
@@ -2039,6 +2102,7 @@ export function enhanceGraphLatencies(
     BAYES_TUNE: forecasting?.BAYES_TUNE ?? BAYES_TUNE,
     BAYES_CHAINS: forecasting?.BAYES_CHAINS ?? BAYES_CHAINS,
     BAYES_TARGET_ACCEPT: forecasting?.BAYES_TARGET_ACCEPT ?? BAYES_TARGET_ACCEPT,
+    MC_DRAWS: forecasting?.MC_DRAWS ?? MC_DRAWS,
     SNAPSHOT_OBSERVATION_T95_MULTIPLIER: forecasting?.SNAPSHOT_OBSERVATION_T95_MULTIPLIER ?? SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
     SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER: forecasting?.SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER ?? SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
   };

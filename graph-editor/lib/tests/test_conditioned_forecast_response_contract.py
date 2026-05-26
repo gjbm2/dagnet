@@ -98,6 +98,10 @@ def _find_cf_handler(tree: ast.AST) -> ast.FunctionDef:
     )
 
 
+def _find_cf_response_builder(tree: ast.AST) -> ast.FunctionDef:
+    return _find_function(tree, "_handle_conditioned_forecast_impl")
+
+
 def _iter_edge_result_appends(func: ast.FunctionDef) -> list[ast.Dict]:
     """
     Return every dict literal passed to `edge_results.append({...})`
@@ -157,7 +161,7 @@ class TestConditionedForecastResponseContract:
     def test_handler_emits_p_mean(self):
         """Doc 45: response edges carry p_mean."""
         tree = ast.parse(_load_handler_source())
-        func = _find_cf_handler(tree)
+        func = _find_cf_response_builder(tree)
         edge_dicts = _iter_edge_result_appends(func)
         assert edge_dicts, (
             "No `edge_results.append({...})` found inside "
@@ -173,7 +177,7 @@ class TestConditionedForecastResponseContract:
     def test_handler_emits_p_sd(self):
         """Doc 45: response edges carry p_sd."""
         tree = ast.parse(_load_handler_source())
-        func = _find_cf_handler(tree)
+        func = _find_cf_response_builder(tree)
         for d in _iter_edge_result_appends(func):
             keys = _literal_keys(d)
             assert "p_sd" in keys, (
@@ -188,7 +192,7 @@ class TestConditionedForecastResponseContract:
         `completeness`, downstream consumers (graph projection, chart
         normaliser) silently lose the field."""
         tree = ast.parse(_load_handler_source())
-        func = _find_cf_handler(tree)
+        func = _find_cf_response_builder(tree)
         for d in _iter_edge_result_appends(func):
             keys = _literal_keys(d)
             assert "completeness" in keys, (
@@ -203,7 +207,7 @@ class TestConditionedForecastResponseContract:
         """Doc 45 response contract: per-edge output MUST include
         `completeness_sd` (posterior uncertainty on completeness)."""
         tree = ast.parse(_load_handler_source())
-        func = _find_cf_handler(tree)
+        func = _find_cf_response_builder(tree)
         for d in _iter_edge_result_appends(func):
             keys = _literal_keys(d)
             assert "completeness_sd" in keys, (
@@ -216,7 +220,7 @@ class TestConditionedForecastResponseContract:
     def test_handler_emits_cf_mode(self):
         """Doc 57: per-edge output carries CF provenance mode."""
         tree = ast.parse(_load_handler_source())
-        func = _find_cf_handler(tree)
+        func = _find_cf_response_builder(tree)
         for d in _iter_edge_result_appends(func):
             keys = _literal_keys(d)
             assert "cf_mode" in keys, (
@@ -226,7 +230,7 @@ class TestConditionedForecastResponseContract:
     def test_handler_emits_cf_reason(self):
         """Doc 57: per-edge output carries CF degradation reason."""
         tree = ast.parse(_load_handler_source())
-        func = _find_cf_handler(tree)
+        func = _find_cf_response_builder(tree)
         for d in _iter_edge_result_appends(func):
             keys = _literal_keys(d)
             assert "cf_reason" in keys, (
@@ -498,21 +502,26 @@ class TestConditionedForecastSingleHopCohortParity:
         graph = self._load_synth_graph()
         regimes = self._get_candidate_regimes(graph)
         analytics_dsl = "from(simple-b).to(simple-c)"
-        query_dsl = "cohort(-90d:)"
+        query_dsl = "cohort(1-Feb-26:14-Feb-26)"
+        forecasting_settings = {"mc_draws": 64}
 
-        cm_result = _handle_cohort_maturity_v3(
-            {
-                "scenarios": [
-                    {
-                        "scenario_id": "parity",
-                        "graph": graph,
-                        "analytics_dsl": analytics_dsl,
-                        "effective_query_dsl": query_dsl,
-                        "candidate_regimes_by_edge": regimes,
-                    }
-                ]
-            }
-        )
+        from runner.forecasting_settings import settings_from_dict, use_request_settings
+
+        with use_request_settings(settings_from_dict(forecasting_settings)):
+            cm_result = _handle_cohort_maturity_v3(
+                {
+                    "forecasting_settings": forecasting_settings,
+                    "scenarios": [
+                        {
+                            "scenario_id": "parity",
+                            "graph": graph,
+                            "analytics_dsl": analytics_dsl,
+                            "effective_query_dsl": query_dsl,
+                            "candidate_regimes_by_edge": regimes,
+                        }
+                    ],
+                }
+            )
         cm_rows = []
         if "result" in cm_result and isinstance(cm_result["result"], dict):
             cm_rows = cm_result["result"].get("maturity_rows", []) or []
@@ -530,6 +539,7 @@ class TestConditionedForecastSingleHopCohortParity:
 
         cf_result = handle_conditioned_forecast(
             {
+                "forecasting_settings": forecasting_settings,
                 "scenarios": [
                     {
                         "scenario_id": "parity",
@@ -589,21 +599,25 @@ class TestRateEvidenceProvenanceDiagnostics:
     @staticmethod
     def _cohort_maturity_diag(graph, regimes, temporal_dsl: str) -> dict:
         from api_handlers import _handle_cohort_maturity_v3
+        from runner.forecasting_settings import settings_from_dict, use_request_settings
 
-        result = _handle_cohort_maturity_v3(
-            {
-                "_diagnostics": True,
-                "scenarios": [
-                    {
-                        "scenario_id": "diag",
-                        "graph": graph,
-                        "analytics_dsl": "from(synth-lat4-c).to(synth-lat4-d)",
-                        "effective_query_dsl": temporal_dsl,
-                        "candidate_regimes_by_edge": regimes,
-                    }
-                ],
-            }
-        )
+        forecasting_settings = {"mc_draws": 64}
+        with use_request_settings(settings_from_dict(forecasting_settings)):
+            result = _handle_cohort_maturity_v3(
+                {
+                    "_diagnostics": True,
+                    "forecasting_settings": forecasting_settings,
+                    "scenarios": [
+                        {
+                            "scenario_id": "diag",
+                            "graph": graph,
+                            "analytics_dsl": "from(synth-lat4-c).to(synth-lat4-d)",
+                            "effective_query_dsl": temporal_dsl,
+                            "candidate_regimes_by_edge": regimes,
+                        }
+                    ],
+                }
+            )
         return (result.get("_diagnostics") or {}).get(
             "rate_evidence_provenance", {}
         )
@@ -615,6 +629,7 @@ class TestRateEvidenceProvenanceDiagnostics:
         result = handle_conditioned_forecast(
             {
                 "_diagnostics": True,
+                "forecasting_settings": {"mc_draws": 64},
                 "analytics_dsl": "from(synth-lat4-c).to(synth-lat4-d)",
                 "scenarios": [
                     {
@@ -660,12 +675,12 @@ class TestRateEvidenceProvenanceDiagnostics:
         identity = self._cohort_maturity_diag(
             self._load_synth_graph(),
             self._get_candidate_regimes(None),
-            "cohort(synth-lat4-c,-90d:)",
+            "cohort(synth-lat4-c,1-Mar-26:14-Mar-26)",
         )
         anchor_distinct = self._cohort_maturity_diag(
             self._load_synth_graph(),
             self._get_candidate_regimes(None),
-            "cohort(synth-lat4-b,-90d:)",
+            "cohort(synth-lat4-b,1-Mar-26:14-Mar-26)",
         )
 
         assert identity == {
@@ -689,12 +704,12 @@ class TestRateEvidenceProvenanceDiagnostics:
         identity = self._conditioned_forecast_diag(
             self._load_synth_graph(),
             self._get_candidate_regimes(None),
-            "cohort(synth-lat4-c,-90d:)",
+            "cohort(synth-lat4-c,1-Mar-26:14-Mar-26)",
         )
         anchor_distinct = self._conditioned_forecast_diag(
             self._load_synth_graph(),
             self._get_candidate_regimes(None),
-            "cohort(synth-lat4-b,-90d:)",
+            "cohort(synth-lat4-b,1-Mar-26:14-Mar-26)",
         )
 
         assert identity == {

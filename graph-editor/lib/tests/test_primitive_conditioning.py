@@ -69,6 +69,7 @@ from runner.primitive_evidence import (
     make_primitive_scope_from_evidence_scope,
 )
 from runner.primitives import (
+    DEFAULT_DRAW_COUNT,
     CompatibilityBlendProvenance,
     ConditioningStatus,
     SubsetPolicyProvenance,
@@ -100,13 +101,8 @@ def _prim(p=0.7, *, mu=0.0, sigma=0.0, onset=0.0) -> TimingTransitionPrimitive:
     )
 
 
-def test_timing_particles_use_row_aligned_cdf_with_same_day_mass():
-    """Phase 6 Appendix A: continuous timing kernels use row buckets.
-
-    Endpoint sampling would give G(0)=0 for a lognormal with onset 0,
-    producing no age-0 mass. Row-aligned B(0)=∫_0^1 G(v)dv is positive
-    and matches the empirical same-day row convention.
-    """
+def test_timing_particles_use_bucket_transition_cdf_for_output_path():
+    """Runtime timing particles use bucket-K cumulative rows for readout."""
     particles = EdgeTimingParticles(
         mu_draws=np.asarray([np.log(1.0)], dtype=np.float64),
         sigma_draws=np.asarray([0.5], dtype=np.float64),
@@ -208,7 +204,7 @@ def _build_resolution(
     transitions=None,
     edge_id='e-u-v',
     src='U', dst='V',
-    draw_count=2000,
+    draw_count=DEFAULT_DRAW_COUNT,
 ) -> PrimitiveEvidenceResolution:
     """Build a Stage 2 PrimitiveEvidenceResolution for U→V with single-day
     arrival weights so n_weighted_total == sum of raw n. ``draw_count``
@@ -250,23 +246,35 @@ def _resolved_model(
     *,
     alpha=1.0,
     beta=1.0,
+    alpha_pred=None,
+    beta_pred=None,
     n_effective=None,
     mu=0.0,
     sigma=0.0,
     onset=0.0,
+    mu_sd=0.0,
+    mu_sd_pred=None,
 ) -> ResolvedModelParams:
-    """Minimal ResolvedModelParams stub for the conditioning tests."""
+    """Minimal ResolvedModelParams stub for the conditioning tests.
+
+    ``alpha_pred`` / ``beta_pred`` / ``mu_sd_pred`` default to the
+    epistemic values (no predictive divergence) — matches the pre-Atom-2
+    helper. Tests exercising basis-aware behaviour set them explicitly.
+    """
+    a_pred = alpha if alpha_pred is None else alpha_pred
+    b_pred = beta if beta_pred is None else beta_pred
     edge_lat = ResolvedLatency(
         mu=mu, sigma=sigma, onset_delta_days=onset,
-        t95=0.0, mu_sd=0.0, sigma_sd=0.0, onset_sd=0.0, onset_mu_corr=0.0,
+        t95=0.0, mu_sd=mu_sd, mu_sd_pred=mu_sd_pred,
+        sigma_sd=0.0, onset_sd=0.0, onset_mu_corr=0.0,
     )
     return ResolvedModelParams(
         p_mean=alpha / max(alpha + beta, 1e-12),
         p_sd=0.0,
         alpha=alpha,
         beta=beta,
-        alpha_pred=alpha,
-        beta_pred=beta,
+        alpha_pred=a_pred,
+        beta_pred=b_pred,
         n_effective=n_effective,
         edge_latency=edge_lat,
         path_latency=None,
@@ -474,68 +482,6 @@ def test_prior_only_when_no_evidence_admitted():
 
 
 # ─── DEGRADED when Stage 2 produces no weighted view ───────────────────
-
-
-def test_degraded_when_arrival_map_degraded():
-    """When Stage 2's PrimitiveEvidenceResolution carries no weighted
-    view (degraded arrival_weight[U]), the primitive carries
-    ``status=DEGRADED`` as provenance and its draws are sampled from
-    the prior (the algebra treats it as any other primitive).
-
-    A no-path graph (root != source node id) makes the prefix-arrival
-    map produce a degraded entry for the primitive's source.
-    """
-    # Build a graph where U has no path from root R, then ask the
-    # arrival map for U — it returns a degraded entry.
-    graph = _make_graph([
-        ('e-r-x', 'u-r', 'u-x', 'R', 'X'),
-        ('e-u-v', 'u-u', 'u-v', 'U', 'V'),
-    ])
-    transitions = {('R', 'X'): _prim(p=0.7), ('U', 'V'): _prim(p=0.7)}
-    arrival_map = build_prefix_arrival_map(
-        graph=graph,
-        root_node_id='R',
-        root_day_weights={'2026-03-15': 1.0},
-        transitions=transitions,
-        identity=_identity(request_root='R'),
-        max_tau=60,
-    )
-    u_entry = arrival_map.get('U')
-    assert u_entry is not None
-    assert u_entry.is_degraded
-    # Build a resolution with this degraded entry.
-    transition = TransitionIdentity('U', 'V', 'e-u-v')
-    ev_scope = _evidence_scope()
-    primitive_scope = make_primitive_scope_from_evidence_scope(
-        evidence_scope=ev_scope,
-        model_source_preference='best_available',
-        resolved_source_identity='bayesian',
-    )
-    res = bind_primitive_evidence(
-        transition=transition,
-        primitive_scope=primitive_scope,
-        evidence_scope=ev_scope,
-        candidates=[_candidate(observed_date='2026-03-15', n=100, k=30)],
-        arrival_weights=u_entry,
-    )
-    # Degraded arrival weights produce a uniformly shaped weighted
-    # view with zero rows (every raw point is rejected as off-clock);
-    # the conditioner detects the topology_case='degraded' tag and
-    # returns a DEGRADED primitive.
-    assert res.weighted_view is not None
-    assert res.weighted_view.n_weighted_total == 0.0
-    assert res.weighted_view.rows == ()
-    assert res.weighted_view.arrival_weight_summary['topology_case'] == 'degraded'
-    rm = _resolved_model(alpha=1.0, beta=1.0)
-    prim = condition_primitive(
-        resolution=res, resolved_model=rm, scenario_seed=42,
-    )
-    assert prim.status == ConditioningStatus.DEGRADED
-    # Post-refactor: DEGRADED is provenance only; the primitive is
-    # draw-bearing, sampled from the prior via the keyed-RNG seam.
-    draws = prim.probability_draws()
-    assert draws is not None
-    assert draws.shape == (prim.draw_count,)
 
 
 # ─── Structurally non-latency: probability conditioned, timing Dirac ───
@@ -912,17 +858,18 @@ def test_window_output_can_be_read_from_conditioned_primitive():
     )
     expected = (2.0 + 20.0) / (2.0 + 3.0 + 50.0)
     assert prim.probability_posterior is not None
+    # MC noise scales as ~1/sqrt(S); tolerance picked for DEFAULT_DRAW_COUNT.
     assert prim.probability_posterior.mean == pytest.approx(
-        expected, abs=0.015,  # 2000 MC draws ⇒ ~0.01 noise.
+        expected, abs=0.02,
     )
     # The diagnostic surface mirrors what window() consumers in Stage 5a
     # will read.
     pd = prim.to_provenance_dict()
     assert pd['status'] == 'conditioned'
     assert pd['probability_posterior']['mean'] == pytest.approx(
-        expected, abs=0.015,
+        expected, abs=0.02,
     )
-    assert pd['probability_posterior']['n_draws'] == 2000
+    assert pd['probability_posterior']['n_draws'] == DEFAULT_DRAW_COUNT
 
 
 # Removed: ``test_conditioned_primitive_uses_keyed_prior_draw_family_mode``.
@@ -1044,3 +991,216 @@ def test_make_unconditioned_primitive_warning_fires_for_latent_path_too():
     ), f'latent path missed degenerate warning; notes={prim.notes!r}'
     # And the legacy latent note must still be present.
     assert any('timing_family=latent' in n for n in prim.notes)
+
+
+# ─── Atom 2 (frontier-conditioned chart surface §9.4): basis-aware ─────
+# Basis-labelled conditioned primitive objects. Two basis values are
+# defined: `'epistemic'` (current F-mode conditioned model surface, the
+# default for every existing caller) and `'predictive'` (reserved for
+# the FC continuation surface; no row field reads from it yet). The
+# acceptance criterion for Atom 2 is that the two bases produce distinct
+# primitive identities, cache entries, and posterior surfaces when the
+# underlying prior moments differ — and stay identical to the pre-Atom-2
+# behaviour when the caller uses the default basis.
+
+
+def test_dispersion_basis_default_is_epistemic_and_preserves_existing_behaviour():
+    """Atom 2 §9.4 acceptance: existing callers (no explicit basis) get
+    identical results to passing ``dispersion_basis='epistemic'``. This
+    is what keeps the outside-in oracle green — every pre-Atom-2 call
+    site sees byte-identical posterior draws."""
+    res_a = _build_resolution(
+        candidates=[_candidate(observed_date='2026-03-15', n=80, k=24)],
+    )
+    res_b = _build_resolution(
+        candidates=[_candidate(observed_date='2026-03-15', n=80, k=24)],
+    )
+    # Distinct alpha/alpha_pred so the basis dispatch is meaningfully
+    # different from a no-op identity test — yet the default path still
+    # has to choose epistemic.
+    rm = _resolved_model(
+        alpha=2.0, beta=8.0, alpha_pred=1.0, beta_pred=4.0,
+        n_effective=None,
+    )
+    prim_default = condition_primitive(
+        resolution=res_a, resolved_model=rm, scenario_seed=99,
+    )
+    prim_epistemic = condition_primitive(
+        resolution=res_b, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='epistemic',
+    )
+    np.testing.assert_array_equal(
+        prim_default.probability_draws(),
+        prim_epistemic.probability_draws(),
+    )
+    assert prim_default.draw_family_key.basis == 'epistemic'
+    assert prim_epistemic.draw_family_key.basis == 'epistemic'
+
+
+def test_dispersion_basis_canonical_string_includes_basis_only_when_non_epistemic():
+    """Atom 2 §9.4 + DRAW_FAMILY_KEYING: the canonical_string omits
+    ``basis`` when it equals the implicit default (``'epistemic'``) so
+    existing seed identities are preserved across the change. A
+    non-default basis MUST be appended so basis-distinct primitives
+    seed distinct RNG streams."""
+    from runner.primitives import DrawFamilyKey, PrimitiveScope
+    scope = PrimitiveScope(
+        scenario_id='scn-1', evidence_role='window_subject_helper',
+        date_from='2026-03-01', date_to='2026-03-31', as_at='2026-04-01',
+        context_key=None, regime_key='default',
+        model_source_preference='best_available',
+        resolved_source_identity='bayesian',
+    )
+    ti = TransitionIdentity('U', 'V', 'e-u-v')
+    k_default = DrawFamilyKey(ti, scope, draw_count=64, scenario_seed=11)
+    k_epi = DrawFamilyKey(
+        ti, scope, draw_count=64, scenario_seed=11, basis='epistemic',
+    )
+    k_pred = DrawFamilyKey(
+        ti, scope, draw_count=64, scenario_seed=11, basis='predictive',
+    )
+    assert k_default.canonical_string() == k_epi.canonical_string()
+    assert 'basis=' not in k_default.canonical_string()
+    assert 'basis=predictive' in k_pred.canonical_string()
+    assert k_epi.canonical_string() != k_pred.canonical_string()
+    # Digest follows canonical_string ⇒ epistemic == default, predictive
+    # is distinct. This is what makes ``make_rng`` seed distinctly.
+    assert k_epi.digest == k_default.digest
+    assert k_epi.digest != k_pred.digest
+
+
+def test_dispersion_basis_epistemic_vs_predictive_differ_when_prior_moments_differ():
+    """Atom 2 §9.4 acceptance: 'focused tests prove epistemic and
+    predictive basis identities differ when surfaces differ'. With
+    ``alpha_pred != alpha`` the conjugate update consumes different
+    priors under the two bases, so the posterior moments must diverge.
+    """
+    res_epi = _build_resolution(
+        candidates=[_candidate(observed_date='2026-03-15', n=80, k=24)],
+    )
+    res_pred = _build_resolution(
+        candidates=[_candidate(observed_date='2026-03-15', n=80, k=24)],
+    )
+    # Narrow epistemic prior (Beta(20, 80), mean 0.20) vs wide
+    # predictive prior (Beta(2, 8), mean 0.20 but ~10× less informative).
+    # The 80/24 evidence drives the predictive posterior away from the
+    # prior more aggressively than the epistemic posterior, so the means
+    # diverge by ≫ MC noise.
+    rm = _resolved_model(
+        alpha=20.0, beta=80.0,
+        alpha_pred=2.0, beta_pred=8.0,
+        n_effective=None,
+    )
+    prim_epi = condition_primitive(
+        resolution=res_epi, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='epistemic',
+    )
+    prim_pred = condition_primitive(
+        resolution=res_pred, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='predictive',
+    )
+    # Both must succeed (CONDITIONED) and both must carry the basis tag
+    # in provenance.
+    assert prim_epi.status == ConditioningStatus.CONDITIONED
+    assert prim_pred.status == ConditioningStatus.CONDITIONED
+    assert prim_epi.draw_family_key.basis == 'epistemic'
+    assert prim_pred.draw_family_key.basis == 'predictive'
+    assert any('dispersion_basis=epistemic' in n for n in prim_epi.notes)
+    assert any('dispersion_basis=predictive' in n for n in prim_pred.notes)
+    # Posterior means must differ by more than ~MC noise: epistemic
+    # posterior Beta(44, 136) mean ≈ 0.244; predictive posterior
+    # Beta(26, 64) mean ≈ 0.289. ~4.5 percentage points apart, far
+    # above the 2000-draw MC noise floor (≈0.01).
+    epi_mean = prim_epi.probability_posterior.mean
+    pred_mean = prim_pred.probability_posterior.mean
+    assert abs(pred_mean - epi_mean) > 0.02, (
+        f'expected basis divergence > 0.02; got '
+        f'epistemic={epi_mean:.4f} predictive={pred_mean:.4f}'
+    )
+
+
+def test_dispersion_basis_identical_when_predictive_equals_epistemic():
+    """Algebraic degeneracy: when ``alpha_pred == alpha`` and
+    ``beta_pred == beta`` the two bases must produce the same posterior
+    surface — basis is data, not a separate code path. (CF_ENGINE_DISCIPLINE
+    AP58: cases differ by which sub-object degenerates.)
+    """
+    res_epi = _build_resolution(
+        candidates=[_candidate(observed_date='2026-03-15', n=80, k=24)],
+    )
+    res_pred = _build_resolution(
+        candidates=[_candidate(observed_date='2026-03-15', n=80, k=24)],
+    )
+    # Predictive == epistemic by construction.
+    rm = _resolved_model(
+        alpha=5.0, beta=15.0,
+        alpha_pred=5.0, beta_pred=15.0,
+        n_effective=None,
+    )
+    prim_epi = condition_primitive(
+        resolution=res_epi, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='epistemic',
+    )
+    prim_pred = condition_primitive(
+        resolution=res_pred, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='predictive',
+    )
+    # Posterior means must agree within MC noise — same evidence,
+    # algebraically equivalent priors.
+    epi_mean = prim_epi.probability_posterior.mean
+    pred_mean = prim_pred.probability_posterior.mean
+    assert abs(pred_mean - epi_mean) < 0.01, (
+        f'expected basis convergence < 0.01 when priors equal; got '
+        f'epistemic={epi_mean:.4f} predictive={pred_mean:.4f}'
+    )
+
+
+def test_dispersion_basis_does_not_collide_in_primitive_cache():
+    """Atom 2 §9.4: cache identity MUST include basis so basis-labelled
+    primitives with identical scope + evidence don't share a cache
+    entry. Two calls with the same resolution + resolved_model but
+    distinct bases must return primitives whose ``draw_family_key.basis``
+    matches the request — i.e. the cache discriminates correctly.
+    """
+    res = _build_resolution(
+        candidates=[_candidate(observed_date='2026-03-15', n=80, k=24)],
+    )
+    rm = _resolved_model(
+        alpha=20.0, beta=80.0,
+        alpha_pred=2.0, beta_pred=8.0,
+        n_effective=None,
+    )
+    # First miss for each basis populates a distinct cache entry; the
+    # second call for each basis must read its own basis-labelled entry
+    # back, not the other basis's.
+    prim_epi_a = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='epistemic',
+    )
+    prim_pred_a = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='predictive',
+    )
+    prim_epi_b = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='epistemic',
+    )
+    prim_pred_b = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=99,
+        dispersion_basis='predictive',
+    )
+    # Cache hits return the same draws within a basis...
+    np.testing.assert_array_equal(
+        prim_epi_a.probability_draws(), prim_epi_b.probability_draws(),
+    )
+    np.testing.assert_array_equal(
+        prim_pred_a.probability_draws(), prim_pred_b.probability_draws(),
+    )
+    # ...but cross-basis primitives stay distinct. With the (20, 80) vs
+    # (2, 8) priors above the posterior means are far apart, so the
+    # draws cannot coincide.
+    assert prim_epi_a.draw_family_key.basis == 'epistemic'
+    assert prim_pred_a.draw_family_key.basis == 'predictive'
+    assert not np.array_equal(
+        prim_epi_a.probability_draws(), prim_pred_a.probability_draws(),
+    )

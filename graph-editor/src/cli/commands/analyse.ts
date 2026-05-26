@@ -59,6 +59,7 @@ dagnet-cli analyse
                              the command runs against FE-topo state only.
     --allow-external-fetch   Fetch live from external sources (e.g. Amplitude)
     --display <json>          Display settings JSON (e.g. '{"show_latency_bands":true}')
+    --mc-draws <n>            Override forecasting_settings.mc_draws for this run
     --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json
                              sidecar into the graph in-memory before analysis.
                              No disk writes.
@@ -110,6 +111,7 @@ async function runAnalyse() {
       'no-snapshot-cache': { type: 'boolean' },
       'no-be': { type: 'boolean' },
       display: { type: 'string' },
+      'mc-draws': { type: 'string' },
     },
   });
   if (!ctx) {
@@ -130,6 +132,15 @@ async function runAnalyse() {
       log.error(`Invalid --display JSON: ${extraArgs.display}`);
       exit(1, 'invalid --display JSON');
     }
+  }
+  let cliForecastingSettings: Record<string, unknown> | undefined;
+  if (extraArgs['mc-draws']) {
+    const value = Number(extraArgs['mc-draws']);
+    if (!Number.isFinite(value) || value <= 0) {
+      log.error(`Invalid --mc-draws value: ${extraArgs['mc-draws']}`);
+      exit(1, 'invalid --mc-draws');
+    }
+    cliForecastingSettings = { mc_draws: value };
   }
 
   // Bypass the BE snapshot service in-memory cache. Essential during synth
@@ -304,6 +315,7 @@ async function runAnalyse() {
     hiddenScenarioIds: [],
     frozenWhatIfDsl: null,
     display: cliDisplaySettings,
+    forecastingSettings: cliForecastingSettings,
     // Doc 73b §3.2a / Stage 4(a): per-scenario request graphs context off
     // the parameter-file slice library. The CLI shares
     // analysisComputePreparationService with the FE, so the same wiring

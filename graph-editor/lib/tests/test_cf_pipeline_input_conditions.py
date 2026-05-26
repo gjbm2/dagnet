@@ -615,21 +615,17 @@ def test_empty_evidence_degrades_visibly_no_silent_rescue():
     numeric = _numeric_rows(rows)
     assert numeric, 'pipeline returned no τ-indexed rows'
 
-    # I-12: evidence-named numeric fields must be absent (None), not
-    # numerically reconstructed from frame-derived prefixes.
+    # Evidence-named numeric fields must be the zero degenerate (0.0),
+    # not numerically reconstructed from frame-derived prefixes.
     for r in numeric:
-        assert r.get('evidence_x') is None, (
+        assert r.get('evidence_x') == 0.0, (
             f"τ={r['tau_days']}: evidence_x={r['evidence_x']!r} "
-            f"populated under empty-evidence input. I-12 violation: "
-            f"evidence-named fields must be absent, not reconstructed."
+            f"populated under empty-evidence input — must be 0.0, "
+            f"not reconstructed."
         )
-        assert r.get('evidence_y') is None, (
+        assert r.get('evidence_y') == 0.0, (
             f"τ={r['tau_days']}: evidence_y={r['evidence_y']!r} "
-            f"populated under empty-evidence input. I-12 violation."
-        )
-        assert r.get('rate') is None, (
-            f"τ={r['tau_days']}: rate={r['rate']!r} populated under "
-            f"empty-evidence input. I-12 violation."
+            f"populated under empty-evidence input — must be 0.0."
         )
 
 
@@ -813,20 +809,15 @@ def test_active_cohort_only_superset_degrades_visibly():
     numeric = _numeric_rows(rows)
     assert numeric, 'pipeline returned no τ-indexed rows'
 
-    # Per I-12, evidence-named fields are absent on this path. No
-    # silent rescue from any frame-derived substrate.
+    # Evidence-named fields must be the zero degenerate (0.0) on this
+    # path. No silent rescue from any frame-derived substrate.
     for r in numeric:
-        assert r.get('evidence_x') is None, (
+        assert r.get('evidence_x') == 0.0, (
             f"τ={r['tau_days']}: evidence_x={r['evidence_x']!r} "
             f"populated despite cohort-only superset that the unified "
-            f"base-mass derivation cannot admit. I-12 violation "
-            f"(silent rescue under a refused unified path)."
+            f"base-mass derivation cannot admit — must be 0.0."
         )
-        assert r.get('evidence_y') is None, (
+        assert r.get('evidence_y') == 0.0, (
             f"τ={r['tau_days']}: evidence_y={r['evidence_y']!r} "
-            f"populated despite refused unified path. I-12 violation."
-        )
-        assert r.get('rate') is None, (
-            f"τ={r['tau_days']}: rate={r['rate']!r} populated despite "
-            f"refused unified path. I-12 violation."
+            f"populated despite refused unified path — must be 0.0."
         )

@@ -47,8 +47,11 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
+from .bucket_transition import cdf_to_bucket_transition
+from .primitives import DEFAULT_DRAW_COUNT
 from .timing_span import (
     TimingTransitionPrimitive,
+    compose_terminal_node_density_per_draw,
     compose_timing_span_from_densities,
     compose_timing_span_from_transition_primitives,
 )
@@ -82,7 +85,7 @@ class PrefixArrivalIdentity:
         # v2 (Atom 2): scenario_id dropped — caller-context label, not
         # part of the prefix-arrival map's mathematical identity.
         return "|".join((
-            "73n.prefix_arrival_identity.v2",
+            "73n.prefix_arrival_identity.v3.bucket_transition",
             f"root={self.request_root}",
             f"context={self.context_key or ''}",
             f"regime={self.regime_key or ''}",
@@ -338,7 +341,7 @@ def build_prefix_arrival_map(
     root_day_weights: Mapping[str, float],
     transitions: Mapping[Tuple[str, str], TimingTransitionPrimitive],
     timing_particles: Optional[RequestTimingParticles] = None,
-    draw_count: int = 2000,
+    draw_count: int = DEFAULT_DRAW_COUNT,
     identity: PrefixArrivalIdentity,
     max_tau: int = 400,
     target_node_ids: Optional[Tuple[str, ...]] = None,
@@ -396,6 +399,7 @@ def build_prefix_arrival_map(
     # dispersion, broadcast across ``draw_count``. The engine flow
     # downstream is uniform — particles are always present after this
     # entry-point check.
+    using_degenerate_particles = timing_particles is None
     if timing_particles is None:
         S_degenerate = int(draw_count)
         degenerate_particles: Dict[Tuple[str, str], EdgeTimingParticles] = {}
@@ -478,10 +482,9 @@ def build_prefix_arrival_map(
             end_node_id=canonical,
             transitions=transitions_dict,
             max_tau=max_tau,
-            horizon_blocking_floor=0.95,
         )
 
-        if timing.is_composed:
+        if timing.is_composed and timing.horizon_ratio >= 0.95:
             cdf = timing.conditional_cdf
             if cdf is None:
                 # Active carrier with no deterministic CDF should not
@@ -494,7 +497,11 @@ def build_prefix_arrival_map(
                 )
                 diagnostics['degraded_count'] += 1
                 continue
-            pmf = np.diff(np.asarray(cdf, dtype=float), prepend=0.0)
+            pmf = cdf_to_bucket_transition(
+                f"prefix_arrival::{root_canonical}->{canonical}",
+                np.asarray(cdf, dtype=float),
+                family="prefix_arrival",
+            ).value[0]
             # Numerical clean-up: clip tiny negatives from floating
             # point and drop entries that sum to zero (would happen
             # for a saturated CDF whose differences vanish past
@@ -527,19 +534,27 @@ def build_prefix_arrival_map(
                 )
                 diagnostics['degraded_count'] += 1
                 continue
-            # Per-draw composition over the same topology: for every
-            # draw s, compose the per-draw edge densities through the
-            # shared DAG DP. The same keyed timing particles drive
-            # both this composition and the primitive-conditioning
-            # proposal (Phase 6 §3.2 single-source-of-truth invariant).
-            per_draw_pmf = _compose_per_draw_pmf_at_end(
-                graph=dict(graph),
-                root_canonical=root_canonical,
-                end_canonical=canonical,
-                transitions=transitions_dict,
-                timing_particles=timing_particles,
-                max_tau=max_tau,
-            )
+            if using_degenerate_particles:
+                # No caller-supplied timing particles means the request
+                # perimeter asked for a deterministic diagnostic surface:
+                # broadcast the scalar bucket-K PMF so weights and
+                # weights_draws remain the same distribution at different
+                # marginalisation levels.
+                per_draw_pmf = np.repeat(pmf[None, :], S, axis=0)
+            else:
+                # Per-draw composition over the same topology: for every
+                # draw s, compose the per-draw edge densities through the
+                # shared DAG DP. The same keyed timing particles drive
+                # both this composition and the primitive-conditioning
+                # proposal (Phase 6 §3.2 single-source-of-truth invariant).
+                per_draw_pmf = _compose_per_draw_pmf_at_end(
+                    graph=dict(graph),
+                    root_canonical=root_canonical,
+                    end_canonical=canonical,
+                    transitions=transitions_dict,
+                    timing_particles=timing_particles,
+                    max_tau=max_tau,
+                )
             calendar_draws_raw = _shift_pmf_draws_to_calendar(
                 root_day_weights=normalised_root,
                 pmf_draws=per_draw_pmf,
@@ -635,69 +650,34 @@ def _compose_per_draw_pmf_at_end(
     timing_particles: RequestTimingParticles,
     max_tau: int,
 ) -> np.ndarray:
-    """Compose per-draw root → end latency PMF on a ``(S, T)`` grid.
+    """Compose per-draw root → end conditional latency PMF on ``(S, T)``.
 
-    For every draw ``s``, every edge ``U → V`` in the topology
-    contributes a per-draw sub-probability density built from the same
-    edge-keyed particles that drive primitive conditioning's proposal:
-
-        density_edge[s, t] = p_edge × (cdf_draws[s, t] − cdf_draws[s, t-1])
-
-    where ``cdf_draws`` comes from ``build_per_draw_edge_cdf`` on the
-    edge's particles. The shared DAG DP (``compose_timing_span_from_densities``)
-    composes per-draw densities into the per-draw root → end density
-    CDF; the increment of that CDF is the per-draw PMF on this grid.
+    For every draw ``s``, every edge ``U → V`` contributes a per-draw
+    sub-probability density ``p_edge · diff(cdf_draws[s, :], prepend=0)``
+    built from the same edge-keyed particles primitive conditioning uses.
+    One batched DAG DP composes these into the per-draw end-node density,
+    and the per-draw conditional PMF is that density renormalised by its
+    own row sum (the per-draw reach within the grid).
     """
     S = int(timing_particles.draw_count)
     T = int(max_tau) + 1
 
-    # Build per-edge per-draw sub-probability densities once.
     per_edge_densities: Dict[Tuple[str, str], np.ndarray] = {}
-    edge_p: Dict[Tuple[str, str], float] = {}
     for edge_key, primitive in transitions.items():
-        particles = timing_particles.particles_by_edge.get(edge_key)
-        if particles is None:
-            # Caller bug — every edge in the topology must have keyed
-            # particles. Surface as a missing-edge error at the
-            # composer (perimeter), not in-engine.
-            raise KeyError(
-                f'timing_particles missing edge {edge_key!r}; '
-                f'request perimeter must seed particles for every '
-                f'edge in the transitions map.'
-            )
-        cdf_draws = build_per_draw_edge_cdf(particles, T)  # (S, T)
-        pmf_draws = np.diff(cdf_draws, prepend=0.0, axis=1)  # (S, T)
-        pmf_draws = np.clip(pmf_draws, 0.0, None)
-        p_edge = float(primitive.p)
-        per_edge_densities[edge_key] = p_edge * pmf_draws
-        edge_p[edge_key] = p_edge
+        particles = timing_particles.particles_by_edge[edge_key]
+        cdf_draws = build_per_draw_edge_cdf(particles, T)
+        pmf_draws = np.diff(cdf_draws, prepend=0.0, axis=1)
+        per_edge_densities[edge_key] = float(primitive.p) * pmf_draws
 
-    # Per-draw composition: loop over draws and call the shared DAG DP
-    # per draw with that draw's edge densities. The DP code is the same
-    # one the scalar composer uses; per-draw is a data degeneracy of
-    # the same routine with one-density-per-edge per draw.
-    pmf_at_end = np.zeros((S, T), dtype=np.float64)
-    for s in range(S):
-        densities_s = {
-            edge_key: per_edge_densities[edge_key][s, :]
-            for edge_key in per_edge_densities
-        }
-        timing_s = compose_timing_span_from_densities(
-            graph=dict(graph),
-            root_node_id=root_canonical,
-            end_node_id=end_canonical,
-            densities=densities_s,
-            max_tau=max_tau,
-            horizon_blocking_floor=None,
-        )
-        if timing_s.is_composed and timing_s.conditional_cdf is not None:
-            cdf_s = np.asarray(timing_s.conditional_cdf, dtype=np.float64)
-            pmf_at_end[s, :] = np.diff(cdf_s, prepend=0.0)
-        # Else: this draw degenerated to no-path / zero-reach — leave
-        # row at zero. Algebraic degeneracy of the same composition;
-        # downstream per-draw normalisation handles it.
-    pmf_at_end = np.clip(pmf_at_end, 0.0, None)
-    return pmf_at_end
+    end_density = compose_terminal_node_density_per_draw(
+        graph=graph,
+        root_node_id=root_canonical,
+        end_node_id=end_canonical,
+        densities_by_from_to=per_edge_densities,
+        S=S,
+        T=T,
+    )
+    return end_density / end_density.sum(axis=1, keepdims=True)
 
 
 def _degraded(

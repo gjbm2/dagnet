@@ -85,7 +85,8 @@ class SpanTopology:
     y_node_id: str
     topo_order: List[str]           # nodes in topological order
     on_path: set                    # nodes on x→y paths
-    reverse_adj: Dict[str, List[str]]  # node → list of predecessors
+    reverse_adj: Dict[str, List[str]]  # node → list of predecessors (full graph)
+    on_path_reverse_adj: Dict[str, List[str]]  # node → predecessors restricted to on_path
     path_adj: Dict[str, List[Tuple[str, Dict]]]  # from → [(to, edge_data)]
     edge_list: List[Tuple[str, str, Dict]]  # (from_id, to_id, edge_data) for all on-path edges
     concrete_edges: Tuple[ConcreteEdge, ...] = field(default_factory=tuple)
@@ -294,12 +295,19 @@ def _build_span_topology(
     for ce in concrete_edges_list:
         incoming_concrete[ce.to_id].append(ce)
 
+    on_path_reverse_adj: Dict[str, List[str]] = {
+        node: [p for p in preds if p in on_path]
+        for node, preds in reverse_adj.items()
+        if node in on_path
+    }
+
     return SpanTopology(
         x_node_id=x_node_id,
         y_node_id=y_node_id,
         topo_order=topo_order,
         on_path=on_path,
         reverse_adj=reverse_adj,
+        on_path_reverse_adj=on_path_reverse_adj,
         path_adj=path_adj,
         edge_list=edge_list,
         concrete_edges=tuple(concrete_edges_list),

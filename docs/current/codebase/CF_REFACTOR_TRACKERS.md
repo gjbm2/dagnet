@@ -13,7 +13,7 @@ The substrate's design contract is captured in the codebase docs ([CF_PRIMITIVE_
 
 ### `cf-defensive-coding-audit.md` — 12-May-26
 
-The 21-finding defensive-code audit. Executive summary in [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md). Source for [INVARIANTS.md](INVARIANTS.md) I-47 / I-48.
+The 21-finding defensive-code audit ([source](../project-generalise/cf-defensive-coding-audit.md)). Executive summary: [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md). Source for [INVARIANTS.md](INVARIANTS.md) I-47 / I-48.
 
 | Decides | Open |
 |---|---|
@@ -26,14 +26,6 @@ The dual-prefix object design (§A.1, §A.3, §A.4, §A.6). Cited extensively fr
 | Decides | Open |
 |---|---|
 | `M_select(U, C, u) = N_cohort(C) × g_{A→U}[u − C]` for every subject primitive source node U (§A.1); reach-preserving density-form mass semantics (§A.3); seam invariant — reducer and row builder must read the same prefix object (§A.4); M_select is a runtime-resolved object, not projection-layer (§A.6 phase 1); midpoint shift compensates for bucket-day integration (§A.6 phase 6 — no display-layer Y ≤ X cap). | F-1 unification (extract one mass-first reducer interface across funnel/daily/maturity/canonical). |
-
-### `cohort-maturity-evidence-coverage-design.md`
-
-The coverage signal in row buckets — what `evidence_x_coverage`, `evidence_y_coverage`, `coverage` mean and how they're computed. Cited from `_project_runtime_rows` and the surface builders.
-
-| Decides | Open |
-|---|---|
-| Three-state contract for cells (§3.1): Present-with-positive-mass / Covered-with-zero-mass / Absent. Coverage = capped per-cohort placement-share sum / admissible-cohort count (§2.2). Forward-fill is for value, never for coverage. Subject placement via carrier backmap (§2.4 property 4). | None major — design is stable. |
 
 ### `selected-a-clock-retrieval-frontier-provenance-proposal.md`
 
@@ -91,7 +83,7 @@ Each tracker is in one of three states. Trackers in **ready-to-promote** carry s
 
 | Tracker | Status | Promotion target / open items |
 |---|---|---|
-| `cf-defensive-coding-audit.md` | Active | None of H-1…H-7 remediated; the audit is the live source of [`CF_DEFENSIVE_FINDINGS.md`](CF_DEFENSIVE_FINDINGS.md). Stays. |
+| `cf-defensive-coding-audit.md` | Active | None of H-1…H-7 remediated; the audit is the live source of [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md). Stays. |
 | `cohort-1apr-falling-k-problem-statement.md` | Active | F-1 unification still open; §A.1 / §A.3 / §A.4 / §A.6 widely cited by code. Stays until F-1 lands; then absorb §A invariants into [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) §2/§3. |
 | `cohort-maturity-evidence-coverage-design.md` | **Ready to promote** | Design stable; three-state cell contract and coverage formula are referenced inline from [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) §5. Absorb into that doc and archive tracker. |
 | `selected-a-clock-retrieval-frontier-provenance-proposal.md` | Near-ready | Strict support invariants implemented; "fallback for malformed inputs" still being refined. Absorb the invariant section into [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) §2.4 / [`INVARIANTS.md`](INVARIANTS.md); keep tracker for the open follow-up. |
@@ -154,7 +146,7 @@ Three reasons:
 2. **Forensic.** `cohort-outside-in-post-73n-regression-tracker.md` is a record of fixes attempted, abandoned, and replaced. The narrative shape is important for the next person who hits a similar symptom; a codebase-style "what is true now" summary loses it.
 3. **Plan-adjacent.** They sit next to the plan they execute. The promotion criterion for `docs/current/codebase/` is "agent navigates here for stable reference" — trackers are inappropriate there because they're working documents.
 
-When a tracker's content stabilises, the codebase-reference docs (this one, [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md), [CF_ROW_PIPELINE.md](CF_ROW_PIPELINE.md), [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md)) absorb the stable parts; the tracker retains the forensic detail.
+When a tracker's content stabilises, the codebase-reference docs (this one, [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md), [CF_ROW_PIPELINE.md](CF_ROW_PIPELINE.md)) absorb the stable parts; the tracker retains the forensic detail.
 
 ---
 
@@ -162,6 +154,6 @@ When a tracker's content stabilises, the codebase-reference docs (this one, [CF_
 
 - [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) — stable view of the substrate that consumes these decisions.
 - [CF_ROW_PIPELINE.md](CF_ROW_PIPELINE.md) — stable view of the row pipeline that cites the trackers throughout.
-- [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) — the audit summary.
+- [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) — the audit summary tracker.
 - [DOCUMENTATION_STRUCTURE.md](DOCUMENTATION_STRUCTURE.md) — the rules for `docs/current/` vs `docs/current/codebase/` placement.
 - [KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP59 — "architecturally complete stage closure with the new path default-OFF" — the failure mode that produces the gap between plans and trackers.

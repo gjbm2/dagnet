@@ -27,6 +27,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   cf-fix-no-lag-b-to-c:
     from: cf-fix-no-lag-b
     to: cf-fix-no-lag-c
@@ -34,6 +35,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   cf-fix-no-lag-c-to-d:
     from: cf-fix-no-lag-c
     to: cf-fix-no-lag-d
@@ -41,6 +43,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
 simulation:
   mean_daily_traffic: 2000
   n_days: 80

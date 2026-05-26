@@ -154,6 +154,7 @@ edges:
     onset: 0.0
     mu: 0.6
     sigma: 0.3
+    latency_parameter: true
   anchor-to-bottom:
     from: anchor
     to: bottom
@@ -161,6 +162,7 @@ edges:
     onset: 0.5
     mu: 0.9
     sigma: 0.4
+    latency_parameter: true
   top-to-left:
     from: top
     to: left
@@ -168,6 +170,7 @@ edges:
     onset: 0.5
     mu: 0.8
     sigma: 0.3
+    latency_parameter: true
   top-to-right:
     from: top
     to: right
@@ -175,6 +178,7 @@ edges:
     onset: 0.0
     mu: 0.7
     sigma: 0.4
+    latency_parameter: true
   bottom-to-left:
     from: bottom
     to: left
@@ -182,6 +186,7 @@ edges:
     onset: 0.5
     mu: 1.0
     sigma: 0.4
+    latency_parameter: true
   bottom-to-right:
     from: bottom
     to: right
@@ -189,6 +194,7 @@ edges:
     onset: 1.0
     mu: 1.1
     sigma: 0.5
+    latency_parameter: true
   left-to-target:
     from: left
     to: target
@@ -196,6 +202,7 @@ edges:
     onset: 0.5
     mu: 0.8
     sigma: 0.3
+    latency_parameter: true
   right-to-target:
     from: right
     to: target
@@ -203,6 +210,7 @@ edges:
     onset: 0.5
     mu: 0.9
     sigma: 0.4
+    latency_parameter: true
   target-to-outcome:
     from: target
     to: outcome
@@ -210,6 +218,7 @@ edges:
     onset: 0.0
     mu: 0.5
     sigma: 0.3
+    latency_parameter: true
 
 nodes:
   anchor:

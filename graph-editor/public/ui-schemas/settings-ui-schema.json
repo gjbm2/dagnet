@@ -68,7 +68,8 @@
             "BAYES_DRAWS",
             "BAYES_TUNE",
             "BAYES_CHAINS",
-            "BAYES_TARGET_ACCEPT"
+            "BAYES_TARGET_ACCEPT",
+            "MC_DRAWS"
           ]
         },
         {
@@ -158,6 +159,9 @@
     },
     "BAYES_TARGET_ACCEPT": {
       "ui:help": "NUTS acceptance rate. Higher = smaller steps, fewer divergences.\n\n0.80 (aggressive) · 0.90 (standard) · 0.95–0.99 (conservative)."
+    },
+    "MC_DRAWS": {
+      "ui:help": "Forecast Monte Carlo draws per request. Sharpens quantiles at linear cost.\n\n500 (fast) · 1000 (standard) · 2000+ (tighter)."
     },
     "COHORT_DRIFT_FRACTION": {
       "ui:help": "Per-cohort drift as a fraction of posterior variance.\n\n0 (off) · 0.1–0.2 (modest, default 0.20) · 0.5–1.0 (large drift, wider bands)."

@@ -80,6 +80,33 @@ if [ "$PHOTOCOPY_MATCH" = "YES" ]; then
   exit 0
 fi
 
+# ── Read-only `git stash` carve-out ───────────────────────────────
+# `git stash list` and `git stash show [...]` never modify stash
+# state, the index, or the working tree. They are pure reads and the
+# git-write substring match on "git stash" catches them spuriously.
+# Allow them without consent when the entire command line is just
+# the read-only invocation with no shell metacharacters (no redirects,
+# no compound commands, no command substitution, no quoting). Any
+# deviation falls through to the normal gate logic.
+#
+# Maintaining the narrowness of this regex is what keeps the carve-out
+# safe; do not loosen it without re-auditing. In particular, do NOT
+# extend to `apply`, `pop`, `push`, `save`, `drop`, `clear`, `branch`,
+# `store`, or `create` — those modify state.
+STASH_READ_MATCH=$(GATE_COMMAND="$COMMAND" python3 <<'PYEOF'
+import os, re
+cmd = os.environ.get('GATE_COMMAND', '')
+# Whole line must be: git stash (list|show) [args]. Each arg must
+# contain no shell metacharacters that could escape the command.
+pattern = r"""^\s*git\s+stash\s+(list|show)(\s+[^\s|&;<>$`'"\\()*?]+)*\s*$"""
+print('YES' if re.match(pattern, cmd) else 'NO')
+PYEOF
+)
+if [ "$STASH_READ_MATCH" = "YES" ]; then
+  echo "GATE-CHECK: read-only git stash command — pre-approved; allowed." >&2
+  exit 0
+fi
+
 # ── Hardcoded: protect gate infrastructure from Bash writes ───────
 
 PROTECTED_FILES=(

@@ -978,7 +978,6 @@ def build_x_provider_from_graph(
         root_node_id=str(anchor_node_id or ''),
         end_node_id=str(from_node_id),
         max_tau=400,
-        horizon_blocking_floor=0.95,
     )
 
     if _COHORT_DEBUG:
@@ -991,7 +990,7 @@ def build_x_provider_from_graph(
     # The composer's transitions cover the full A → X topology; this
     # flattened list is kept only for existing diagnostics/UI surfaces.
     upstream_params_list: List[Dict[str, float]] = []
-    if carrier.is_composed:
+    if carrier.is_composed and carrier.horizon_ratio >= 0.95:
         incoming = get_incoming_edges(graph, from_node_id)
         for inc_edge in incoming:
             params = read_edge_cohort_params(inc_edge)
@@ -1514,8 +1513,10 @@ def prepare_forecast_runtime_inputs(
             DrawFamilyKey as _DFK,
             PrimitiveScope as _PS,
             TransitionIdentity as _TI,
+            current_mc_draws as _current_mc_draws,
             make_rng as _make_rng,
         )
+        _S = _current_mc_draws()
 
         def _request_scoped_key(_label: str) -> _DFK:
             # Atom 2 v2: scenario_id is a caller-context label, not part
@@ -1547,7 +1548,7 @@ def prepare_forecast_runtime_inputs(
             return _DFK(
                 transition_identity=_ti,
                 scope=_scope,
-                draw_count=2000,
+                draw_count=_S,
                 scenario_seed=0,
             )
 
@@ -1558,7 +1559,7 @@ def prepare_forecast_runtime_inputs(
             edge_params=span_execution.edge_params,
             edge_sds=span_execution.edge_sds_pred,
             max_tau=400,
-            num_draws=2000,
+            num_draws=_S,
             rng=rng,
         )
         # Epistemic-overlay second MC pass retired post-73n.
@@ -1582,7 +1583,7 @@ def prepare_forecast_runtime_inputs(
                     edge_params=edge_execution_p.edge_params,
                     edge_sds=edge_execution_p.edge_sds_pred,
                     max_tau=400,
-                    num_draws=2000,
+                    num_draws=_S,
                     rng=rng_edge,
                 )
                 # Epistemic anchor-relative second MC pass retired
@@ -1597,7 +1598,7 @@ def prepare_forecast_runtime_inputs(
                         edge_params=edge_execution_p.edge_params,
                         edge_sds=edge_execution_p.edge_sds,
                         max_tau=400,
-                        num_draws=2000,
+                        num_draws=_S,
                         rng=rng_edge_epi,
                     )
 
@@ -1628,8 +1629,10 @@ def prepare_forecast_runtime_inputs(
                     DrawFamilyKey as _DFK2,
                     PrimitiveScope as _PS2,
                     TransitionIdentity as _TI2,
+                    current_mc_draws as _current_mc_draws2,
                     make_rng as _make_rng2,
                 )
+                _S2 = _current_mc_draws2()
                 # Atom 2 v2: same as above — keep scenario_id out of
                 # both the synthetic edge_id and the scope.scenario_id so
                 # canonical_string is independent of caller-context labels.
@@ -1654,7 +1657,7 @@ def prepare_forecast_runtime_inputs(
                     _DFK2(
                         transition_identity=_ti,
                         scope=_scope,
-                        draw_count=2000,
+                        draw_count=_S2,
                         scenario_seed=0,
                     ),
                     'last_edge_frontier_cdf',
@@ -1664,7 +1667,7 @@ def prepare_forecast_runtime_inputs(
                     edge_params=last_execution.edge_params,
                     edge_sds=last_execution.edge_sds_pred,
                     max_tau=400,
-                    num_draws=2000,
+                    num_draws=_S2,
                     rng=rng_last,
                 )
 

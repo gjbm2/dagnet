@@ -29,6 +29,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   wide-m4-created-to-delegated:
     from: m4-created
     to: m4-delegated
@@ -36,6 +37,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   wide-m4-delegated-to-registered:
     from: m4-delegated
     to: m4-registered
@@ -43,6 +45,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   wide-m4-registered-to-success:
     from: m4-registered
     to: m4-success
@@ -50,6 +53,7 @@ edges:
     onset: 4.8
     mu: 1.24
     sigma: 1.09
+    latency_parameter: true
 simulation:
   mean_daily_traffic: 1600
   n_days: 150

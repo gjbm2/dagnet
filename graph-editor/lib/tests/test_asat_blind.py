@@ -63,34 +63,66 @@ def _resolve_data_repo_path() -> Optional[str]:
 _DATA_REPO_PATH = _resolve_data_repo_path()
 
 
-# ── Graph + DSL constants (mirror the bash original) ────────────────────────
+# ── Graph + DSL constants ────────────────────────────────────────────────────
+#
+# Per outside-in-test-runtime-optimisation-plan-22-May-26.md §3.1, scalar
+# windows are split from cohort_maturity windows, and each window is the
+# smallest range that still produces a non-vacuous witness for its asserts.
+# The original FULL_WINDOW / COHORT_DSL_ABC / MIXED_WINDOW spanned the entire
+# synth fixture — a fixture-lifetime sweep that is not needed by any of the
+# assertions in this file.
 
 GRAPH_ABC = "synth-simple-abc"
 EDGE_ABC = "simple-a-to-b"
-FULL_WINDOW = "window(12-Dec-25:20-Mar-26)"
+
+# Scalar param-pack witness window. Narrow enough to be cheap, wide enough
+# that asat(15-Jan-26) sees real evidence yet baseline (live today) and
+# asat(15-Feb-26) see strictly more — required by T1b, T1c, T3b, D3a, D3d.
+# Starts after ASAT_BEFORE so T2/D3c still witness "no evidence below start".
+SCALAR_WINDOW = "window(15-Dec-25:20-Feb-26)"
+
+# cohort_maturity windows are split by asat regime. The early window is a
+# local witness around ASAT_EARLY (T4 projected_rate divergence); the late
+# window is a small March witness around ASAT_LATE (D5a tau_solid_max bound,
+# D5b boundary_date, D5c evidence_x divergence). Neither needs the full
+# December–March fixture span.
+COHORT_EARLY_DSL_ABC = "from(simple-a).to(simple-b).cohort(15-Dec-25:31-Jan-26)"
+COHORT_LATE_DSL_ABC = "from(simple-a).to(simple-b).cohort(1-Mar-26:21-Mar-26)"
+
 ASAT_EARLY = "15-Jan-26"
 ASAT_BEFORE = "11-Dec-25"
 ASAT_MID = "15-Feb-26"
 ASAT_LATE = "18-Mar-26"
 
-COHORT_DSL_ABC = "from(simple-a).to(simple-b).cohort(12-Dec-25:21-Mar-26)"
-
 GRAPH_MIXED = "synth-context-solo-mixed"
 EDGE_MIXED = "synth-context-solo-mixed-synth-ctx1-anchor-to-target"
-MIXED_WINDOW = "window(12-Dec-25:11-Mar-26)"
-MIXED_ASAT_EPOCH1 = "20-Jan-26"  # day ~39 — bare-only epoch
-MIXED_ASAT_EPOCH2 = "10-Feb-26"  # day ~60 — contexted epoch
+# Local range straddling the bare/contexted epoch boundary at day 45
+# (26-Jan-26 with base_date 12-Dec-25). Bare segment: 15-Jan-26 to 25-Jan-26
+# covers MIXED_ASAT_EPOCH1; contexted segment: 26-Jan-26 to 15-Feb-26 covers
+# MIXED_ASAT_EPOCH2. T6/T7/T8 only need one witness on each side of the
+# boundary.
+MIXED_WINDOW = "window(15-Jan-26:15-Feb-26)"
+MIXED_ASAT_EPOCH1 = "20-Jan-26"  # bare-epoch witness
+MIXED_ASAT_EPOCH2 = "10-Feb-26"  # contexted-epoch witness
 
 
 # ── CLI plumbing ────────────────────────────────────────────────────────────
 
-def _param_pack(graph: str, dsl: str) -> dict[str, Any]:
+def _param_pack(
+    graph: str,
+    dsl: str,
+    *,
+    extra_args: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """Run param-pack and return the flat JSON payload.
 
     Bypasses both caches: --no-cache (disk bundle) and
     --no-snapshot-cache (BE TTL). Test correctness requires every
     invocation to recompute against the live BE so that a stale
     cached answer cannot mask a regression.
+
+    ``extra_args`` is appended verbatim. Used by tests that can run
+    under ``--no-be`` (signature-only and read-only file checks).
     """
     args = [
         "--graph", _DATA_REPO_PATH or "",
@@ -98,6 +130,8 @@ def _param_pack(graph: str, dsl: str) -> dict[str, Any]:
         "--query", dsl,
         "--no-cache", "--no-snapshot-cache", "--format", "json",
     ]
+    if extra_args:
+        args.extend(extra_args)
     client = get_default_client() if _DATA_REPO_PATH else None
     if client is not None:
         try:
@@ -110,6 +144,8 @@ def _param_pack(graph: str, dsl: str) -> dict[str, Any]:
 
     cmd = ["bash", str(_PARAM_PACK_SH), graph, dsl,
            "--no-cache", "--no-snapshot-cache", "--format", "json"]
+    if extra_args:
+        cmd.extend(extra_args)
     result = subprocess.run(cmd, capture_output=True, text=True,
                             cwd=str(_REPO_ROOT), timeout=300)
     if result.returncode != 0:
@@ -121,6 +157,13 @@ def _param_pack(graph: str, dsl: str) -> dict[str, Any]:
     return json.loads(result.stdout[idx:])
 
 
+# Low-draw MC for cohort_maturity. The cohort_maturity assertions here are
+# inequality / presence / boundary checks (T4 projected_rate divergence,
+# D5a/D5b/D5c tau_solid_max / boundary_date / evidence_x divergence) which
+# remain qualitatively unchanged with 64 draws. Plan §3.1.
+_CM_MC_DRAWS = "64"
+
+
 def _analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
     """Run cohort_maturity analyse and return the JSON payload."""
     args = [
@@ -129,6 +172,7 @@ def _analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
         "--query", dsl,
         "--type", "cohort_maturity",
         "--no-cache", "--no-snapshot-cache",
+        "--mc-draws", _CM_MC_DRAWS,
         "--format", "json",
     ]
     client = get_default_client() if _DATA_REPO_PATH else None
@@ -143,7 +187,7 @@ def _analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
 
     cmd = ["bash", str(_ANALYSE_SH), graph, dsl,
            "--type", "cohort_maturity", "--no-cache", "--no-snapshot-cache",
-           "--format", "json"]
+           "--mc-draws", _CM_MC_DRAWS, "--format", "json"]
     result = subprocess.run(cmd, capture_output=True, text=True,
                             cwd=str(_REPO_ROOT), timeout=300)
     if result.returncode != 0:
@@ -176,43 +220,55 @@ def _maturity_row(payload: dict[str, Any], tau: int) -> Optional[dict[str, Any]]
 @pytest.fixture(scope="module")
 def abc_baseline_pp() -> dict[str, Any]:
     _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
-    return _param_pack(GRAPH_ABC, FULL_WINDOW)
+    return _param_pack(GRAPH_ABC, SCALAR_WINDOW)
 
 
 @pytest.fixture(scope="module")
 def abc_asat_early_pp() -> dict[str, Any]:
     _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
-    return _param_pack(GRAPH_ABC, f"{FULL_WINDOW}.asat({ASAT_EARLY})")
+    return _param_pack(GRAPH_ABC, f"{SCALAR_WINDOW}.asat({ASAT_EARLY})")
 
 
 @pytest.fixture(scope="module")
 def abc_asat_before_pp() -> dict[str, Any]:
     _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
-    return _param_pack(GRAPH_ABC, f"{FULL_WINDOW}.asat({ASAT_BEFORE})")
+    return _param_pack(GRAPH_ABC, f"{SCALAR_WINDOW}.asat({ASAT_BEFORE})")
 
 
 @pytest.fixture(scope="module")
 def abc_asat_mid_pp() -> dict[str, Any]:
     _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
-    return _param_pack(GRAPH_ABC, f"{FULL_WINDOW}.asat({ASAT_MID})")
+    return _param_pack(GRAPH_ABC, f"{SCALAR_WINDOW}.asat({ASAT_MID})")
+
+
+# T4 — local early-asat cohort_maturity witness.
+@pytest.fixture(scope="module")
+def abc_cm_early_baseline() -> dict[str, Any]:
+    _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
+    return _analyse_cohort_maturity(GRAPH_ABC, COHORT_EARLY_DSL_ABC)
 
 
 @pytest.fixture(scope="module")
-def abc_cm_baseline() -> dict[str, Any]:
+def abc_cm_early_asat() -> dict[str, Any]:
     _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
-    return _analyse_cohort_maturity(GRAPH_ABC, COHORT_DSL_ABC)
+    return _analyse_cohort_maturity(
+        GRAPH_ABC, f"{COHORT_EARLY_DSL_ABC}.asat({ASAT_EARLY})",
+    )
+
+
+# D5a/D5b/D5c — local late-asat cohort_maturity witness.
+@pytest.fixture(scope="module")
+def abc_cm_late_baseline() -> dict[str, Any]:
+    _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
+    return _analyse_cohort_maturity(GRAPH_ABC, COHORT_LATE_DSL_ABC)
 
 
 @pytest.fixture(scope="module")
-def abc_cm_asat_early() -> dict[str, Any]:
+def abc_cm_late_asat() -> dict[str, Any]:
     _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
-    return _analyse_cohort_maturity(GRAPH_ABC, f"{COHORT_DSL_ABC}.asat({ASAT_EARLY})")
-
-
-@pytest.fixture(scope="module")
-def abc_cm_asat_late() -> dict[str, Any]:
-    _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
-    return _analyse_cohort_maturity(GRAPH_ABC, f"{COHORT_DSL_ABC}.asat({ASAT_LATE})")
+    return _analyse_cohort_maturity(
+        GRAPH_ABC, f"{COHORT_LATE_DSL_ABC}.asat({ASAT_LATE})",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -301,11 +357,18 @@ class TestAsatEvidenceFiltering:
         Uses subprocess directly: --show-signatures emits via log.info to
         stderr, which the daemon does not capture per-request. The bash
         original used `2>&1` and grep, mirrored here.
+
+        Runs with ``--no-be`` because signatures are computed before the
+        CF pass; skipping CF cuts wallclock without affecting the hash
+        the assertion inspects.
         """
         sig_re = re.compile(r"hash=(\S+)")
 
         def run_signatures(dsl: str) -> Optional[str]:
-            cmd = ["bash", str(_PARAM_PACK_SH), GRAPH_ABC, dsl, "--show-signatures"]
+            cmd = [
+                "bash", str(_PARAM_PACK_SH), GRAPH_ABC, dsl,
+                "--show-signatures", "--no-be",
+            ]
             result = subprocess.run(
                 cmd, capture_output=True, text=True,
                 cwd=str(_REPO_ROOT), timeout=300,
@@ -317,8 +380,8 @@ class TestAsatEvidenceFiltering:
                         return m.group(1)
             return None
 
-        h_baseline = run_signatures(FULL_WINDOW)
-        h_asat = run_signatures(f"{FULL_WINDOW}.asat({ASAT_EARLY})")
+        h_baseline = run_signatures(SCALAR_WINDOW)
+        h_asat = run_signatures(f"{SCALAR_WINDOW}.asat({ASAT_EARLY})")
         if h_baseline is None or h_asat is None:
             pytest.fail(
                 f"could not retrieve signatures (baseline={h_baseline!r}, asat={h_asat!r})"
@@ -344,10 +407,10 @@ class TestAsatEvidenceFiltering:
 
     # ── T4 ───────────────────────────────────────────────────────────────
     def test_t4_cohort_maturity_projected_rate_differs(
-        self, abc_cm_baseline, abc_cm_asat_early,
+        self, abc_cm_early_baseline, abc_cm_early_asat,
     ) -> None:
-        b_row = _maturity_row(abc_cm_baseline, 10)
-        a_row = _maturity_row(abc_cm_asat_early, 10)
+        b_row = _maturity_row(abc_cm_early_baseline, 10)
+        a_row = _maturity_row(abc_cm_early_asat, 10)
         if b_row is None:
             pytest.fail("no tau=10 row in baseline cohort_maturity (BE running?)")
         if a_row is None:
@@ -391,7 +454,13 @@ class TestAsatReadOnly:
     def test_t5_param_files_unchanged_after_asat(self) -> None:
         _ensure_synth_ready(GRAPH_ABC, enriched=True, check_fe_parity=False)
         before = self._checksum_param_dir()
-        _param_pack(GRAPH_ABC, f"{FULL_WINDOW}.asat({ASAT_EARLY})")
+        # --no-be: the read-only invariant is about file mutations during
+        # the aggregation pass and does not depend on CF output.
+        _param_pack(
+            GRAPH_ABC,
+            f"{SCALAR_WINDOW}.asat({ASAT_EARLY})",
+            extra_args=["--no-be"],
+        )
         after = self._checksum_param_dir()
         if before != after:
             pytest.fail("param files changed after asat query. asat is NOT read-only.")
@@ -463,10 +532,10 @@ class TestAsatCohortMaturityBoundaries:
     """D5a, D5b, D5c: cohort_maturity zone boundaries respect asat."""
 
     def test_d5a_tau_solid_max_constrained_by_asat(
-        self, abc_cm_baseline, abc_cm_asat_late,
+        self, abc_cm_late_baseline, abc_cm_late_asat,
     ) -> None:
-        b = _maturity_row(abc_cm_baseline, 0)
-        a = _maturity_row(abc_cm_asat_late, 0)
+        b = _maturity_row(abc_cm_late_baseline, 0)
+        a = _maturity_row(abc_cm_late_asat, 0)
         if b is None or b.get("tau_solid_max") is None:
             pytest.fail("could not retrieve baseline tau_solid_max")
         if a is None or a.get("tau_solid_max") is None:
@@ -477,9 +546,9 @@ class TestAsatCohortMaturityBoundaries:
                 f"not constrained by asat. Baseline={b['tau_solid_max']}."
             )
 
-    def test_d5b_boundary_date_reflects_asat(self, abc_cm_asat_late) -> None:
+    def test_d5b_boundary_date_reflects_asat(self, abc_cm_late_asat) -> None:
         from datetime import date
-        a = _maturity_row(abc_cm_asat_late, 0)
+        a = _maturity_row(abc_cm_late_asat, 0)
         if a is None or a.get("boundary_date") is None:
             pytest.fail("could not retrieve boundary_date")
         bd = a["boundary_date"]
@@ -491,10 +560,10 @@ class TestAsatCohortMaturityBoundaries:
             )
 
     def test_d5c_evidence_x_differs_with_asat(
-        self, abc_cm_baseline, abc_cm_asat_late,
+        self, abc_cm_late_baseline, abc_cm_late_asat,
     ) -> None:
-        b = _maturity_row(abc_cm_baseline, 10)
-        a = _maturity_row(abc_cm_asat_late, 10)
+        b = _maturity_row(abc_cm_late_baseline, 10)
+        a = _maturity_row(abc_cm_late_asat, 10)
         if b is None or b.get("evidence_x") is None:
             pytest.fail("could not retrieve baseline evidence_x")
         if a is None or a.get("evidence_x") is None:

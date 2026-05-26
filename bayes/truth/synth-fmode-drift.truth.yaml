@@ -34,6 +34,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.4
+    latency_parameter: true
 
 simulation:
   mean_daily_traffic: 5000

@@ -23,14 +23,17 @@ describe('UpdateManager.applyBatchLAGValues', () => {
         edgeId: 'A-B',
         latency: { t95: 10, completeness: 1, path_t95: 10 },
         blendedMean: 0.4,
-        evidence: { mean: 0.3, n: 100, k: 30, stdev: 0.01 },
+        evidence: { mean: 0.3, n: 100, k: 30 },
       },
     ]);
 
     const e = next.edges.find((x: any) => x.id === 'A-B');
+    // evidence.stdev is derived from the counts (binomial sqrt(p(1-p)/n)),
+    // then p.stdev falls back to it because no p.stdev was provided.
+    const expectedStdev = Math.sqrt((0.3 * 0.7) / 100);
     expect(e.p.mean).toBe(0.4);
-    expect(e.p.evidence.stdev).toBe(0.01);
-    expect(e.p.stdev).toBe(0.01);
+    expect(e.p.evidence.stdev).toBeCloseTo(expectedStdev, 6);
+    expect(e.p.stdev).toBeCloseTo(expectedStdev, 3);
   });
 
   it('populates conditional_p[i].p.stdev from conditional evidence.stdev when conditionalIndex is provided', () => {
@@ -57,17 +60,20 @@ describe('UpdateManager.applyBatchLAGValues', () => {
         conditionalIndex: 0,
         latency: { t95: 10, completeness: 1, path_t95: 10, promoted_onset_delta_days: 3 },
         blendedMean: 0.4,
-        evidence: { mean: 0.3, n: 100, k: 30, stdev: 0.01 },
+        evidence: { mean: 0.3, n: 100, k: 30 },
       },
     ]);
 
     const e = next.edges.find((x: any) => x.id === 'A-B');
+    const expectedStdev = Math.sqrt((0.3 * 0.7) / 100);
     expect(e.p.mean).toBe(0.5); // base unchanged
     expect(e.p.stdev).toBe(0.5); // base unchanged
 
     expect(e.conditional_p[0].p.mean).toBe(0.4);
-    expect(e.conditional_p[0].p.evidence.stdev).toBe(0.01);
-    expect(e.conditional_p[0].p.stdev).toBe(0.01);
+    // evidence.stdev derived from the conditional's own counts, then p.stdev
+    // falls back to it.
+    expect(e.conditional_p[0].p.evidence.stdev).toBeCloseTo(expectedStdev, 6);
+    expect(e.conditional_p[0].p.stdev).toBeCloseTo(expectedStdev, 3);
     expect(e.conditional_p[0].p.latency.promoted_onset_delta_days).toBe(3);
   });
 
@@ -120,11 +126,14 @@ describe('UpdateManager.applyBatchLAGValues', () => {
         edgeId: 'A-B',
         latency: { t95: 10, completeness: 1, path_t95: 10 },
         blendedMean: 0.4,
-        evidence: { mean: 0.3, n: 100, k: 30 },
+        evidence: { mean: 0.3 },
       },
     ]);
 
     const e = next.edges.find((x: any) => x.id === 'A-B');
+    // No counts in the update → evidence.stdev is NOT re-derived, so the
+    // existing seeded stdev survives and p.stdev falls back to it. (When
+    // counts ARE present the port derives stdev from them — see above.)
     expect(e.p.evidence.stdev).toBe(0.02);
     expect(e.p.stdev).toBe(0.02);
   });

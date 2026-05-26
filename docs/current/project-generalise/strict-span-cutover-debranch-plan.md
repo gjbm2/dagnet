@@ -267,7 +267,7 @@ Update the codebase docs after the cutover lands:
 - `CF_ROW_PIPELINE.md` must describe the promoted strict span readout as the row engine.
 - `CF_PRIMITIVE_SUBSTRATE.md` must name how primitive-bound evidence becomes operators.
 - `FORECAST_RUNTIME_ARCHITECTURE.md` must describe the stable span plan compiler and delete references to the old prefix family.
-- `CF_DEFENSIVE_FINDINGS.md` must mark the relevant branch/fallback findings retired, or narrow them to remaining true debt.
+- `cf-defensive-findings.md` must mark the relevant branch/fallback findings retired, or narrow them to remaining true debt.
 
 Archive or rewrite the old candidate plan so future agents do not treat candidate files as the maintained implementation.
 

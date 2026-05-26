@@ -55,7 +55,7 @@ import sys as _sys
 from dataclasses import dataclass, field
 from datetime import date as _date, timedelta as _timedelta
 from pathlib import Path as _Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -66,6 +66,7 @@ if _lib_dir not in _sys.path:
     _sys.path.insert(0, _lib_dir)
 import result_cache  # noqa: E402
 
+from .bucket_transition import BucketSourceBasis, cdf_to_bucket_transition
 from .primitive_evidence import RequestPrimitiveRegistry
 from .primitives import (
     ConditionedTransitionPrimitive,
@@ -73,8 +74,12 @@ from .primitives import (
 )
 from .span_kernel import ConcreteEdge, SpanTopology, _build_span_topology
 from .timing_span import (
+    DPExecutionPolicy,
     SpanDPTrace,
+    _edge_default_out_basis,
     _run_dp_density_trace,
+    _run_dp_density_trace_from_seed,
+    _run_dp_density_trace_from_provenance_seed,
     _topological_reach,
 )
 
@@ -102,6 +107,7 @@ def _subject_span_cache_key(
         Tuple[ConcreteEdge, ConditionedTransitionPrimitive]
     ],
     options: 'ComposeOptions',
+    evidence_readout_binding: EvidenceReadoutBinding,
 ) -> str:
     """Cache key for ``compose_primitive_span``.
 
@@ -123,11 +129,63 @@ def _subject_span_cache_key(
         topology_edges=topo_edges,
         primitives=primitives_signature,
         max_tau=int(options.max_tau),
+        draw_count=int(options.draw_count),
         cdf_renorm_tolerance=float(options.cdf_renorm_tolerance),
+        evidence_readout_binding=evidence_readout_binding.mode,
     )
 
 
 # ─── Public dataclasses ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class EvidenceLookup:
+    source_offset: int
+    age_offset: int
+
+    def __call__(
+        self,
+        *,
+        origin_day: _date,
+        source_index: int,
+        tau_out: int,
+    ) -> tuple[str, int]:
+        evidence_source_day = origin_day + _timedelta(
+            days=self.source_offset * int(source_index),
+        )
+        evidence_age = int(tau_out) + self.age_offset * int(source_index)
+        return evidence_source_day.isoformat(), evidence_age
+
+
+@dataclass(frozen=True)
+class EvidenceReadoutBinding:
+    """Mode-specific evidence lookup carried as data.
+
+    The selected-cohort readout asks one generic evaluator to resolve
+    each edge/source/row lookup. Cohort mode preserves arrival-date
+    cohort identity; window mode reads each primitive on its own local
+    window clock. Keeping this as a data object prevents projection code
+    from branching on mode.
+    """
+    mode: str
+    lookup: EvidenceLookup
+    empirical_subject_read_offset: float = 0.0
+
+    @classmethod
+    def cohort(cls) -> "EvidenceReadoutBinding":
+        return cls(
+            mode="cohort",
+            lookup=EvidenceLookup(1, -1),
+            empirical_subject_read_offset=0.5,
+        )
+
+    @classmethod
+    def window(cls) -> "EvidenceReadoutBinding":
+        return cls(
+            mode="window",
+            lookup=EvidenceLookup(0, 0),
+            empirical_subject_read_offset=0.5,
+        )
 
 
 @dataclass(frozen=True)
@@ -137,26 +195,38 @@ class ComposedPrimitiveSpan:
     Exposes the composed span probability (reach) and conditional timing
     CDF as moments and per-draw arrays. In addition, every per-node
     arrival density and per-concrete-edge contribution computed by the
-    forward DAG DP is retained as `(S, T)` surfaces so downstream
-    callers can read mass at intermediate nodes or through specific
-    concrete edges without recomposing.
+    forward DAG DP is retained as a **source-bucket-aware** ledger so
+    downstream callers can read mass at intermediate nodes or through
+    specific concrete edges, broken down by the bucket structure the DP
+    actually used.
 
     Surfaces:
 
     - `span_p_*`, `cdf_*` — terminal asymptotic reach and conditional
       timing CDF (the legacy surfaces; unchanged by the per-node /
       per-edge extension).
-    - `node_density_draws[node_id]` — per-day arrival density at the
-      named node, per draw. δ at τ=0 at the topology root.
-    - `edge_contribution_draws[edge_key]` — per-day mass flowing
-      through the named concrete edge, per draw. Coincident sibling
-      edges have separate entries.
-    - `concrete_edges` — topology metadata describing every concrete
-      edge in this span (including its `edge_key`).
+    - ``node_density_by_node_bucket[node_id][arrival_bucket]`` — per-draw
+      mass that arrived at ``node_id`` at row-age column
+      ``arrival_bucket``. Each entry is a ``(S,)`` array. The collapsed
+      ``(S, T)`` density at ``node_id`` is ``node_density(node_id)``.
+    - ``edge_contribution_by_edge_source[edge_key][source_bucket]`` —
+      per-(draw, τ) mass flowing through ``edge_key`` derived from the
+      source-node bucket ``source_bucket``. Each entry is a smeared
+      ``(S, T)`` array. The collapsed view is
+      ``edge_contribution(edge_key)``. Coincident sibling edges have
+      separate entries.
+    - ``node_basis_by_node_bucket[node_id][arrival_bucket][provenance_key]``
+      — basis (``BucketSourceBasis`` as int) carried into ``node_id`` at
+      column ``arrival_bucket`` by each contributing provenance.
+      ``provenance_key`` is the contributing edge_key or the seed-origin
+      marker. Carried through composition so frontier-state construction
+      (Atom 4) can read per-edge provenance off the composed span
+      without re-running the DP.
+    - ``concrete_edges`` — topology metadata describing every concrete
+      edge in this span (including its ``edge_key``).
 
-    All retained surfaces are densities (NOT cumulative). Cumulative
-    value, cumulative support, and coverage ratio are downstream
-    projection helpers on `model_span_spine`.
+    All retained surfaces are densities (NOT cumulative). Downstream
+    projection helpers decide how to cumulate them for row output.
     """
     x_node_id: str
     end_node_id: str
@@ -172,13 +242,22 @@ class ComposedPrimitiveSpan:
 
     max_tau: int
 
-    node_density_draws: Mapping[str, np.ndarray] = field(default_factory=dict)
-    edge_contribution_draws: Mapping[str, np.ndarray] = field(default_factory=dict)
-    node_support_draws: Mapping[str, np.ndarray] = field(default_factory=dict)
-    edge_support_contribution_draws: Mapping[str, np.ndarray] = field(default_factory=dict)
-    node_exposure_draws: Mapping[str, np.ndarray] = field(default_factory=dict)
-    edge_exposure_contribution_draws: Mapping[str, np.ndarray] = field(default_factory=dict)
+    node_density_by_node_bucket: Mapping[str, Mapping[int, np.ndarray]]
+    edge_contribution_by_edge_source: Mapping[str, Mapping[int, np.ndarray]]
+    node_basis_by_node_bucket: Mapping[str, Mapping[int, Mapping[str, int]]]
+    node_mass_by_provenance: Mapping[str, Mapping[int, Mapping[str, np.ndarray]]]
+
     concrete_edges: Tuple[ConcreteEdge, ...] = field(default_factory=tuple)
+    topology: Optional[SpanTopology] = None
+    conditioned_edge_primitives: Tuple[
+        Tuple[ConcreteEdge, ConditionedTransitionPrimitive], ...
+    ] = field(default_factory=tuple)
+    empirical_edge_primitives: Tuple[Tuple[ConcreteEdge, Any], ...] = field(
+        default_factory=tuple,
+    )
+    evidence_readout_binding: EvidenceReadoutBinding = field(
+        default_factory=EvidenceReadoutBinding.cohort,
+    )
 
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
@@ -201,57 +280,31 @@ class ComposedPrimitiveSpan:
         """True when the composed span has positive reach."""
         return self.reach > 0.0
 
-    @classmethod
-    def identity(
-        cls,
-        *,
-        x_node_id: str,
-        end_node_id: str,
-        max_tau: int,
-        draw_count: int,
-        provenance: Mapping[str, Any],
-    ) -> "ComposedPrimitiveSpan":
-        """Identity element of the operator-chain monoid: a zero-edge walk.
+    def node_density(self, node_id: str) -> np.ndarray:
+        """Collapsed per-(draw, τ) arrival density at ``node_id``.
 
-        Reach is the empty product (1.0); timing is "arrived at τ=0"
-        (CDF of ones). Per-draw arrays are shape-``(draw_count, T)`` filled
-        with ones — the algebraic identity replicated along the S axis so
-        downstream composition with active spans sees a uniform shape and
-        does not need supply-boundary shape inspections. The per-node
-        ledger carries δ(0) at the root node across all draws; there are
-        no concrete edges and no per-edge contributions.
+        Sums the per-arrival-bucket entries onto their respective
+        columns. Nodes off the span topology raise ``KeyError``;
+        on-path nodes with no arrivals degenerate to the empty sum.
         """
-        T = int(max_tau) + 1
-        S = int(draw_count)
-        root_density = np.zeros((S, T), dtype=np.float64)
-        root_density[:, 0] = 1.0
-        # Support and exposure share the seed at the root per Phase 6
-        # §4.8: the cohort itself IS the observation at the chain root.
-        # The two streams diverge from value only where downstream
-        # kernels mask cells out.
-        root_support = root_density.copy()
-        root_exposure = root_density.copy()
-        return cls(
-            x_node_id=x_node_id,
-            end_node_id=end_node_id,
-            primitive_count=0,
-            draw_count=S,
-            span_p_mean=1.0,
-            span_p_sd=0.0,
-            span_p_draws=np.ones(S, dtype=np.float64),
-            cdf_mean=np.ones(T, dtype=np.float64),
-            cdf_draws=np.ones((S, T), dtype=np.float64),
-            max_tau=max_tau,
-            node_density_draws={x_node_id: root_density},
-            edge_contribution_draws={},
-            node_support_draws={x_node_id: root_support},
-            edge_support_contribution_draws={},
-            node_exposure_draws={x_node_id: root_exposure},
-            edge_exposure_contribution_draws={},
-            concrete_edges=(),
-            provenance=provenance,
-        )
+        T = int(self.max_tau) + 1
+        out = np.zeros((int(self.draw_count), T), dtype=np.float64)
+        for arrival_col, col_mass in self.node_density_by_node_bucket[node_id].items():
+            out[:, int(arrival_col)] += col_mass
+        return out
 
+    def edge_contribution(self, edge_key: str) -> np.ndarray:
+        """Collapsed per-(draw, τ) mass through the named concrete edge.
+
+        Sums the per-source-bucket smears. Edges off the span topology
+        raise ``KeyError``; concrete edges with no flow degenerate to
+        the empty sum.
+        """
+        T = int(self.max_tau) + 1
+        out = np.zeros((int(self.draw_count), T), dtype=np.float64)
+        for smear in self.edge_contribution_by_edge_source[edge_key].values():
+            out += smear
+        return out
 
 @dataclass(frozen=True)
 class ComposeOptions:
@@ -284,6 +337,7 @@ def compose_primitive_span(
     registry: RequestPrimitiveRegistry,
     edge_to_primitive_lookup,
     options: ComposeOptions = ComposeOptions(),
+    evidence_readout_binding: EvidenceReadoutBinding | None = None,
 ) -> ComposedPrimitiveSpan:
     """Compose a directed primitive span from primitives in ``registry``.
 
@@ -324,6 +378,7 @@ def compose_primitive_span(
         by the topology.
     """
     topo = _build_span_topology(graph, x_node_id, end_node_id)
+    readout_binding = evidence_readout_binding or EvidenceReadoutBinding.cohort()
 
     # Resolve every concrete edge in the topology to its primitive.
     # Missing → hard error: the caller must populate the registry before
@@ -339,13 +394,6 @@ def compose_primitive_span(
         primitive = edge_to_primitive_lookup(
             ce.from_id, ce.to_id, dict(ce.edge_data),
         )
-        if primitive is None:
-            raise CompositionError(
-                f"edge_to_primitive_lookup returned None for "
-                f"{ce.from_id} -> {ce.to_id} "
-                f"(edge_key={ce.edge_key!r}); every concrete edge in "
-                f"the X→end topology must have a registry entry"
-            )
         edge_primitives.append((ce, primitive))
 
     # Composed-span cache: deterministic given topology + primitive
@@ -358,6 +406,7 @@ def compose_primitive_span(
         topology=topo,
         edge_primitives=edge_primitives,
         options=options,
+        evidence_readout_binding=readout_binding,
     )
     hit, cached = _subject_span_cache.get(cache_key)
     if hit:
@@ -371,6 +420,7 @@ def compose_primitive_span(
         S=S,
         max_tau=options.max_tau,
         cdf_renorm_tolerance=options.cdf_renorm_tolerance,
+        evidence_readout_binding=readout_binding,
     )
 
     _subject_span_cache.put(cache_key, composed)
@@ -389,6 +439,7 @@ def _compose_draws(
     S: int,
     max_tau: int,
     cdf_renorm_tolerance: float,
+    evidence_readout_binding: EvidenceReadoutBinding,
 ) -> ComposedPrimitiveSpan:
     """Per-draw DP composition.
 
@@ -406,82 +457,40 @@ def _compose_draws(
     """
     T = max_tau + 1
 
-    # Per-edge per-draw kernels keyed by concrete edge_key so sibling
-    # edges remain distinguishable. Three streams per edge:
-    #   value(s, τ)         = p_s × Δcdf_s(τ)         (mass-transfer)
-    #   exposure_shape(s,τ) = Δcdf_s(τ)               (unit-reach PMF;
-    #                                                  value without
-    #                                                  the p factor)
-    # Support and exposure are source-day-aware streams. Their masks are
-    # selected during DP propagation by the actual source day reached by
-    # the wavefront, preserving Phase 6 §4.7's (edge, source_day, age)
-    # row-presence contract.
+    # Per-edge per-draw value kernels keyed by concrete edge_key so
+    # sibling edges remain distinguishable:
+    #   value(s, τ) = p_s × Δcdf_s(τ)
     p_draws_by_edge: Dict[str, np.ndarray] = {}
     value_kernels_by_edge: Dict[str, np.ndarray] = {}
-    exposure_shapes_by_edge: Dict[str, np.ndarray] = {}
-    primitive_by_edge: Dict[str, ConditionedTransitionPrimitive] = {}
 
     for ce, primitive in edge_primitives:
         edge_key = ce.edge_key
-        primitive_by_edge[edge_key] = primitive
         p_draws = primitive.probability_draws()
-        if p_draws.shape[0] != S:
-            raise CompositionError(
-                f"primitive {edge_key!r} probability_draws has shape "
-                f"{p_draws.shape}; expected ({S},)"
-            )
         p_draws_by_edge[edge_key] = p_draws
 
-        exposure_shape = np.zeros((S, T), dtype=np.float64)
+        timing_kernel = np.zeros((S, T), dtype=np.float64)
         if primitive.timing_family == TimingFamily.NON_LATENT:
-            exposure_shape[:, 0] = 1.0
+            timing_kernel[:, 0] = 1.0
         elif primitive.timing_family == TimingFamily.DETERMINISTIC:
             shift = primitive.timing_posterior.deterministic_shift_days
-            if shift is None or shift < 0:
-                raise CompositionError(
-                    f"primitive {edge_key!r} is DETERMINISTIC but "
-                    f"deterministic_shift_days is invalid: {shift!r}"
-                )
             idx = min(int(shift), max_tau)
-            exposure_shape[:, idx] = 1.0
+            timing_kernel[:, idx] = 1.0
         else:
-            # LATENT: per-draw conditional CDF → per-draw PMF
-            # (renormalised to absorb numerical drift; rows with
-            # essentially zero mass remain zero so the composer's
-            # downstream consumers see an algebraically degenerate
-            # kernel rather than a fabricated delta).
+            # LATENT: per-draw endpoint CDF -> per-draw endpoint PMF.
+            # The composer consumes primitive timing surfaces in the same
+            # endpoint convention as the likelihood and outside-in snapshot
+            # rows; bucket placement belongs at explicit bucket-K boundaries,
+            # not on an already endpoint-labelled composed model surface.
             cdf_draws = primitive.timing_draws()
-            if cdf_draws.shape[0] != S:
-                raise CompositionError(
-                    f"primitive {edge_key!r} timing_draws has shape "
-                    f"{cdf_draws.shape}; expected ({S}, *)"
-                )
             cdf_aligned = _align_cdf_grid(cdf_draws, T)
-            pmf = np.diff(cdf_aligned, axis=1, prepend=0.0)
+            pmf = np.diff(cdf_aligned, prepend=0.0, axis=1)
             row_sums = pmf.sum(axis=1, keepdims=True)
             safe_row_sums = np.where(
                 row_sums > cdf_renorm_tolerance, row_sums, 1.0,
             )
-            exposure_shape = pmf / safe_row_sums
+            timing_kernel = pmf / safe_row_sums
 
-        value_kernels_by_edge[edge_key] = exposure_shape * p_draws[:, None]
-        exposure_shapes_by_edge[edge_key] = exposure_shape
-
-    # Per-node and per-edge `(S, T)` stacks for each of the three
-    # streams. Stacks are pre-initialised so the per-draw assignment
-    # below is uniform across topology shape.
-    def _new_node_stack() -> Dict[str, np.ndarray]:
-        return {node: np.zeros((S, T), dtype=np.float64) for node in topo.on_path}
-
-    def _new_edge_stack() -> Dict[str, np.ndarray]:
-        return {ce.edge_key: np.zeros((S, T), dtype=np.float64) for ce in topo.concrete_edges}
-
-    node_density_draws = _new_node_stack()
-    node_support_draws = _new_node_stack()
-    node_exposure_draws = _new_node_stack()
-    edge_contribution_draws = _new_edge_stack()
-    edge_support_contribution_draws = _new_edge_stack()
-    edge_exposure_contribution_draws = _new_edge_stack()
+        value_kernels_by_edge[edge_key] = timing_kernel * p_draws[:, None]
 
     span_p_draws = np.zeros(S, dtype=np.float64)
     # Per-draw expected reach decouples the asymptotic span probability
@@ -498,38 +507,14 @@ def _compose_draws(
             )
         span_p_draws[s] = _topological_reach(topo, edge_probs_s_by_pair)
 
-    # Run the same topology over the full draw axis. Support and exposure
-    # select row-presence masks by source day at each concrete edge before
-    # applying the edge kernel.
     trace_value = _run_dp_density_trace(
         topo,
         lambda ce, _source_index: value_kernels_by_edge[ce.edge_key],
         S,
         T,
     )
-    trace_support = _run_masked_dp_density_trace(
-        topo=topo,
-        base_kernels_by_edge=value_kernels_by_edge,
-        primitive_by_edge=primitive_by_edge,
-        S=S,
-        T=T,
-    )
-    trace_exposure = _run_masked_dp_density_trace(
-        topo=topo,
-        base_kernels_by_edge=exposure_shapes_by_edge,
-        primitive_by_edge=primitive_by_edge,
-        S=S,
-        T=T,
-    )
 
-    node_density_draws.update(trace_value.node_density_by_node)
-    edge_contribution_draws.update(trace_value.edge_contribution_by_edge)
-    node_support_draws.update(trace_support.node_density_by_node)
-    edge_support_contribution_draws.update(trace_support.edge_contribution_by_edge)
-    node_exposure_draws.update(trace_exposure.node_density_by_node)
-    edge_exposure_contribution_draws.update(trace_exposure.edge_contribution_by_edge)
-
-    terminal_density = trace_value.node_density_by_node[topo.y_node_id]
+    terminal_density = trace_value.node_density(topo.y_node_id)
     density_cdf = np.cumsum(terminal_density, axis=1)
     # 0/0 at expected reach == 0 is genuine algebraic degeneracy (no mass
     # propagates); emit 0 there to match the upstream degraded-timing
@@ -563,13 +548,14 @@ def _compose_draws(
         cdf_mean=cdf_mean,
         cdf_draws=cdf_arr,
         max_tau=max_tau,
-        node_density_draws=node_density_draws,
-        edge_contribution_draws=edge_contribution_draws,
-        node_support_draws=node_support_draws,
-        edge_support_contribution_draws=edge_support_contribution_draws,
-        node_exposure_draws=node_exposure_draws,
-        edge_exposure_contribution_draws=edge_exposure_contribution_draws,
+        node_density_by_node_bucket=trace_value.node_density_by_node_bucket,
+        edge_contribution_by_edge_source=trace_value.edge_contribution_by_edge_source,
+        node_basis_by_node_bucket=trace_value.node_basis_by_node_bucket,
+        node_mass_by_provenance=trace_value.node_mass_by_provenance,
         concrete_edges=tuple(topo.concrete_edges),
+        topology=topo,
+        conditioned_edge_primitives=tuple(edge_primitives),
+        evidence_readout_binding=evidence_readout_binding,
         provenance=provenance,
     )
 
@@ -577,117 +563,323 @@ def _compose_draws(
 # ─── Helpers ───────────────────────────────────────────────────────────
 
 
-def _run_masked_dp_density_trace(
+def evaluate_conditioned_span_from_seed(
+    span: ComposedPrimitiveSpan,
     *,
-    topo: SpanTopology,
-    base_kernels_by_edge: Mapping[str, np.ndarray],
-    primitive_by_edge: Mapping[str, ConditionedTransitionPrimitive],
-    S: int,
-    T: int,
+    root_seed: np.ndarray,
+    origin_day: Optional[_date] = None,
+    cdf_renorm_tolerance: float = ComposeOptions.cdf_renorm_tolerance,
 ) -> SpanDPTrace:
-    """Forward DP where each edge kernel is masked by source day.
+    """Evaluate a composed conditioned span from an arbitrary root seed.
 
-    This is the support/exposure sibling of `_run_dp_density_trace`.
-    The value stream can precompute one edge kernel because it is defined
-    for every source day. Masked streams cannot: row presence is keyed by
-    `(edge, source_day, age)`, so the edge kernel selected for a wavefront
-    bucket depends on the source day that bucket reached the edge source.
+    ``compose_primitive_span`` builds the operator identity readout
+    (δ(0) at the root). Selected-cohort projection needs the same
+    topology and kernels fed by source-day mass already produced by a
+    carrier. This helper keeps the algebra in the span layer: one DP,
+    caller-supplied root density.
     """
-    return _run_dp_density_trace(
+    topo = span.topology
+    edge_primitives = span.conditioned_edge_primitives
+    S, T = root_seed.shape
+    kernel_provider = _build_stream_kernel_provider(
+        edge_primitives=edge_primitives,
+        S=S,
+        T=T,
+        cdf_renorm_tolerance=cdf_renorm_tolerance,
+    )
+    # SCALAR policy: per-(source bucket, cohort) kernel calls.
+    # ``evaluate_conditioned_span_from_seed_flat_origins`` is the
+    # batched-via-Toeplitz entry point; this scalar entry exists for
+    # the single-cohort / non-flat caller surface.
+    return _run_dp_density_trace_from_seed(
         topo,
-        lambda ce, source_index: (
-            base_kernels_by_edge[ce.edge_key]
-            * _mask_for_source_day(
-                primitive=primitive_by_edge[ce.edge_key],
-                source_day=_source_day_for_index(
-                    primitive_by_edge[ce.edge_key], source_index,
-                ),
-                T=T,
-                edge_key=ce.edge_key,
-            )
+        lambda ce, source_index, _cohort_index, source_basis: kernel_provider(
+            ce,
+            source_index,
+            source_basis,
         ),
+        root_seed,
         S,
         T,
+        execution_policy=DPExecutionPolicy.SCALAR,
     )
 
 
-def _source_day_for_index(
-    primitive: ConditionedTransitionPrimitive,
-    day_index: int,
-) -> str:
-    """Map the composer's τ index to a source-day key for masks.
-
-    When row masks exist, the support's first source day defines the
-    row-local calendar origin. This matches the empirical operator and
-    the existing Stage 2 fixtures, where τ=0 means "first admitted
-    source day" rather than always `scope.date_from`.
-    """
-    if primitive.observation_mask_draws_by_source_day:
-        origin = min(
-            _date.fromisoformat(str(day)[:10])
-            for day in primitive.observation_mask_draws_by_source_day
-        )
-    else:
-        origin = _date.fromisoformat(str(primitive.scope.date_from)[:10])
-    return (origin + _timedelta(days=int(day_index))).isoformat()
-
-
-def _mask_for_source_day(
+def evaluate_conditioned_span_from_seed_flat_origins(
+    span: ComposedPrimitiveSpan,
     *,
-    primitive: ConditionedTransitionPrimitive,
-    source_day: str,
+    root_seed: np.ndarray,
+    cohort_count: int,
+    origin_days: Sequence[_date],
+    evidence_readout_binding: EvidenceReadoutBinding,
+    cdf_renorm_tolerance: float = ComposeOptions.cdf_renorm_tolerance,
+    root_basis: np.ndarray | None = None,
+) -> SpanDPTrace:
+    """Evaluate a conditioned span with cohort and draw axes flattened.
+
+    Collapsed ``(root_seed, root_basis)`` form. Callers carrying a
+    per-bucket per-provenance seed (carrier → subject handoff) call
+    ``evaluate_conditioned_span_from_seed_flat_origins_with_provenance``
+    instead.
+    """
+    S_flat, T = root_seed.shape
+    provider = _build_flat_provider_for_span(
+        span=span,
+        T=T,
+        cdf_renorm_tolerance=cdf_renorm_tolerance,
+        origin_days=origin_days,
+        evidence_readout_binding=evidence_readout_binding,
+    )
+    return _run_dp_density_trace_from_seed(
+        span.topology,
+        provider,
+        root_seed,
+        S_flat,
+        T,
+        execution_policy=DPExecutionPolicy.TOEPLITZ_APPLY,
+        cohort_count=int(cohort_count),
+        root_basis=root_basis,
+    )
+
+
+def evaluate_conditioned_span_from_seed_flat_origins_with_provenance(
+    span: ComposedPrimitiveSpan,
+    *,
+    S_flat: int,
     T: int,
-    edge_key: str,
-) -> np.ndarray:
-    """Read the row-presence mask for one source day and draw.
+    cohort_count: int,
+    origin_days: Sequence[_date],
+    evidence_readout_binding: EvidenceReadoutBinding,
+    root_provenance_mass: Mapping[int, Mapping[str, np.ndarray]],
+    root_provenance_basis: Mapping[int, Mapping[str, int]],
+    cdf_renorm_tolerance: float = ComposeOptions.cdf_renorm_tolerance,
+) -> SpanDPTrace:
+    """Provenance-seeded variant of the conditioned flat-origins evaluator.
 
-    `None` means an unconditioned overlay bypassed evidence binding, so
-    the mask is all ones. A non-empty source-day map is authoritative:
-    missing source days are absent, not aggregate-age observed. When no
-    source-day map exists (legacy/manual primitive), fall back to the
-    aggregate mask for compatibility.
+    Each provenance entry at the carrier terminal keeps its own ``(S,)``
+    mass and basis so mixed basis survives the carrier → subject join.
+    ``S_flat`` / ``T`` are the seed-shape metadata the DP needs even
+    though the mass content lives in the provenance map.
     """
-    if primitive.observation_mask_draws is None:
-        return np.ones((primitive.draw_count, T), dtype=np.float64)
+    provider = _build_flat_provider_for_span(
+        span=span,
+        T=T,
+        cdf_renorm_tolerance=cdf_renorm_tolerance,
+        origin_days=origin_days,
+        evidence_readout_binding=evidence_readout_binding,
+    )
+    return _run_dp_density_trace_from_provenance_seed(
+        span.topology,
+        provider,
+        root_provenance_mass=root_provenance_mass,
+        root_provenance_basis=root_provenance_basis,
+        S=S_flat,
+        T=T,
+        execution_policy=DPExecutionPolicy.TOEPLITZ_APPLY,
+        cohort_count=int(cohort_count),
+    )
 
-    masks_by_day = primitive.observation_mask_draws_by_source_day
-    raw_mask = masks_by_day.get(source_day) if masks_by_day else None
-    if raw_mask is None and masks_by_day:
-        topology_case = (
-            primitive.weighted_evidence.arrival_weight_summary.get('topology_case')
-            if primitive.weighted_evidence is not None
-            else None
+
+def _build_flat_provider_for_span(
+    *,
+    span: ComposedPrimitiveSpan,
+    T: int,
+    cdf_renorm_tolerance: float,
+    origin_days: Sequence[_date],
+    evidence_readout_binding: EvidenceReadoutBinding,
+) -> Callable:
+    return _build_flat_stream_kernel_provider(
+        edge_primitives=span.conditioned_edge_primitives,
+        S=int(span.draw_count),
+        T=T,
+        cdf_renorm_tolerance=cdf_renorm_tolerance,
+        origin_days=origin_days,
+        evidence_readout_binding=evidence_readout_binding,
+    )
+
+
+def _build_flat_stream_kernel_provider(
+    *,
+    edge_primitives: Tuple[
+        Tuple[ConcreteEdge, ConditionedTransitionPrimitive], ...
+    ],
+    S: int,
+    T: int,
+    cdf_renorm_tolerance: float,
+    origin_days: Sequence[_date],
+    evidence_readout_binding: EvidenceReadoutBinding,
+) -> Callable[[ConcreteEdge, int, int, BucketSourceBasis], np.ndarray]:
+    endpoint_kernels, bucket_kernels = _conditioned_kernel_maps(
+        edge_primitives=edge_primitives,
+        S=S,
+        T=T,
+        cdf_renorm_tolerance=cdf_renorm_tolerance,
+    )
+    # Table-driven kernel selection by source basis. One lookup table
+    # consumed identically by every provider entry point — replaces the
+    # ``if source_basis == BUCKET_DISTRIBUTED ... else ...`` triplet
+    # that previously lived in ``provider``, ``batched``, and
+    # ``batched_op``.
+    kernels_by_basis: Dict[int, Mapping[str, np.ndarray]] = {
+        int(BucketSourceBasis.BUCKET_DISTRIBUTED): bucket_kernels,
+        int(BucketSourceBasis.POINT_AT_ENDPOINT): endpoint_kernels,
+    }
+    # Per-edge output basis pre-computed once from edge metadata via the
+    # canonical helper in ``timing_span.py``.
+    out_basis_by_edge: Dict[str, BucketSourceBasis] = {
+        ce.edge_key: _edge_default_out_basis(ce)
+        for ce, _primitive in edge_primitives
+    }
+
+    def provider(
+        ce: ConcreteEdge,
+        source_index: int,
+        _cohort_index: int,
+        source_basis: BucketSourceBasis,
+    ) -> Tuple[np.ndarray, BucketSourceBasis]:
+        return (
+            kernels_by_basis[int(source_basis)][ce.edge_key],
+            out_basis_by_edge[ce.edge_key],
         )
-        if topology_case != 'identity':
-            return np.zeros((primitive.draw_count, T), dtype=np.float64)
-    if raw_mask is None:
-        raw_mask = primitive.observation_mask_draws
-    if raw_mask.ndim != 2 or raw_mask.shape[0] != primitive.draw_count:
-        raise CompositionError(
-            f"primitive {edge_key!r} observation mask has shape "
-            f"{raw_mask.shape}; expected ({primitive.draw_count}, *)"
+
+    # Toeplitz cache: per (edge_key, source_basis) the lower-triangular
+    # convolution matrix ``T_mat[d, v, u] = K[d, v − u]`` is built once
+    # per DP call and reused across every (edge, basis) dispatch.
+    toeplitz_cache: Dict[Tuple[str, int], np.ndarray] = {}
+
+    def batched_op(
+        ce: ConcreteEdge,
+        source_basis: BucketSourceBasis,
+        source_mass_3d: np.ndarray,
+    ) -> Tuple[np.ndarray, BucketSourceBasis]:
+        """Apply the edge's kernel to ``(C, D, T)`` source mass via one
+        Toeplitz contraction.
+
+        Conditioned kernels are cohort-invariant AND source-bucket-
+        invariant in ``u``, so the kernel is shift-invariant in ``u``
+        and the contraction
+        ``out[c, d, v] = Σ_u M[c, d, u] · K[d, v − u]`` is exact. One
+        BLAS-backed ``einsum`` per (edge, basis).
+        """
+        K = kernels_by_basis[int(source_basis)][ce.edge_key]
+        T_actual = int(K.shape[1])
+        cache_key = (ce.edge_key, int(source_basis))
+        T_mat = toeplitz_cache.get(cache_key)
+        if T_mat is None:
+            v_idx = np.arange(T_actual)
+            u_idx = np.arange(T_actual)
+            offset = v_idx[:, None] - u_idx[None, :]
+            valid = offset >= 0
+            T_mat = np.where(
+                valid[None, :, :],
+                K[:, np.clip(offset, 0, T_actual - 1)],
+                0.0,
+            )
+            toeplitz_cache[cache_key] = T_mat
+        out = np.einsum(
+            'cdu,dvu->cdv', source_mass_3d, T_mat, optimize=True,
         )
-    return _align_mask_grid(raw_mask, T)
+        return out, out_basis_by_edge[ce.edge_key]
+
+    provider.batched_op = batched_op
+    return provider
 
 
-def _align_mask_grid(mask_arr: np.ndarray, T: int) -> np.ndarray:
-    """Pad masks with zeros or truncate to length T.
+def _build_stream_kernel_provider(
+    *,
+    edge_primitives: Tuple[
+        Tuple[ConcreteEdge, ConditionedTransitionPrimitive], ...
+    ],
+    S: int,
+    T: int,
+    cdf_renorm_tolerance: float,
+) -> Callable[[ConcreteEdge, int, BucketSourceBasis], np.ndarray]:
+    """Per-(edge, source_index) value-kernel provider."""
+    endpoint_kernels, bucket_kernels = _conditioned_kernel_maps(
+        edge_primitives=edge_primitives,
+        S=S,
+        T=T,
+        cdf_renorm_tolerance=cdf_renorm_tolerance,
+    )
+    # Table-driven basis selection — same shape as the flat provider's
+    # ``kernels_by_basis``: the per-call path is a pure indexed lookup,
+    # no branch.
+    kernels_by_basis: Dict[int, Mapping[str, np.ndarray]] = {
+        int(BucketSourceBasis.BUCKET_DISTRIBUTED): bucket_kernels,
+        int(BucketSourceBasis.POINT_AT_ENDPOINT): endpoint_kernels,
+    }
+    out_basis_by_edge: Dict[str, BucketSourceBasis] = {
+        ce.edge_key: _edge_default_out_basis(ce)
+        for ce, _primitive in edge_primitives
+    }
 
-    Masks are row-presence indicators, not CDFs. A present final cell
-    does not imply future cells are present, so CDF saturation padding is
-    forbidden here.
+    def provider(
+        ce: ConcreteEdge,
+        _source_index: int,
+        source_basis: BucketSourceBasis,
+    ) -> Tuple[np.ndarray, BucketSourceBasis]:
+        return (
+            kernels_by_basis[int(source_basis)][ce.edge_key],
+            out_basis_by_edge[ce.edge_key],
+        )
+
+    return provider
+
+
+def _conditioned_kernel_maps(
+    *,
+    edge_primitives: Tuple[
+        Tuple[ConcreteEdge, ConditionedTransitionPrimitive], ...
+    ],
+    S: int,
+    T: int,
+    cdf_renorm_tolerance: float,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    """Per-edge value kernels in canonical endpoint bucket form.
+
+    Returns ``(native_kernels, propagated_kernels)``, both keyed by
+    ``edge_key`` with shape ``(S, T)``. Both surfaces share the same
+    endpoint-labelled transition values; source-index placement is not a
+    separate midpoint convention.
+
+    Dirac timing families (``NON_LATENT``, ``DETERMINISTIC``) are
+    exact degenerate transitions under the same bucket contract.
     """
-    if mask_arr.ndim != 2:
-        raise ValueError(
-            f"_align_mask_grid expects 2-D input; got shape {mask_arr.shape}"
+    endpoint_kernels_by_edge: Dict[str, np.ndarray] = {}
+    bucket_kernels_by_edge: Dict[str, np.ndarray] = {}
+    max_tau = T - 1
+
+    for ce, primitive in edge_primitives:
+        edge_key = ce.edge_key
+        p_draws = primitive.probability_draws()
+
+        if primitive.timing_family == TimingFamily.NON_LATENT:
+            endpoint_timing_kernel = np.zeros((S, T), dtype=np.float64)
+            endpoint_timing_kernel[:, 0] = 1.0
+            bucket_timing_kernel = endpoint_timing_kernel
+        elif primitive.timing_family == TimingFamily.DETERMINISTIC:
+            shift = primitive.timing_posterior.deterministic_shift_days
+            endpoint_timing_kernel = np.zeros((S, T), dtype=np.float64)
+            endpoint_timing_kernel[:, min(int(shift), max_tau)] = 1.0
+            bucket_timing_kernel = endpoint_timing_kernel
+        else:
+            cdf_draws = primitive.timing_draws()
+            cdf_aligned = _align_cdf_grid(cdf_draws, T)
+            endpoint_timing_kernel = np.diff(cdf_aligned, prepend=0.0, axis=1)
+            bucket_timing_kernel = cdf_to_bucket_transition(
+                edge_key,
+                cdf_aligned,
+                family="conditioned_model",
+            ).value
+
+        endpoint_kernels_by_edge[edge_key] = (
+            endpoint_timing_kernel * p_draws[:, None]
         )
-    n_rows, T_p = mask_arr.shape
-    if T_p == T:
-        return mask_arr
-    if T_p > T:
-        return mask_arr[:, :T]
-    pad = np.zeros((n_rows, T - T_p), dtype=mask_arr.dtype)
-    return np.concatenate([mask_arr, pad], axis=1)
+        bucket_kernels_by_edge[edge_key] = (
+            bucket_timing_kernel * p_draws[:, None]
+        )
+
+    return endpoint_kernels_by_edge, bucket_kernels_by_edge
 
 
 def _align_cdf_grid(cdf_arr: np.ndarray, T: int) -> np.ndarray:
@@ -697,10 +889,6 @@ def _align_cdf_grid(cdf_arr: np.ndarray, T: int) -> np.ndarray:
     final column preserves that semantic if the primitive's grid is
     shorter than the composer's grid.
     """
-    if cdf_arr.ndim != 2:
-        raise ValueError(
-            f"_align_cdf_grid expects 2-D input; got shape {cdf_arr.shape}"
-        )
     n_rows, T_p = cdf_arr.shape
     if T_p == T:
         return cdf_arr
@@ -757,6 +945,7 @@ def _build_provenance(
 __all__ = [
     "ComposedPrimitiveSpan",
     "ComposeOptions",
+    "EvidenceReadoutBinding",
     "CompositionError",
     "compose_primitive_span",
 ]

@@ -255,10 +255,16 @@ export async function runConditionedForecast(
 
   const url = `${PYTHON_API_BASE}/api/forecast/conditioned`;
 
+  const CF_TIMEOUT_MS = 20_000;
+
   let response: Response;
+  let timedOut = false;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000); // 20s timeout (doc 47)
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, CF_TIMEOUT_MS);
     response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -267,21 +273,32 @@ export async function runConditionedForecast(
     });
     clearTimeout(timeout);
   } catch (e) {
-    console.warn('[conditionedForecast] Network error or timeout:', e);
-    return [];
+    // Throw so callers (notably fetchDataService's CF .catch handler
+    // and the param-pack CLI) see the failure rather than silently
+    // proceeding with FE-only values. Timeout / network failures are
+    // distinguished in the message so operators can tell which budget
+    // is being blown.
+    const reason = timedOut
+      ? `Timed out after ${CF_TIMEOUT_MS}ms`
+      : `Network error: ${(e as any)?.message ?? e}`;
+    console.warn('[conditionedForecast]', reason);
+    throw new Error(`[conditionedForecast] ${reason}`);
   }
 
   if (!response.ok) {
-    console.warn('[conditionedForecast] HTTP error:', response.status);
-    return [];
+    const text = await response.text().catch(() => '');
+    const reason = `HTTP ${response.status} ${response.statusText}: ${text.slice(0, 200)}`;
+    console.warn('[conditionedForecast]', reason);
+    throw new Error(`[conditionedForecast] ${reason}`);
   }
 
   let body: { success: boolean; scenarios: ConditionedForecastScenarioResult[] };
   try {
     body = await response.json();
   } catch (e) {
-    console.warn('[conditionedForecast] JSON parse error:', e);
-    return [];
+    const reason = `JSON parse error: ${(e as any)?.message ?? e}`;
+    console.warn('[conditionedForecast]', reason);
+    throw new Error(`[conditionedForecast] ${reason}`);
   }
 
   if (!body.success || !body.scenarios) return [];

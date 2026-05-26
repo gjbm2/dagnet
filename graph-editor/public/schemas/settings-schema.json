@@ -228,6 +228,14 @@
           "minimum": 0.5,
           "maximum": 0.999,
           "default": 0.90
+        },
+        "MC_DRAWS": {
+          "type": "integer",
+          "title": "Forecast MC Draws",
+          "description": "Request-scope Monte Carlo draw count S used by the forecast / conditioned-forecast runtime.\n\nApplies to the primitive substrate (per-edge conditioned posteriors), span CDF MC, cohort sweep, confidence bands, and funnel sweep. Draw-family coherence requires every consumer of a primitive under the same key to use the same S.\n\nIncreasing S sharpens fan-chart quantiles and confidence bands at linear cost; decreasing speeds up requests at the cost of MC noise on the displayed midpoints / quantiles.\n\nIndicative values:\n- 500: fast exploratory queries\n- 1000: standard (default)\n- 2000–5000: tighter quantiles, slower responses.",
+          "minimum": 100,
+          "maximum": 50000,
+          "default": 1000
         }
       },
       "required": [

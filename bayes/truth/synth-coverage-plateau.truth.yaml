@@ -31,6 +31,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
     latency_shape: stepped
     latency_steps:
       - day: 0.0

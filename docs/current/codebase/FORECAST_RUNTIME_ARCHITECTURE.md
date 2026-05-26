@@ -15,7 +15,7 @@ This doc describes the current runtime after the primitive substrate, carrier/su
 
 **Branching by case is the recurring failure mode** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58). Modes differ by which sub-object **degenerates** — identity carrier is data, not a route; `window()` is `cohort()` with carrier-arrival = identity; non-latency is latency with `δ(0)`. If your edit reaches for `if mode == ...` near the centre, the factoring is wrong.
 
-**This is actively policed.** The 21 findings in [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) are debt being retired — not precedent. New defensive patterns or new case-forks will be reverted. Where existing code looks like it sets a precedent for a fallback, you are looking at exactly the debt being tracked.
+**This is actively policed.** Rules: [CF_ENGINE_DISCIPLINE.md](CF_ENGINE_DISCIPLINE.md). The 21 findings in [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) are debt being retired — not precedent. New defensive patterns or new case-forks will be reverted. Where existing code looks like it sets a precedent for a fallback, you are looking at exactly the debt being tracked.
 
 ---
 
@@ -35,7 +35,7 @@ The live flow is:
 4. `compute_resolved_runtime_readout` prepares every primitive through the single conditioning locus, composes `composed_subject`, optionally composes `composed_carrier`, builds unconditioned overlays, and returns role-labelled provenance.
 5. `_aggregate_request_candidates` builds one request candidate pool from the superset-derived target, subject-span, and carrier candidates. Primitive-local binding later filters this pool by primitive identity and clock.
 6. `_root_window_carrier_n_by_anchor_day` builds the per-anchor base mass (`n_by_anchor`) from the flat `runtime.request_evidence_candidates` pool — runs for both identity-carrier and active modes. The active-only step is the subsequent `ec.a_pop` overwrite at `cohort_forecast_v3.py:6155`, where the frame-bundle `a` is replaced by the candidate-derived count; window/identity-carrier mode preserves `a_pop` from the frame `a_frozen`. Frame-bundle `a` is not an admissible substitute for the candidate-derived count on the active path.
-7. `_build_selected_source_day_mass` and `_build_carrier_only_denominator_prefix` attach the dual-prefix objects to the runtime (`selected_source_day_mass`, `selected_x_prefix`). Then `_build_selected_a_clock_evidence_from_runtime` builds `SelectedAClockEvidence` from primitive-bound observed rows plus the runtime clock surfaces. Carrier evidence is composed on the selected A-clock; subject evidence is placed using the join-conditioned carrier timing surface before numerator/denominator pairing. Post atom-3 stage 4, **this whole sequence is unified across identity-carrier and active modes** — both consume `SelectedAClockEvidence` for their per-cohort prefixes; there is no rescue branch reading `engine_cohort.obs_x/obs_y`. Residual structural debt: `_synthesize_identity_carrier_observed_surface` is still a parallel pipeline for the carrier observed surface under identity carrier ([CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) H-5).
+7. `_build_selected_source_day_mass` and `_build_carrier_only_denominator_prefix` attach the dual-prefix objects to the runtime (`selected_source_day_mass`, `selected_x_prefix`). Then `_build_selected_a_clock_evidence_from_runtime` builds `SelectedAClockEvidence` from primitive-bound observed rows plus the runtime clock surfaces. Carrier evidence is composed on the selected A-clock; subject evidence is placed using the join-conditioned carrier timing surface before numerator/denominator pairing. Post atom-3 stage 4, **this whole sequence is unified across identity-carrier and active modes** — both consume `SelectedAClockEvidence` for their per-cohort prefixes; there is no rescue branch reading `engine_cohort.obs_x/obs_y`. Residual structural debt: `_synthesize_identity_carrier_observed_surface` is still a parallel pipeline for the carrier observed surface under identity carrier ([`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) H-5).
 8. `_project_runtime_rows` emits rows. E+F midpoint and fan fields come from `_selected_cohort_group_rate_draws`, which reduces selected-Cohort numerator and denominator mass before division. Evidence-named fields (`evidence_x`, `evidence_y`, `rate`) read only from `SelectedAClockEvidence`. Model overlays come from `_composed_pair_per_tau_rate_draws`.
 9. `_attach_cf_row_metadata` adds public conditioning/provenance metadata to the first row sentinel.
 
@@ -60,7 +60,7 @@ The key change from the older mental model is that row projection is no longer a
 | `carrier_span` / `subject_span` | Public, role-labelled span summaries for provenance. |
 | `projection_provenance` | Projection-facing summary extracted from runtime diagnostics. |
 | `public_moments` | Primitive-backed scalar moments: `p_mean`, predictive `p_sd`, and epistemic `p_sd_epistemic`. |
-| `unconditioned_overlays` | Prior-only composed subject/carrier pairs keyed by dispersion basis, currently `predictive` for F mode and optional `epistemic` for model-curve bands. |
+| `unconditioned_overlays` | Prior-only composed subject/carrier pairs keyed by dispersion basis. Post-FC-Atom-1, F mode no longer reads these — F mode renders the unspliced query-conditioned model surface (`f_*`) from the spine. The `epistemic` overlay survives as the **optional model overlay** (frontier-conditioned chart-surface proposal Appendix B; row fields `model_curve_*`), opt-in via `show_model_curve`. The `predictive` overlay is retained for diagnostics but has no default chart consumer. |
 | `eligible` / `skip_reason` | Whether the primitive runtime produced a substitutable draw-coherent result and why it degraded if not. |
 
 `ComposedPrimitiveSpan` in `subject_span_composer.py` is deliberately role-neutral. A carrier and a subject are the same type; their meaning comes from the role in `ResolvedCFRuntime`. Both expose span reach (`span_p_mean` / `span_p_draws`) separately from timing (`cdf_mean` / `cdf_draws`). Projection code must keep those separate until it has decided which public object it is emitting.
@@ -122,18 +122,18 @@ For each selected Cohort, each particle, and each row age:
 
 The reducer accumulates total `X_total` and `Y_total` across selected Cohorts and divides once at the end. Rate cells with zero denominator are `NaN`, not zero; row quantiles ignore validly undefined particles and return `None` only when every particle is undefined at that age.
 
-This mass-first reduction is why E+F rows now represent the chart object: selected-Cohort group `ΣY / ΣX`. `_composed_pair_per_tau_rate_draws` remains valid, but only for model-curve and F-mode objects where the user is asking for the primitive/span model surface.
+This mass-first reduction is what feeds E+F mode's evidence layer and the FC continuation that feeds its forecast layer. The spine's `project_selected_cohort_rows` is the canonical entry point post-FC-Atom-5; the model-surface and overlay helpers below remain for the F-mode conditioned surface and the optional model overlay.
 
 ## 7. Row Projection
 
-`_project_runtime_rows` projects four distinct public surfaces from the runtime:
+`_project_runtime_rows` projects four distinct public surfaces from the runtime. Terminology follows the frontier-conditioned chart-surface proposal, [Appendix B](../project-generalise/frontier-conditioned-chart-surface-proposal-21-May-26.md#appendix-b-standard-terminology-and-display-mapping) — display modes and internal surfaces are named separately. See also [CF_ROW_PIPELINE.md §5](CF_ROW_PIPELINE.md#5-row-schema--three-projection-surfaces) for the row-schema table and [§6.1](CF_ROW_PIPELINE.md#61-display-mode-epoch-mapping) for the epoch mapping.
 
 | Row surface | Source |
 |---|---|
-| `midpoint`, `fan_*`, `fan_bands`, `projected_rate` | The selected-Cohort mass reducer's rate draws. |
-| `forecast_x`, `forecast_y` | The selected-Cohort reducer's projected denominator and numerator means, currently emitted only for active carrier rows. |
-| `model_midpoint`, `model_fan_*`, `model_bands` | The unconditioned `predictive` overlay through `_composed_pair_per_tau_rate_draws`. |
-| `model_curve_midpoint`, `model_curve_*`, `model_curve_bands` | The optional unconditioned `epistemic` overlay through the same helper. |
+| `midpoint`, `fan_*`, `fan_bands`, `projected_rate` | The FC (frontier-conditioned) continuation surface `selected_projection.ef_rate_draws` from the spine. Forecast layer in E+F mode. |
+| `forecast_x`, `forecast_y` | `selected_projection.ef_forecast_x` / `ef_forecast_y` — future residual emitted directly by the FC continuation DP. Active-carrier only. |
+| `model_midpoint`, `model_fan_*`, `model_bands` | The unspliced query-conditioned model surface `selected_projection.f_rate_draws` from the spine, epistemic operator basis. F mode renders this surface. |
+| `model_curve_midpoint`, `model_curve_*`, `model_curve_bands` | The optional model overlay — unconditioned model curve with epistemic bands. Sourced from `runtime.unconditioned_overlays['epistemic']` via `_composed_pair_per_tau_rate_draws`. Not a display mode; opt-in via `show_model_curve`. |
 
 Observed evidence fields are separate from projection fields:
 
@@ -141,7 +141,7 @@ Observed evidence fields are separate from projection fields:
 - When `SelectedAClockEvidence` is absent or has no cells, evidence-named row fields are absent (None) rather than reconstructed from the frame substrate — invariant 12.
 - Model projection never fills evidence-named fields.
 
-Epoch gating: rows clear E+F midpoint/fan before `tau_solid_max` when the observed line owns the fully observed epoch. The active-mode path can render midpoint/fan across the full row range because selected A-clock observations may be absent while the carrier/subject projection is still meaningful.
+Epoch gating is output-layer policy, not data scarcity: the spine generates `ef_*` across the full tau sweep with strict-evidence prefix-pinning. The FE chart layer suppresses the E+F forecast layer in epoch A (where it would coincide with the solid E line and double-draw) and the E mode evidence layer in epoch C (where there are no observations). See [CF_ROW_PIPELINE.md §6.1](CF_ROW_PIPELINE.md#61-display-mode-epoch-mapping) for the full table.
 
 Completeness is projected by `_runtime_completeness` from the same request-rooted composed CDF used by the runtime. Cohort weights come from `cohort_weights` (active: from `a_pop`; identity-carrier: from `evidence_n`/`x_frozen`). Selected A-clock frontier ages drive the eval point when exact selected prefixes exist.
 
@@ -184,7 +184,7 @@ The cohort maturity analysis endpoint and the conditioned forecast endpoint both
 
 The fetch-envelope plan that feeds subject and carrier observations is built at the preparation layer in `forecast_preparation.prepare_forecast_subject_group` and applied before runtime construction. Prepared per-edge entries expose those rows as `evidence_superset_rows`. The runtime no longer performs in-runtime DB widening, and `forecast_runtime.prepare_forecast_runtime_inputs` no longer constructs target-edge evidence or request-level evidence sets. See [`snapshot-fetch-envelope-design.md`](../snapshot-fetch-envelope-design.md) and [`FORECAST_PREPARATION.md`](FORECAST_PREPARATION.md) §5.
 
-**Legacy inline fallback.** `build_resolved_cf_runtime` ([`cohort_forecast_v3.py:1353-1376`](../../graph-editor/lib/runner/cohort_forecast_v3.py#L1353-L1376)) constructs the envelope plan inline when the caller does not supply one, so legacy and test entry points still work in active mode. Production requests always route through the preparation layer; the inline path is a fallback, not a parallel path, and is tracked as case-fork debt in [`CF_DEFENSIVE_FINDINGS.md`](CF_DEFENSIVE_FINDINGS.md). The two construction sites must remain semantically identical.
+**Legacy inline fallback.** `build_resolved_cf_runtime` ([`cohort_forecast_v3.py:1353-1376`](../../graph-editor/lib/runner/cohort_forecast_v3.py#L1353-L1376)) constructs the envelope plan inline when the caller does not supply one, so legacy and test entry points still work in active mode. Production requests always route through the preparation layer; the inline path is a fallback, not a parallel path, and is tracked as case-fork debt in [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md). The two construction sites must remain semantically identical.
 
 ## 11. What Lives Where
 
@@ -209,7 +209,7 @@ The stage-by-stage semantic pseudo-code for this runtime lives in [`FORECAST_RUN
 - [`FORECAST_STACK_DATA_FLOW.md`](FORECAST_STACK_DATA_FLOW.md) — I/O contracts and persistence boundaries.
 - [`CF_PRIMITIVE_SUBSTRATE.md`](CF_PRIMITIVE_SUBSTRATE.md) — the five-layer substrate that produces `ResolvedCFRuntime`; load-bearing invariants (I-47, I-48); the right read before opening `primitives.py` / `primitive_evidence.py` / `primitive_conditioning.py` / `subject_span_composer.py` / `primitive_readout.py`.
 - [`CF_ROW_PIPELINE.md`](CF_ROW_PIPELINE.md) — the chart engine that consumes the runtime: dual-prefix objects, the seam invariant, the selected-cohort reducer, the row schema, the epoch model.
-- [`CF_DEFENSIVE_FINDINGS.md`](CF_DEFENSIVE_FINDINGS.md) — executive summary of the 21-finding defensive-code audit (`docs/current/cf-defensive-coding-audit.md`); cross-link for the engine's known unfinished work (H-1 monotone-repair clamp, H-4 forecast residual clamp, H-5 identity-carrier branching, M-1 try/except swallows in `cohort_forecast_v3.py`).
+- [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) — executive summary of the 21-finding defensive-code audit ([`cf-defensive-coding-audit.md`](../project-generalise/cf-defensive-coding-audit.md)); cross-link for the engine's known unfinished work (H-1 monotone-repair clamp, H-4 forecast residual clamp, H-5 identity-carrier branching, M-1 try/except swallows in `cohort_forecast_v3.py`).
 - [`CF_HOLD_OUT_ENGINES.md`](CF_HOLD_OUT_ENGINES.md) — `funnel_engine` / `daily_conversions_derivation` / `cohort_maturity_derivation` parallel paths; legacy trajectory engine status.
 - [`CF_RESIDUAL_GUARD.md`](CF_RESIDUAL_GUARD.md) — edge requirement classification (`primitive_residual_guard.py`).
 - [`DRAW_FAMILY_KEYING.md`](DRAW_FAMILY_KEYING.md) — keyed-RNG seam (`DrawFamilyKey`, `make_rng`, the 13 derivations).

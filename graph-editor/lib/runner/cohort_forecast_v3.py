@@ -24,6 +24,8 @@ from datetime import date as _date, timedelta as _timedelta
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .model_resolver import resolve_model_params
+from .numpy_stats import curvature_corrected_interp
+from .bucket_transition import cumulative_empirical_rate_to_transition
 from .prefix_arrival import PrefixArrivalMap
 from .primitive_evidence import RequestPrimitiveRegistry
 from .primitives import ConditionedTransitionPrimitive
@@ -753,21 +755,6 @@ class _RateAttributedSubjectPrefix:
             return 0.0
         return float(per_anchor[max(eligible)])
 
-    def coverage_at(self, anchor_day: str, tau: int) -> float:
-        """Coverage at exact tau (freshness signal — not forward-filled).
-
-        Coverage marks "did a fresh row land at exactly this tau"; it
-        is intentionally NOT forward-filled here. Forward-fill of the
-        coverage signal happens at the SelectedAClockEvidence cell
-        level via `_cell_at_or_before` so cells past the last fresh
-        landing still expose the latest observed coverage.
-        """
-        return float(
-            self.landing_coverage_by_anchor
-            .get(str(anchor_day)[:10], {})
-            .get(int(tau), 0.0)
-        )
-
     def taus_for_anchor(self, anchor_day: str) -> Tuple[int, ...]:
         return tuple(sorted(
             self.cumulative_by_anchor.get(str(anchor_day)[:10], {}).keys()
@@ -1023,6 +1010,20 @@ class ResolvedCFRuntime:
     projection_provenance: Optional[Mapping[str, Any]] = None
     composed_subject: Optional[ComposedPrimitiveSpan] = None
     composed_carrier: Optional[ComposedPrimitiveSpan] = None
+    # FC plan §9.4 — predictive-basis conditioned spans built from the
+    # same bound evidence as ``composed_subject`` / ``composed_carrier``
+    # but with ``dispersion_basis='predictive'``. The FC shadow surface
+    # reads these (NOT the epistemic conditioned pair, and NOT the
+    # unconditioned-predictive overlay).
+    composed_subject_predictive: Optional[ComposedPrimitiveSpan] = None
+    composed_carrier_predictive: Optional[ComposedPrimitiveSpan] = None
+    # Empirical evidence operator spans (Phase 6 §4.9). Composed sibling
+    # of the conditioned spans above; row reducer reads both and routes
+    # evidence-named row fields (strict / adjusted / rate) to the
+    # empirical operator while model surfaces stay on the conditioned
+    # operator (§5.6).
+    composed_empirical_carrier: Optional[ComposedPrimitiveSpan] = None
+    composed_empirical_subject: Optional[ComposedPrimitiveSpan] = None
     observed_carrier_a_to_x: Optional[ObservedSpanEvidenceSurface] = None
     observed_subject_x_to_end: Optional[ObservedSpanEvidenceSurface] = None
     # Active-cohort dual-prefix object (docs/current/cohort-1apr-falling-
@@ -1183,13 +1184,8 @@ def _build_generalised_span_shadow_plans(
             label='carrier',
             root_day=0,
             root_value=1.0,
-            root_support=1.0,
             ordered_operators=carrier_operators,
             expected_value_curve=_shadow_expected_curve_from_composed_spans(
-                carrier_expected_spans,
-                max_tau=max_tau,
-            ),
-            expected_support_curve=_shadow_expected_curve_from_composed_spans(
                 carrier_expected_spans,
                 max_tau=max_tau,
             ),
@@ -1199,13 +1195,8 @@ def _build_generalised_span_shadow_plans(
             label='subject',
             root_day=0,
             root_value=1.0,
-            root_support=1.0,
             ordered_operators=subject_operators,
             expected_value_curve=_shadow_expected_curve_from_composed_spans(
-                subject_expected_spans,
-                max_tau=max_tau,
-            ),
-            expected_support_curve=_shadow_expected_curve_from_composed_spans(
                 subject_expected_spans,
                 max_tau=max_tau,
             ),
@@ -1215,13 +1206,8 @@ def _build_generalised_span_shadow_plans(
             label='request',
             root_day=0,
             root_value=1.0,
-            root_support=1.0,
             ordered_operators=carrier_operators + subject_operators,
             expected_value_curve=_shadow_expected_curve_from_composed_spans(
-                request_expected_spans,
-                max_tau=max_tau,
-            ),
-            expected_support_curve=_shadow_expected_curve_from_composed_spans(
                 request_expected_spans,
                 max_tau=max_tau,
             ),
@@ -1283,7 +1269,6 @@ def _shadow_operator_from_primitive(
     return SpanShadowOperator(
         name=str(primitive.transition.edge_id),
         value=value,
-        support=value,
     )
 
 
@@ -1328,53 +1313,33 @@ def _build_generalised_evidence_shadow_plans(
         [float(buckets.get(tau, {}).get('sum_y', 0.0)) for tau in range(max_tau + 1)],
         dtype=float,
     )
-    evidence_x_support = np.minimum(
-        1.0,
-        np.cumsum(np.asarray([
-            float(buckets.get(tau, {}).get('sum_carrier_coverage', 0.0))
-            for tau in range(max_tau + 1)
-        ], dtype=float)),
-    )
-    evidence_y_support = np.minimum(
-        1.0,
-        np.cumsum(np.asarray([
-            float(buckets.get(tau, {}).get('sum_subject_coverage', 0.0))
-            for tau in range(max_tau + 1)
-        ], dtype=float)),
-    )
     return (
         SpanShadowPlan(
             label='evidence_x',
             root_day=0,
             root_value=1.0,
-            root_support=1.0,
             ordered_operators=(
                 _shadow_operator_from_cumulative_curve(
                     'evidence_x',
                     evidence_x,
-                    support_curve=evidence_x_support,
                     days=int(max_tau) + 1,
                 ),
             ),
             expected_value_curve=evidence_x,
-            expected_support_curve=evidence_x_support,
             metadata={'role': 'evidence_x'},
         ),
         SpanShadowPlan(
             label='evidence_y',
             root_day=0,
             root_value=1.0,
-            root_support=1.0,
             ordered_operators=(
                 _shadow_operator_from_cumulative_curve(
                     'evidence_y',
                     evidence_y,
-                    support_curve=evidence_y_support,
                     days=int(max_tau) + 1,
                 ),
             ),
             expected_value_curve=evidence_y,
-            expected_support_curve=evidence_y_support,
             metadata={'role': 'evidence_y'},
         ),
     )
@@ -1384,16 +1349,12 @@ def _shadow_operator_from_cumulative_curve(
     name: str,
     cumulative_curve: np.ndarray,
     *,
-    support_curve: np.ndarray,
     days: int,
 ) -> SpanShadowOperator:
     increments = np.diff(np.asarray(cumulative_curve, dtype=float), prepend=0.0)
-    support_increments = np.diff(np.asarray(support_curve, dtype=float), prepend=0.0)
     value = np.zeros((days, days), dtype=float)
-    support = np.zeros((days, days), dtype=float)
     value[0, :increments.shape[0]] = increments[:days]
-    support[0, :support_increments.shape[0]] = support_increments[:days]
-    return SpanShadowOperator(name=name, value=value, support=support)
+    return SpanShadowOperator(name=name, value=value)
 
 
 def _runtime_seed(scenario_id: Optional[str], role: str) -> int:
@@ -1416,6 +1377,8 @@ def _runtime_scope(
     date_to: str,
     as_at: Optional[str],
     resolved_source: Optional[str],
+    evidence_date_from: Optional[str] = None,
+    evidence_date_to: Optional[str] = None,
 ):
     from .primitives import (
         PrimitiveScope as _PrimitiveScope,
@@ -1437,8 +1400,38 @@ def _runtime_scope(
             regime_key=None,
             model_source_preference='best_available',
             resolved_source_identity=resolved_source,
+            evidence_date_from=evidence_date_from,
+            evidence_date_to=evidence_date_to,
         ),
     )
+
+
+def _primitive_scope_dates_for_edge(
+    *,
+    envelope_plan: Optional[Any],
+    edge_uuid: Optional[str],
+    edge_id: str,
+    fallback_from: str,
+    fallback_to: str,
+) -> Tuple[str, str]:
+    """Return the evidence-admission date bounds for one primitive edge.
+
+    Snapshot fetching already uses per-edge envelope bounds. Primitive
+    binding must admit against the same bounds, otherwise the runtime can
+    fetch subject-clock rows and then reject them as out-of-date at the
+    merge layer.
+    """
+    if envelope_plan is None:
+        return str(fallback_from or ''), str(fallback_to or fallback_from or '')
+
+    env = None
+    if edge_uuid:
+        env = envelope_plan.by_edge_uuid.get(str(edge_uuid))
+    if env is None and edge_id:
+        env = envelope_plan.by_edge_id.get(str(edge_id))
+    if env is None:
+        return str(fallback_from or ''), str(fallback_to or fallback_from or '')
+    return env.anchor_from.isoformat(), env.anchor_to.isoformat()
 
 
 def _build_span_resolutions(
@@ -1455,6 +1448,7 @@ def _build_span_resolutions(
     as_at: Optional[str],
     resolution_class: Any,
     mark_target: bool,
+    envelope_plan: Optional[Any] = None,
 ) -> tuple[Optional[list], Optional[str]]:
     from .span_kernel import _build_span_topology
 
@@ -1492,6 +1486,13 @@ def _build_span_resolutions(
         if not edge_resolved:
             return None, f'edge_resolve_failed:{edge_id}'
         emit_edge_id = str(target_edge_id) if is_target else str(edge_id)
+        scope_date_from, scope_date_to = _primitive_scope_dates_for_edge(
+            envelope_plan=envelope_plan,
+            edge_uuid=str(edge_uuid) if edge_uuid else None,
+            edge_id=str(edge_id),
+            fallback_from=str(anchor_from or ''),
+            fallback_to=str(anchor_to or anchor_from or ''),
+        )
         transition, primitive_scope = _runtime_scope(
             scenario_id=scenario_id,
             from_node=str(edge_from),
@@ -1501,6 +1502,8 @@ def _build_span_resolutions(
             date_to=str(anchor_to or anchor_from or ''),
             as_at=as_at,
             resolved_source=getattr(edge_resolved, 'source', None),
+            evidence_date_from=scope_date_from,
+            evidence_date_to=scope_date_to,
         )
         kwargs = dict(
             transition=transition,
@@ -1579,6 +1582,7 @@ def build_resolved_cf_runtime(
         as_at=as_at,
         resolution_class=SpanEdgeResolution,
         mark_target=True,
+        envelope_plan=envelope_plan,
     )
 
     carrier_resolutions = []
@@ -1597,6 +1601,7 @@ def build_resolved_cf_runtime(
             as_at=as_at,
             resolution_class=CarrierEdgeResolution,
             mark_target=False,
+            envelope_plan=envelope_plan,
         )
 
     # Two-clocks split (per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`
@@ -1626,6 +1631,7 @@ def build_resolved_cf_runtime(
         and anchor_node_id
         and str(anchor_node_id) != str(query_from_node)
     )
+    conditioning_options = ConditioningPolicyOptions()
 
     if is_active:
         # Active cohort: maps come from the request envelope plan whose
@@ -1646,7 +1652,7 @@ def build_resolved_cf_runtime(
             primitive_scope=target_resolution.primitive_scope,
             request_root=str(query_from_node),
         )
-        _draw_count_for_arrival_map = ConditioningPolicyOptions().draw_count
+        _draw_count_for_arrival_map = conditioning_options.draw_count
         subject_arrival_map = _build_request_arrival_map(
             graph=graph,
             root_node_id=str(query_from_node),
@@ -1674,7 +1680,6 @@ def build_resolved_cf_runtime(
     # `target_subject_metadata`. See
     # docs/current/snapshot-fetch-envelope-design.md.
 
-    conditioning_options = ConditioningPolicyOptions()
     result = compute_resolved_runtime_readout(
         graph=graph,
         population_root_node_id=population_root,
@@ -1775,6 +1780,10 @@ def build_resolved_cf_runtime(
         projection_provenance=projection_provenance,
         composed_subject=result.composed_subject,
         composed_carrier=result.composed_carrier,
+        composed_subject_predictive=result.composed_subject_predictive,
+        composed_carrier_predictive=result.composed_carrier_predictive,
+        composed_empirical_carrier=result.composed_empirical_carrier,
+        composed_empirical_subject=result.composed_empirical_subject,
         eligible=readout_substitutes,
         skip_reason=result.skip_reason,
         unconditioned_overlays=dict(result.unconditioned_overlays),
@@ -2136,7 +2145,6 @@ def _build_selected_source_day_mass(
             end_node_id=str(u_node),
             transitions=transitions_dict,
             max_tau=int(max_tau),
-            horizon_blocking_floor=0.95,
         )
         # Chain-of-length-0 (identity) degeneracy: when root==end the
         # timing composer returns `topology_case='identity'` with
@@ -2151,7 +2159,11 @@ def _build_selected_source_day_mass(
         # path and selected_source_day_mass is None.
         if getattr(timing, 'topology_case', None) == 'identity':
             cdf = np.asarray([0.0, 1.0], dtype=np.float64)
-        elif not timing.is_composed or timing.density_cdf is None:
+        elif (
+            not timing.is_composed
+            or timing.density_cdf is None
+            or timing.horizon_ratio < 0.95
+        ):
             degraded_nodes.append(str(u_node))
             continue
         else:
@@ -3582,17 +3594,20 @@ def _interpolated_rate_at(
     to one source day are spread through that day. A midpoint read avoids
     giving the whole bucket a full extra day of subject exposure.
 
-    For evaluations exactly at the midpoint of two adjacent integer τ
-    values the chart applies a 3-point central curvature correction:
-    ``f(a+0.5) ≈ (f(a)+f(a+1))/2 − (1/8)·(f(a+1) − 2·f(a) + f(a-1))``.
-    Linear interpolation between two adjacent integer rates overshoots
-    the true CDF on convex regions of the lognormal subject CDF (rising
-    flank below the inflection) and undershoots on concave regions; the
-    central second-difference correction removes the leading curvature
-    bias that drove the SIMPLE-flat residual documented in
+    When the bracketing keys are adjacent integers and both outer
+    neighbours (``lo-1``, ``hi+1``) are present in the map, the read
+    delegates to ``curvature_corrected_interp`` from ``numpy_stats``,
+    which applies the classical Newton-Cotes ``(1/8)·second_diff``
+    midpoint curvature correction ramped by ``4·w·(1-w)``. The
+    correction removes the leading chord-vs-curve bias that
+    linear interpolation introduces on convex / concave regions of the
+    lognormal subject CDF — the SIMPLE-flat residual documented in
     ``cohort-outside-in-post-73n-regression-tracker.md``. When fewer
     than three adjacent rates are available (boundary, sparse buckets)
-    the function falls back to plain linear interpolation.
+    or the bracket is wider than one integer step, the function falls
+    back to plain linear interpolation. Shares the discretisation
+    helper with the empirical kernel-supply boundary
+    (``_placement_aware_cumulative_rate``).
     """
     if not nk_by_tau:
         return None
@@ -3619,39 +3634,19 @@ def _interpolated_rate_at(
     if hi == lo:
         return _rate_at_tau(lo)
 
+    if hi - lo == 1 and (lo - 1) in nk_by_tau and (hi + 1) in nk_by_tau:
+        # Adjacent integers with both outer neighbours present: shared
+        # Simpson-corrected fractional lookup. ``_rate_at_tau`` is safe
+        # for the 4 keys (lo-1, lo, hi=lo+1, hi+1) because we just
+        # verified they are all in the map.
+        return curvature_corrected_interp(_rate_at_tau, float(tau_float))
+
+    # Plain linear fallback for non-adjacent brackets or boundary cases
+    # where the curvature stencil cannot be resolved.
     r_lo = _rate_at_tau(lo)
     r_hi = _rate_at_tau(hi)
     weight = (float(tau_float) - float(lo)) / float(hi - lo)
-    linear = r_lo + weight * (r_hi - r_lo)
-
-    # 3-point central curvature correction at the midpoint of two adjacent
-    # integer τ values. The lognormal subject CDF is convex on the rising
-    # flank (below inflection at age e^(μ-σ²)+onset) and concave above;
-    # plain linear interpolation overshoots the true CDF in the convex
-    # region by ≈ (1/8)·f″(c). For evaluations that aren't exactly at the
-    # midpoint, the correction is scaled by the linear-interpolation
-    # weight's distance from the centre (4·w·(1-w)) so endpoints are
-    # untouched and the correction peaks at the midpoint.
-    if hi - lo == 1:
-        # Need one neighbour outside [lo, hi] to estimate f''. Prefer the
-        # one with `lo - 1` (older retrieval) since CDF curvature is
-        # better resolved on the convex/concave transition there.
-        outer_lo_key = lo - 1
-        outer_hi_key = hi + 1
-        if outer_lo_key in nk_by_tau and outer_hi_key in nk_by_tau:
-            r_outer_lo = _rate_at_tau(outer_lo_key)
-            r_outer_hi = _rate_at_tau(outer_hi_key)
-            # Central second difference at the midpoint c = (lo + hi)/2
-            # using a 4-point stencil. The classical (1/8)·Δ² correction
-            # uses second_diff = f(hi+1) − f(hi) − (f(lo) − f(lo-1)) =
-            # f(hi+1) − f(hi) − f(lo) + f(lo-1).
-            second_diff = (r_outer_hi - r_hi) - (r_lo - r_outer_lo)
-            curvature_corr = (1.0 / 8.0) * second_diff
-            # Scale by 4·w·(1-w) so the correction is 1.0 at the
-            # midpoint (w=0.5) and 0 at the endpoints (w=0 or 1).
-            ramp = 4.0 * weight * (1.0 - weight)
-            return linear - ramp * curvature_corr
-    return linear
+    return r_lo + weight * (r_hi - r_lo)
 
 
 def _date_plus_days(day: str, offset: int) -> Optional[str]:
@@ -3759,6 +3754,33 @@ def _monotone_rate_array(
     return np.maximum.accumulate(arr)
 
 
+def _bucket_transition_cumulative_from_rates(
+    edge_id: str,
+    rates: Sequence[Optional[float]],
+    *,
+    horizon: int,
+) -> np.ndarray:
+    cumulative = _monotone_rate_array(rates, horizon=horizon)
+    transition = cumulative_empirical_rate_to_transition(
+        f"rate_prefix::{edge_id}",
+        cumulative,
+    ).value[0]
+    return np.cumsum(transition)
+
+
+def _bucket_transition_increments_from_rates(
+    edge_id: str,
+    rates: Sequence[Optional[float]],
+    *,
+    horizon: int,
+) -> np.ndarray:
+    cumulative = _monotone_rate_array(rates, horizon=horizon)
+    return cumulative_empirical_rate_to_transition(
+        f"rate_prefix::{edge_id}",
+        cumulative,
+    ).value[0]
+
+
 def _mass_series_for_anchor(
     mass_by_source_day: Mapping[str, float],
     *,
@@ -3847,7 +3869,8 @@ def _build_evidence_local_rate_attributed_subject_prefix(
 
         if rate_surface == 'age_only':
             horizon = int(max_tau) + 1
-            edge_rates = _monotone_rate_array(
+            edge_rates = _bucket_transition_cumulative_from_rates(
+                str(edge_id),
                 age_only_rate_cache.get(str(edge_id), ()),
                 horizon=horizon,
             )
@@ -3862,10 +3885,11 @@ def _build_evidence_local_rate_attributed_subject_prefix(
                     'operator_status': 'missing_age_only_rate',
                 })
                 continue
-            inc_rates = np.empty_like(edge_rates)
-            inc_rates[0] = edge_rates[0]
-            if inc_rates.size > 1:
-                inc_rates[1:] = np.maximum(edge_rates[1:] - edge_rates[:-1], 0.0)
+            inc_rates = _bucket_transition_increments_from_rates(
+                str(edge_id),
+                age_only_rate_cache.get(str(edge_id), ()),
+                horizon=horizon,
+            )
             support_kernel = (inc_rates > 0.0).astype(np.float64)
 
             if terminal_edge:
@@ -3947,6 +3971,18 @@ def _build_evidence_local_rate_attributed_subject_prefix(
             })
             continue
 
+        # Per-(edge, source_day) memo of the cubic-spline cumulative rate
+        # curve. `_bucket_transition_cumulative_from_rates` is pure in
+        # (raw_rates, horizon); pre-fix it was recomputed once per
+        # (anchor, source_day, age) inside the inner loop, driving 24,360
+        # cubic-spline curve builds (~10M `_monotone_slope` calls) on a
+        # 120-anchor × 203-tau window of cf-fix-deep-mixed. The age-only
+        # sibling branch above (`_bucket_transition_cumulative_from_rates`
+        # at the top of the rate_surface == 'age_only' block) already
+        # hoists this call to per-edge; this memo brings the
+        # source_day_specific branch into parity.
+        cumulative_by_source_day_for_edge: Dict[str, np.ndarray] = {}
+
         for anchor_day, mass_by_source_day in source_mass_by_anchor.items():
             if not mass_by_source_day:
                 continue
@@ -3963,22 +3999,34 @@ def _build_evidence_local_rate_attributed_subject_prefix(
                     continue
                 start_age = max(0, -int(offset))
                 prev_rate = 0.0
+                if rate_surface == 'source_day_specific':
+                    source_day_key = str(source_day)[:10]
+                    source_rates = cumulative_by_source_day_for_edge.get(source_day_key)
+                    if source_rates is None:
+                        raw_source_rates = (
+                            source_day_rate_cache
+                            .get(str(edge_id), {})
+                            .get(source_day_key, ())
+                        )
+                        source_rates = _bucket_transition_cumulative_from_rates(
+                            f"{edge_id}::{source_day_key}",
+                            raw_source_rates,
+                            horizon=int(max_tau) + 1,
+                        )
+                        cumulative_by_source_day_for_edge[source_day_key] = source_rates
+                else:
+                    source_rates = None
+                    edge_rates = age_only_rate_cache.get(str(edge_id), ())
                 for age in range(start_age, int(max_tau) + 1):
                     tau = int(offset) + int(age)
                     if tau < 0 or tau > int(max_tau):
                         continue
                     if rate_surface == 'source_day_specific':
-                        source_rates = (
-                            source_day_rate_cache
-                            .get(str(edge_id), {})
-                            .get(str(source_day)[:10], ())
-                        )
                         rate = (
                             source_rates[int(age)]
                             if int(age) < len(source_rates) else None
                         )
                     else:
-                        edge_rates = age_only_rate_cache.get(str(edge_id), ())
                         rate = (
                             edge_rates[int(age)]
                             if int(age) < len(edge_rates) else None
@@ -4080,289 +4128,6 @@ def _build_evidence_local_rate_attributed_subject_prefix(
             'ledger_node_count': len(ledger.by_node),
         },
         diagnostic_dual_eval_by_edge=dict(dual_eval_by_edge) if emit_diagnostics else {},
-    )
-
-
-def _build_rate_attributed_subject_prefix(
-    *,
-    buckets: Optional['_SubjectChainEvidenceBuckets'],
-    selected_source_day_mass: _SelectedSourceDayMass,
-    anchor_days: Sequence[str],
-    max_tau: int,
-    denominator_node: str,
-    end_node: str,
-    use_evidence_local_ledger: bool = False,
-    emit_diagnostics: bool = False,
-) -> Optional[_RateAttributedSubjectPrefix]:
-    """Compose Y_prefix(C, tau) by layering through the subject chain.
-
-    Per docs/current/cohort-1apr-falling-k-problem-statement.md A.1
-    §159 / A.6 phase 3: iterates subject primitives in topology order
-    and, for each primitive U -> V, accumulates per-(C, source_day, tau)
-    rate buckets, forward-fills (n, k) within source-day, multiplies
-    by M_select(U, C, u) read from the **runtime-resolved** selected
-    source-day mass surface, and sums across source days only AFTER
-    per-source-day carry-forward. The terminal primitive's cumulative-
-    at-target IS Y_prefix.
-
-    M_select(U, C, u) is sourced from `selected_source_day_mass` —
-    a runtime-level object (per A.6 phase 1). At U = denominator
-    node X, it carries N_cohort(C) × g_carrier(C, u). For downstream
-    primitive source nodes the runtime is responsible for populating
-    M_select via subject-span prefix machinery (resolved subject
-    chain composition); the projection layer must not invent
-    downstream M_select from observed evidence increments.
-
-    Single-hop is the chain-of-length-1 degeneracy: the only subject
-    primitive's source is X, the runtime exposes M_select(X, *, *),
-    and the iteration produces the terminal Y_prefix in one pass.
-    For multi-hop subjects whose downstream M_select is not yet
-    populated by the runtime, downstream contributions are zero —
-    explicit graceful underestimate, recorded in edge_provenance for
-    diagnostic visibility, never silently reconstructed from observed
-    cumulative-at-target.
-    """
-    if buckets is None:
-        return None
-    edge_nk = buckets.edge_nk_by_source_day
-    topology_edges = buckets.topology_edges
-    if not edge_nk or not topology_edges:
-        return None
-    if use_evidence_local_ledger:
-        return _build_evidence_local_rate_attributed_subject_prefix(
-            buckets=buckets,
-            selected_source_day_mass=selected_source_day_mass,
-            anchor_days=anchor_days,
-            max_tau=max_tau,
-            denominator_node=denominator_node,
-            end_node=end_node,
-            emit_diagnostics=emit_diagnostics,
-        )
-
-    edges_in_order = list(topology_edges)
-    cumulative_by_edge: Dict[
-        str, Dict[str, Dict[int, float]],
-    ] = {}
-    landing_coverage_by_edge: Dict[
-        str, Dict[str, Dict[int, float]],
-    ] = {}
-    edge_provenance: List[Mapping[str, Any]] = []
-    # Dual-evaluation side-channel — only populated when --diag is on.
-    # For each edge and anchor we record the rate-attributed cumulative
-    # computed under both bucket-boundary conventions:
-    #   midpoint: rate evaluated at A-clock age (tau - 0.5)
-    #   integer:  rate evaluated at A-clock age tau
-    # Production chooses between them by source-clock role below.
-    dual_eval_by_edge: Dict[
-        str, Dict[str, Dict[str, Dict[int, float]]],
-    ] = {}
-
-    anchor_keys = tuple(str(d)[:10] for d in anchor_days)
-
-    for from_id, to_id, edge_id in edges_in_order:
-        # Read M_select at this primitive's source node from the
-        # runtime-level mass surface. NEVER mutate it from a prior
-        # edge's observed cumulative — that would be projection-time
-        # semantic reconstruction (forbidden per docs A.1 §153 /
-        # A.3). Downstream nodes whose M_select has not been
-        # populated by the runtime contribute zero (graceful, recorded).
-        edge_buckets = edge_nk.get(edge_id, {})
-        from_id_str = str(from_id)
-        node_has_mass = selected_source_day_mass.has_node(from_id_str)
-        if not node_has_mass:
-            edge_provenance.append({
-                'edge_id': edge_id,
-                'from_node': from_id_str,
-                'to_node': str(to_id),
-                'mass_source': 'absent_runtime_did_not_populate_M_select_for_node',
-                'anchors_with_cumulative': [],
-            })
-            cumulative_by_edge[edge_id] = {}
-            landing_coverage_by_edge[edge_id] = {}
-            continue
-
-        cumulative_by_anchor: Dict[str, Dict[int, float]] = {}
-        landing_coverage_by_anchor: Dict[str, Dict[int, float]] = {}
-        for anchor_day in anchor_keys:
-            anchor_buckets = edge_buckets.get(anchor_day, {})
-            if not anchor_buckets:
-                continue
-            tau_union = sorted({
-                int(t)
-                for nk_by_tau in anchor_buckets.values()
-                for t in nk_by_tau.keys()
-            })
-            cumulative_at_tau: Dict[int, float] = {}
-            coverage_at_tau: Dict[int, float] = {}
-            cumulative_midpoint_at_tau: Dict[int, float] = (
-                {} if emit_diagnostics else {}
-            )
-            cumulative_integer_at_tau: Dict[int, float] = (
-                {} if emit_diagnostics else {}
-            )
-            cumulative_ff_integer_at_tau: Dict[int, float] = (
-                {} if emit_diagnostics else {}
-            )
-            # The midpoint shift compensates for mass spread within the
-            # bucket-day axis: when M_select(X, anchor) places mass at
-            # multiple source-days the rate-attributed sum integrates
-            # rate(τ) over each source-day's [s, s+1) interval and the
-            # midpoint approximates the integral (rate(τ-0.5)). When
-            # M_select is a Dirac at a single source-day there is no
-            # interval to integrate — the contribution is rate(τ) × mass
-            # evaluated at the cell's own A-clock τ. This is a natural
-            # degeneracy of the integration: Dirac mass means a zero-width
-            # bucket, hence zero shift. Computed once per (edge, anchor)
-            # from the M_select shape so identity carrier, single-source
-            # active fixtures, and dense-spread active fixtures all flow
-            # through one expression without mode-flag forks.
-            midpoint_shift = (
-                0.5 if len(anchor_buckets) > 1 else 0.0
-            )
-            for tau in tau_union:
-                # Per-source-day forward-fill then weighted sum.
-                # For the first subject layer (U == query denominator X),
-                # M_select is the carrier floor-day bucket; the bucket
-                # width is captured by `midpoint_shift` above. Downstream
-                # subject layers have already been placed by composed
-                # A->U timing; applying the midpoint shift again
-                # double-corrects the chain.
-                rate_tau = (
-                    float(tau) - midpoint_shift
-                    if from_id_str == str(denominator_node)
-                    else float(tau)
-                )
-                rate_attributed_sum = 0.0
-                rate_attributed_sum_midpoint = 0.0
-                rate_attributed_sum_integer = 0.0
-                rate_attributed_sum_ff_integer = 0.0
-                exact_tau_share = 0.0
-                for source_day, nk_by_tau in anchor_buckets.items():
-                    rate = _interpolated_rate_at(nk_by_tau, rate_tau)
-                    if rate is None:
-                        continue
-                    mass = selected_source_day_mass.mass_at(
-                        from_id_str,
-                        anchor_day,
-                        source_day,
-                    )
-                    if mass <= 0.0:
-                        continue
-                    rate_attributed_sum += mass * rate
-                    if emit_diagnostics:
-                        # Diagnostic-only: evaluate four conventions using
-                        # the same mass and the same nk_by_tau. This keeps
-                        # the boundary decision inspectable without changing
-                        # the production source-clock rule above.
-                        # 1. midpoint   = interpolation at A-clock τ-0.5
-                        # 2. integer    = interpolation at integer A-clock τ
-                        # 3. ff_integer = forward-fill (latest at-or-before)
-                        #                 at integer A-clock τ — the TODO
-                        #                 design's strict semantics.
-                        rate_midpoint = _interpolated_rate_at(
-                            nk_by_tau, float(tau) - 0.5,
-                        )
-                        if rate_midpoint is not None:
-                            rate_attributed_sum_midpoint += mass * rate_midpoint
-                        rate_integer = _interpolated_rate_at(nk_by_tau, float(tau))
-                        if rate_integer is not None:
-                            rate_attributed_sum_integer += mass * rate_integer
-                        ff_nk = _latest_nk_at_or_before(nk_by_tau, int(tau))
-                        if ff_nk is not None:
-                            n_ff, k_ff = ff_nk
-                            if n_ff > 0:
-                                rate_attributed_sum_ff_integer += mass * (k_ff / n_ff)
-                    if int(tau) in nk_by_tau:
-                        exact_tau_share += mass
-                cumulative_at_tau[int(tau)] = float(rate_attributed_sum)
-                if emit_diagnostics:
-                    cumulative_midpoint_at_tau[int(tau)] = float(
-                        rate_attributed_sum_midpoint
-                    )
-                    cumulative_integer_at_tau[int(tau)] = float(
-                        rate_attributed_sum_integer
-                    )
-                    cumulative_ff_integer_at_tau[int(tau)] = float(
-                        rate_attributed_sum_ff_integer
-                    )
-                coverage_at_tau[int(tau)] = float(exact_tau_share)
-            if emit_diagnostics and cumulative_integer_at_tau:
-                edge_dual = dual_eval_by_edge.setdefault(edge_id, {})
-                edge_dual[anchor_day] = {
-                    'production': dict(cumulative_at_tau),
-                    'midpoint': dict(cumulative_midpoint_at_tau),
-                    'integer': dict(cumulative_integer_at_tau),
-                    'ff_integer': dict(cumulative_ff_integer_at_tau),
-                }
-            if cumulative_at_tau:
-                cumulative_by_anchor[anchor_day] = cumulative_at_tau
-                landing_coverage_by_anchor[anchor_day] = coverage_at_tau
-
-        cumulative_by_edge[edge_id] = cumulative_by_anchor
-        landing_coverage_by_edge[edge_id] = landing_coverage_by_anchor
-
-        edge_provenance.append({
-            'edge_id': edge_id,
-            'from_node': from_id_str,
-            'to_node': str(to_id),
-            'anchors_with_cumulative': sorted(cumulative_by_anchor.keys()),
-            'mass_source': 'runtime_selected_source_day_mass',
-            'rate_tau_offset': -0.5 if from_id_str == str(denominator_node) else 0.0,
-        })
-
-    # Pick the terminal layer's cumulative as Y_prefix. Terminal =
-    # any edge whose to_node is end_node. For chains there is exactly
-    # one such edge. For multi-merge DAGs, sum across terminal edges.
-    terminal_anchor_cum: Dict[str, Dict[int, float]] = {}
-    terminal_anchor_cov: Dict[str, Dict[int, float]] = {}
-    for from_id, to_id, edge_id in edges_in_order:
-        if str(to_id) != str(end_node):
-            continue
-        edge_cum = cumulative_by_edge.get(edge_id, {})
-        edge_cov = landing_coverage_by_edge.get(edge_id, {})
-        for anchor_day, by_tau in edge_cum.items():
-            sink_cum = terminal_anchor_cum.setdefault(anchor_day, {})
-            for tau, value in by_tau.items():
-                sink_cum[int(tau)] = sink_cum.get(int(tau), 0.0) + float(value)
-        for anchor_day, by_tau in edge_cov.items():
-            sink_cov = terminal_anchor_cov.setdefault(anchor_day, {})
-            for tau, value in by_tau.items():
-                sink_cov[int(tau)] = max(
-                    sink_cov.get(int(tau), 0.0),
-                    float(value),
-                )
-
-    if not terminal_anchor_cum:
-        return None
-
-    return _RateAttributedSubjectPrefix(
-        cumulative_by_anchor={
-            anchor_day: dict(by_tau)
-            for anchor_day, by_tau in terminal_anchor_cum.items()
-        },
-        landing_coverage_by_anchor={
-            anchor_day: dict(by_tau)
-            for anchor_day, by_tau in terminal_anchor_cov.items()
-        },
-        edge_provenance=tuple(edge_provenance),
-        aggregate_provenance={
-            'composition': 'rate_attributed_subject_chain.v1',
-            'denominator_node': str(denominator_node),
-            'end_node': str(end_node),
-            'edge_count': len(edges_in_order),
-        },
-        diagnostic_dual_eval_by_edge={
-            edge_id: {
-                anchor_day: {
-                    'production': dict(branches['production']),
-                    'midpoint': dict(branches['midpoint']),
-                    'integer': dict(branches['integer']),
-                    'ff_integer': dict(branches['ff_integer']),
-                }
-                for anchor_day, branches in by_anchor.items()
-            }
-            for edge_id, by_anchor in dual_eval_by_edge.items()
-        } if emit_diagnostics else {},
     )
 
 
@@ -4564,14 +4329,22 @@ def _build_selected_a_clock_evidence_from_runtime(
     runtime.observed_carrier_a_to_x = carrier_surface
     runtime.observed_subject_x_to_end = subject_surface
 
-    y_prefix = _build_rate_attributed_subject_prefix(
+    # AP58 / I-47 unification: identity-carrier and active-carrier are
+    # data-driven degeneracies of one path. The selected_source_day_mass
+    # surface carries the carrier-arrival data difference (`g_{A→X} = δ`
+    # for identity, full carrier reach for active); the rate-attribution
+    # algorithm itself is shared. The evidence-local propagation through
+    # `_build_evidence_local_rate_attributed_subject_prefix` reproduces
+    # M_select(downstream subject node) algebraically (np.convolve of
+    # M_select(X) with edge rates), so multi-hop active mode goes through
+    # the same path. Per CF_ENGINE_DISCIPLINE.
+    y_prefix = _build_evidence_local_rate_attributed_subject_prefix(
         buckets=subject_buckets,
         selected_source_day_mass=selected_source_day_mass,
         anchor_days=anchor_days,
         max_tau=int(max_tau),
         denominator_node=str(denom_node),
         end_node=str(runtime.subject_end),
-        use_evidence_local_ledger=is_identity_carrier,
         emit_diagnostics=emit_diagnostics,
     )
 
@@ -4702,13 +4475,13 @@ def _build_selected_a_clock_evidence_from_runtime(
                         'y_at_subject_end': float(y_val),
                     },
                     # `carrier_surface` and `subject_surface` provenance
-                    # are attached ONCE on `_selected_a_clock_evidence`
-                    # via `_surface_diag(...)` in `_project_runtime_rows`;
-                    # do NOT replicate them per cell — at multi-hop scale
+                    # are attached once on the forensic selected-clock
+                    # diag block in `_project_runtime_rows`; do NOT
+                    # replicate them per cell — at multi-hop scale
                     # (1.5K cells × ~3.85MB each) that produces a
                     # multi-GB JSON payload that wedges FastAPI's
                     # response encoder. The full per-(edge, anchor, tau)
-                    # dual evaluation is similarly attached ONCE
+                    # dual evaluation is similarly attached once
                     # (`rate_attributed_dual_eval_by_edge`).
                 }
                 if emit_diagnostics else {}
@@ -5336,6 +5109,78 @@ def _runtime_completeness(
     return float(weighted_per_draw.mean()), float(weighted_per_draw.std())
 
 
+def _build_selected_cohort_inputs(
+    engine_cohorts: Sequence[Any],
+    cohort_list: Sequence[Mapping[str, Any]],
+    n_by_anchor: Mapping[str, float],
+) -> Sequence[Mapping[str, Any]]:
+    """Perimeter shape for the row reducer (Phase 6 §5.2).
+
+    Two distinct base-mass fields per cohort, branchless in the engine:
+
+      * ``N_anchor`` — **observed** root-window evidence mass for this
+        anchor day. Sourced from ``n_by_anchor`` (the root-window carrier
+        candidate count). Zero when no admissible root-window evidence
+        exists. Feeds the empirical trace; the engine's contract is
+        ``emp_x = N_anchor`` (see ``test_strict_evidence_x_window_mode_equals_cohort_size``).
+      * ``N_pop`` — **population** mass for model and FC projection.
+        Sourced from ``engine_cohort.a_pop`` — equal to ``N_anchor`` for
+        observed cohorts, set to ``1.0`` for empty-frames cohorts
+        (unit-prior Bayesian degeneracy), zero for cohorts with no
+        admissible evidence and no empty-frames sentinel. Feeds the
+        conditioned model trace AND the FC future-root injection.
+
+    Different regimes enter as different numbers, not different routes:
+
+      observed cohort:        N_anchor = n_root,  N_pop = n_root
+      empty-frames cohort:    N_anchor = 0,       N_pop = 1
+      excluded cohort:        N_anchor = 0,       N_pop = 0
+
+    Admission gates on ``N_pop > 0`` (the population must have mass for
+    the projection to do anything). Cohorts with ``N_pop = 0`` are
+    excluded — both empirical and model surfaces would publish zero
+    everywhere.
+    """
+    inputs: List[Mapping[str, Any]] = []
+    for ec, ci in zip(engine_cohorts, cohort_list or ()):
+        anchor_day_raw = (
+            ci.get('anchor_day')
+            if isinstance(ci, Mapping)
+            else getattr(ec, 'anchor_day', None)
+        )
+        if anchor_day_raw is None:
+            continue
+        anchor_day_key = (
+            anchor_day_raw.isoformat()
+            if hasattr(anchor_day_raw, 'isoformat')
+            else str(anchor_day_raw)[:10]
+        )
+        n_pop = float(getattr(ec, 'a_pop', 0.0) or 0.0)
+        if n_pop <= 0.0:
+            continue
+        n_anchor = float(n_by_anchor.get(anchor_day_key, 0.0) or 0.0)
+        tau_max_int = int(
+            (ci.get('tau_max') if isinstance(ci, Mapping) else None)
+            or 0,
+        )
+        tau_obs_raw = (
+            ci.get('tau_observed') if isinstance(ci, Mapping) else None
+        )
+        tau_obs_int = (
+            int(tau_obs_raw)
+            if isinstance(tau_obs_raw, (int, float))
+            else tau_max_int
+        )
+        inputs.append({
+            'anchor_day': anchor_day_key,
+            'N_anchor': n_anchor,
+            'N_pop': n_pop,
+            'tau_max': tau_max_int,
+            'tau_observed': tau_obs_int,
+        })
+    return inputs
+
+
 def _project_runtime_rows(
     *,
     runtime: ResolvedCFRuntime,
@@ -5347,6 +5192,7 @@ def _project_runtime_rows(
     tau_future_max: int,
     sweep_to: str,
     band_level: float,
+    n_by_anchor: Optional[Mapping[str, float]] = None,
     selected_a_clock_evidence: Optional[SelectedAClockEvidence] = None,
     projection_bases: Optional[Sequence[SelectedCohortProjectionBasis]] = None,
     cohort_list: Optional[Sequence[Mapping[str, Any]]] = None,
@@ -5355,18 +5201,27 @@ def _project_runtime_rows(
     """Build chart rows from the runtime's composed objects + observed
     evidence.
 
-    Three composed surfaces feed the row schema:
+    Three composed surfaces feed the row schema. Terminology follows the
+    frontier-conditioned chart surface proposal, Appendix B (E, F, and
+    E+F name display modes only; ``ef_*`` / ``f_*`` / overlay name
+    internal surfaces):
 
-      - ``midpoint`` / ``fan_*`` / ``fan_bands``: E+F mode — the
-        joint-conditioned posterior. ``runtime.composed_subject`` and
-        ``runtime.composed_carrier``.
-      - ``model_midpoint`` / ``model_fan_*`` / ``model_bands``: F mode —
-        the unconditioned ``predictive`` overlay (κ-inflated bands).
-        ``runtime.unconditioned_overlays['predictive']``.
+      - ``midpoint`` / ``fan_*`` / ``fan_bands`` (forecast layer in E+F
+        mode): the FC (frontier-conditioned) continuation surface
+        ``ef_*`` produced by the spine. Prefix-pinned to strict evidence
+        through each Cohort's frontier; predictive fan opens only after
+        the frontier.
+      - ``model_midpoint`` / ``model_fan_*`` / ``model_bands`` (F mode):
+        the unspliced query-conditioned model surface ``f_*`` produced
+        by the spine on the epistemic operator basis. F mode renders
+        this surface.
       - ``model_curve_midpoint`` / ``model_curve_*`` / ``model_curve_bands``:
-        opt-in ``epistemic`` overlay (tight bands).
-        ``runtime.unconditioned_overlays.get('epistemic')``. Absent when
-        the caller did not request the model curve.
+        the **optional model overlay** — the existing unconditioned
+        model curve with epistemic bands, sourced from
+        ``runtime.unconditioned_overlays.get('epistemic')``. Not a
+        display mode (per Appendix B); rendered as an explicit overlay
+        when the caller opts in via the display setting. Absent when
+        the caller did not request the overlay.
 
     No trajectory engine, no per-cohort IS splice — the request-scoped
     primitive registry has already conditioned everything that should
@@ -5381,29 +5236,46 @@ def _project_runtime_rows(
             overlay.subject, overlay.carrier, horizon=max_tau,
         )
 
-    # E+F draws come from the selected-Cohort projection — masses summed
-    # across selected Cohorts, divided once per particle/age. The chart's
-    # E+F surface is the projection of one resolved runtime object (73g
-    # invariant 7); when the substrate cannot speak per-particle the row
-    # builder emits None midpoint/fan rather than projecting a different
-    # object.
-    selected_projection = _selected_cohort_group_rate_draws(
-        runtime,
+    # E+F draws come from the spine's single mode-blind reducer — one
+    # operator-supply pass per family (conditioned + empirical), one DP
+    # core, one division (Phase 6 §4.9 + §5.6). The legacy
+    # `_selected_cohort_group_rate_draws` and its Pop D / Pop C
+    # enumeration are gone here; the reducer projects ΣY/ΣX directly
+    # from the composed operator surfaces.
+    selected_cohort_inputs = _build_selected_cohort_inputs(
         engine_cohorts,
+        cohort_list or [],
+        n_by_anchor or {},
+    )
+    # FC plan §9.4 / §9.5: the FC shadow surface reads the
+    # predictive-basis CONDITIONED spans
+    # (``runtime.composed_*_predictive`` — built from the SAME bound
+    # evidence as the epistemic ``composed_*`` pair, just with
+    # ``dispersion_basis='predictive'``). The
+    # unconditioned-predictive overlay carries no evidence binding and
+    # is NOT a substitute for the conditioned-predictive surface.
+    selected_projection = model_span_spine.project_selected_cohort_rows(
+        composed_carrier=runtime.composed_carrier,
+        composed_subject=runtime.composed_subject,
+        composed_carrier_predictive=runtime.composed_carrier_predictive,
+        composed_subject_predictive=runtime.composed_subject_predictive,
+        composed_empirical_carrier=runtime.composed_empirical_carrier,
+        composed_empirical_subject=runtime.composed_empirical_subject,
+        selected_cohorts=selected_cohort_inputs,
         horizon=max_tau,
-        cohort_list=cohort_list,
-        selected_a_clock_evidence=selected_a_clock_evidence,
-        projection_bases=projection_bases,
     )
-    rate_draws = (
-        selected_projection.rate_draws
-        if selected_projection is not None else None
-    )
-    _selected_cohort_diag = (
-        selected_projection.diagnostics
-        if selected_projection is not None else None
-    )
-    pred_rate_draws = _overlay_rate_draws('predictive')
+    # Atom 6: midpoint / fan_* / fan_bands / projected_rate read the
+    # FC (frontier-conditioned) continuation surface `ef_rate_draws`,
+    # not the legacy spliced surface. `ef_*` is prefix-pinned to strict
+    # evidence through each Cohort's frontier and continues only the
+    # unresolved future on the predictive operator basis, so at
+    # τ ≤ frontier the per-draw rate equals the strict empirical rate
+    # (fan width = 0); after the frontier the fan opens from the
+    # residual continuation. F mode keeps `f_*` (unspliced
+    # query-conditioned model) — that is a different surface and is
+    # mapped to `model_*` row fields below.
+    rate_draws = selected_projection.ef_rate_draws
+    _selected_cohort_diag = None
     epi_rate_draws = _overlay_rate_draws('epistemic')
 
     completeness_mean, completeness_sd = _runtime_completeness(
@@ -5468,127 +5340,35 @@ def _project_runtime_rows(
         runtime.composed_carrier is not None
         and not roots_equal_at_X
     )
-    # Admissible-cohort denominator for the coverage signal (design §2.2):
-    # cohorts with positive a_pop. The formula is identical across active
-    # and identity-carrier modes (window: a_pop comes from frame `dp.a`;
-    # active: a_pop comes from `_root_window_carrier_n_by_anchor_day`). It
-    # is intentionally NOT `len(engine_cohorts)` — that would include
-    # zeroed-a_pop anchors and spuriously drop epoch-A coverage below 1.
-    n_cohorts_in_scope = sum(
-        1 for ec in engine_cohorts
-        if float(getattr(ec, 'a_pop', 0.0) or 0.0) > 0.0
-    )
-    selected_evidence_by_tau = (
-        selected_a_clock_evidence.aggregate_by_tau(
-            tau_solid_max=tau_solid_max,
-            max_tau=max_tau,
-            n_cohorts_in_scope=n_cohorts_in_scope,
-        )
-        if selected_a_clock_evidence is not None
-        and selected_a_clock_evidence.has_cells()
-        else None
-    )
     rows: List[Dict[str, Any]] = []
     for tau in range(max_tau + 1):
-        # Evidence is read from the unified `selected_evidence_by_tau`
-        # aggregate for both active and identity-carrier modes — the
-        # `engine_cohorts.obs_x/obs_y` forward-fill loop that previously
-        # drove window-mode evidence has been retired. Identity carrier
-        # is data, not a route (canonical invariant 6): the carrier
-        # observed surface is synthesised from the X-rooted subject
-        # primitive in identity mode and composed via topology max-flow
-        # in active mode; both feed `SelectedAClockEvidence.aggregate_by_tau`
-        # identically. `engine_cohorts` continues to feed the reducer's
-        # identity-carrier prefix and `a_pop` derivation (atom 3 retires
-        # those residual responsibilities).
-        projected_x = (
-            _draw_mean(selected_projection.x_draws, tau)
-            if selected_projection is not None else None
-        )
-        projected_y = (
-            _draw_mean(selected_projection.y_draws, tau)
-            if selected_projection is not None else None
-        )
+        # Evidence-named row fields come from the empirical operator's
+        # strict value stream. Model surfaces come from the conditioned
+        # operator's value stream. Coverage is now simple Cohort
+        # applicability for display alpha, not a DP mask/support ratio.
+        evidence_x_tau: Optional[float] = float(selected_projection.evidence_x_strict[tau])
+        evidence_y_tau: Optional[float] = float(selected_projection.evidence_y_strict[tau])
+        rate: Optional[float] = float(selected_projection.rate_strict[tau])
+        rate_pure: Optional[float] = rate
+        n_mature = int(selected_projection.applicable_cohort_count[tau])
 
-        # Coverage fields: design §3.2. Surface alongside evidence_x /
-        # evidence_y as the chart's freshness signal — drives per-point
-        # alpha attenuation in the FE companion (cohortComparisonBuilders
-        # evidence-line series only, design §4.3). Numeric in [0, 1] for
-        # any covered row; None only in the Absent state.
-        evidence_x_coverage_tau: Optional[float] = None
-        evidence_y_coverage_tau: Optional[float] = None
-        coverage_tau: Optional[float] = None
-
-        bucket = (
-            selected_evidence_by_tau.get(tau)
-            if selected_evidence_by_tau is not None else None
+        coverage_tau: Optional[float] = float(
+            selected_projection.applicability_row[tau],
         )
-        if bucket:
-            sum_x = float(bucket.get('sum_x', 0.0) or 0.0)
-            sum_y = float(bucket.get('sum_y', 0.0) or 0.0)
-            if tau <= tau_solid_max:
-                rate_x = sum_x
-                pure_x = sum_x
-            else:
-                rate_x = float(
-                    bucket.get('denominator_fe', sum_x)
-                    if bucket.get('denominator_fe') is not None
-                    else sum_x,
-                )
-                pure_x = float(
-                    bucket.get('denominator_pure', sum_x)
-                    if bucket.get('denominator_pure') is not None
-                    else sum_x,
-                )
-            # Numeric (may be 0) whenever the bucket exists. Design
-            # §3.1 covered-with-zero-mass: evidence_x = 0.0, not None.
-            # The single Absent gate is "no bucket" (no cohort has any
-            # cell at-or-before τ), preserved by the else branch.
-            evidence_x_tau = rate_x
-            evidence_y_tau = sum_y
-            rate = sum_y / rate_x if rate_x > 0 else None
-            rate_pure = sum_y / pure_x if pure_x > 0 else None
-            n_mature = int(bucket.get('n_cohorts', 0) or 0)
-            # Coverage = capped per-cohort share sum / admissible cohort
-            # count (design §2.2). cohort_denom is positive whenever any
-            # cohort has cells; min(1, sum/denom) caps against fixture
-            # quirks where shares could exceed 1.
-            cohort_denom = float(
-                bucket.get('n_cohorts_in_scope', 0.0) or 0.0,
-            )
-            if cohort_denom > 0:
-                sum_carrier_cov = float(
-                    bucket.get('sum_carrier_coverage', 0.0) or 0.0,
-                )
-                sum_subject_cov = float(
-                    bucket.get('sum_subject_coverage', 0.0) or 0.0,
-                )
-                evidence_x_coverage_tau = min(
-                    1.0, sum_carrier_cov / cohort_denom,
-                )
-                evidence_y_coverage_tau = min(
-                    1.0, sum_subject_cov / cohort_denom,
-                )
-                coverage_tau = min(
-                    evidence_x_coverage_tau,
-                    evidence_y_coverage_tau,
-                )
-            else:
-                evidence_x_coverage_tau = 0.0
-                evidence_y_coverage_tau = 0.0
-                coverage_tau = 0.0
-        else:
-            evidence_x_tau = None
-            evidence_y_tau = None
-            rate = None
-            rate_pure = None
-            n_mature = 0
 
         midpoint, fan_upper_val, fan_lower_val, fan_bands, projected_rate = (
             _quantiles(rate_draws, tau)
         )
+        # FC plan Atom 1: `model_midpoint` / `model_fan_*` / `model_bands`
+        # carry the **unspliced conditioned model surface** (F mode) —
+        # `selected_projection.f_rate_draws` on the epistemic operator
+        # basis. The unconditioned predictive overlay that previously
+        # occupied these fields is no longer surfaced. The optional
+        # model overlay (Appendix B: unconditioned model curve with
+        # epistemic bands; not a display mode) lives on under
+        # `model_curve_*` and is gated by the caller's display setting.
         model_midpoint, model_fan_upper, model_fan_lower, model_bands, _ = (
-            _quantiles(pred_rate_draws, tau)
+            _quantiles(selected_projection.f_rate_draws, tau)
         )
         (
             model_curve_midpoint,
@@ -5605,23 +5385,27 @@ def _project_runtime_rows(
         # `evidence_y` as the "crown" component, and the tooltip surfaces
         # `forecast n=${forecast_x}, k=${forecast_y} (${rate})` where the
         # forecast rate is meaningful only when both are future-only.
-        # Subtract observed evidence from both projection means so the
-        # ratio is the conditioned future rate (and converges to
-        # p_infinity at saturation when observation is rate-consistent).
-        forecast_y_tau = projected_y if is_active_carrier else None
-        forecast_x_tau = projected_x if is_active_carrier else None
-        if (
-            is_active_carrier
-            and forecast_y_tau is not None
-            and evidence_y_tau is not None
-        ):
-            forecast_y_tau = max(0.0, float(forecast_y_tau) - float(evidence_y_tau))
-        if (
-            is_active_carrier
-            and forecast_x_tau is not None
-            and evidence_x_tau is not None
-        ):
-            forecast_x_tau = max(0.0, float(forecast_x_tau) - float(evidence_x_tau))
+        #
+        # Atom 6: these come directly from the FC continuation's future
+        # residual surfaces `ef_forecast_x` / `ef_forecast_y` (defined
+        # as `ef_x − strict_x` / `ef_y − strict_y` by the spine). The
+        # legacy post-hoc subtraction
+        # `max(0, projected − evidence_strict)` is gone — the residual
+        # is now produced by the frontier-continuation DP, not
+        # reconstructed at row-projection time. Negative residuals
+        # would be a frontier-ledger conservation defect; the engine
+        # surfaces them rather than clamping. `is_active_carrier` gates
+        # whether the field is emitted at all (identity-carrier
+        # contract unchanged); inside the active branch the value is
+        # whatever the predictive continuation produced.
+        forecast_y_tau = (
+            _draw_mean(selected_projection.ef_forecast_y, tau)
+            if is_active_carrier else None
+        )
+        forecast_x_tau = (
+            _draw_mean(selected_projection.ef_forecast_x, tau)
+            if is_active_carrier else None
+        )
 
         # Midpoint and fan emit across all epochs (A/B/C) so consumers
         # asserting the per-cohort calibrated E+F surface have values at
@@ -5631,96 +5415,12 @@ def _project_runtime_rows(
         # coincide with the solid E line and would double-draw).
         # Reducer emits everything it can compute; the chart picks.
 
-        # E+F-mode E line: applicable-cohort coverage-blend of the
-        # empirical rate with the unconditioned-predictive model curve.
-        # Single uniform expression — epoch behaviours fall out as
-        # algebraic limits, no per-epoch branching:
-        #   applicable(τ) = cohorts whose tau_max >= τ
-        #   coverage(τ)   = n_admissable_at_τ / applicable(τ), in [0, 1]
-        #   blended(τ)    = empirical × coverage + model_midpoint × (1 − coverage)
-        # Limits:
-        #   coverage=1            → blended = empirical (epoch A all data;
-        #                                              epoch B all-mature data)
-        #   0 < coverage < 1      → mixed             (data hole in A;
-        #                                              partial mature in B)
-        #   coverage=0, applicable>0
-        #                         → blended = model_midpoint (data hole everywhere)
-        #   applicable=0          → blended = None    (epoch C — midpoint owns
-        #                                              the curve)
-        #
-        # The empirical input to the blend is the per-cohort selected-Cohort
-        # projection central value (Σ Y_c / Σ X_c with Pop D + Pop C
-        # extensions per COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md
-        # "Window semantics" / "Cohort semantics" factorised form), exposed
-        # as `midpoint` in this scope. The forward-filled `rate`,
-        # `rate_pure`, `evidence_x`, `evidence_y` are the E-mode / tooltip
-        # empirical surfaces and are deliberately untouched by this block.
-        # The reason `rate` is NOT used here:
-        # - In window mode Pop C is empty by definition (semantics doc:
-        #   "Later arrivals to X are outside the selected window() cohort").
-        #   With no Pop C in the data and no Pop D applied to the row-builder
-        #   forward-fill, `rate` plateaus past the frontier near
-        #   subject_cdf(frontier) · span_p. For multi-hop window subjects the
-        #   joint CDF rises slowly, so `rate ≈ span_p` (mature-saturated)
-        #   sits *above* `model_midpoint = subject_cdf(τ) · span_p` (still
-        #   climbing). Blending those two with cov < 1 produces a step
-        #   downward at τ = tau_solid_max + 1 — a category mismatch between
-        #   an asymptotic empirical and a trajectory model.
-        # - The projection's `midpoint` adds the Pop D residual
-        #   `(x_frozen − y_frozen) · R_subj(τ; frontier)` per cohort
-        #   (semantics doc Window factorised form), extending the empirical
-        #   onto the same `subject_cdf · span_p` trajectory the model lives
-        #   on. The blend then mixes commensurate quantities.
-        # - In epoch A every cohort is in the observed-prefix branch of the
-        #   reducer (no Pop D / Pop C residual added), so per-particle
-        #   Y_total/X_total reduces deterministically to Σ obs_y / Σ obs_x —
-        #   numerically equal to `rate`. This block is therefore a no-op for
-        #   epoch A in both window and cohort modes.
-        # - In active cohort mode `rate` was already trajectory-tracking
-        #   (via data-driven Pop C in `denominator_fe`); switching to
-        #   `midpoint` here matches it to within particle-quantile noise and
-        #   preserves the previously-correct epoch-B behaviour.
-        # Falls back to `rate` only when the projection is unavailable.
-        applicable_count_tau = sum(
-            1 for c in (cohort_list or [])
-            if int(c.get('tau_max', 0) or 0) >= tau
-        )
-        if applicable_count_tau <= 0:
-            cov_for_blend: Optional[float] = None
-        else:
-            cov_for_blend = max(
-                0.0, min(1.0, n_mature / applicable_count_tau),
-            )
-
-        empirical_for_blend: Optional[float] = (
-            midpoint if midpoint is not None else rate
-        )
-
-        if cov_for_blend is None:
-            rate_blended: Optional[float] = None
-        elif empirical_for_blend is None:
-            # Empirical undefined (zero-mass admissable set, e.g. covered
-            # cohorts but x=0, and the projection is also unavailable).
-            # Empirical contributes nothing; blend reduces to model.
-            rate_blended = model_midpoint
-        elif model_midpoint is None:
-            rate_blended = empirical_for_blend
-        else:
-            rate_blended = (
-                float(empirical_for_blend) * cov_for_blend
-                + float(model_midpoint) * (1.0 - cov_for_blend)
-            )
-
         rows.append({
             'tau_days': tau,
             'rate': rate,
             'rate_pure': rate_pure,
-            'rate_blended': rate_blended,
-            'applicable_coverage': cov_for_blend,
             'evidence_y': evidence_y_tau,
             'evidence_x': evidence_x_tau,
-            'evidence_x_coverage': evidence_x_coverage_tau,
-            'evidence_y_coverage': evidence_y_coverage_tau,
             'coverage': coverage_tau,
             'projected_rate': projected_rate,
             'forecast_y': forecast_y_tau,
@@ -5750,14 +5450,36 @@ def _project_runtime_rows(
         })
     if rows and _selected_cohort_diag is not None:
         rows[0]['_selected_cohort_projection'] = _selected_cohort_diag
+    if emit_diagnostics and rows:
+        rows[0]['_row_evidence_source'] = {
+            'evidence_x': (
+                'model_span_spine.project_selected_cohort_rows.'
+                'evidence_x_strict'
+            ),
+            'evidence_y': (
+                'model_span_spine.project_selected_cohort_rows.'
+                'evidence_y_strict'
+            ),
+            'rate': 'model_span_spine.project_selected_cohort_rows.rate_strict',
+            'note': (
+                'Production row evidence fields are emitted from the '
+                'empirical spine selected_projection, not from '
+                'SelectedAClockEvidence.'
+            ),
+        }
+        rows[0]['_empirical_spine_diagnostics'] = dict(
+            selected_projection.diagnostics or {},
+        )
     selected_evidence_diag = getattr(
         runtime,
         'selected_a_clock_evidence_diagnostics',
         None,
     )
-    # The `_selected_a_clock_evidence` row block is forensic-only — large
-    # enough to overflow V8's max string length on multi-hop active queries
-    # and not consumed by the FE. Emit only with --diag.
+    # The selected-clock evidence object is forensic-only in the current row
+    # path. Production row evidence fields above come from
+    # `model_span_spine.project_selected_cohort_rows`; this block exists only
+    # to inspect the legacy selected-clock construction and must not be read
+    # as the owner of row `evidence_x` / `evidence_y`.
     if emit_diagnostics and rows and (
         selected_a_clock_evidence is not None or selected_evidence_diag is not None
     ):
@@ -5807,7 +5529,10 @@ def _project_runtime_rows(
                 }
                 for edge_id, by_anchor in raw.items()
             }
-        rows[0]['_selected_a_clock_evidence'] = {
+        rows[0]['_forensic_selected_a_clock_evidence'] = {
+            'forensic_only': True,
+            'row_evidence_owner': False,
+            'row_evidence_source': 'selected_projection_empirical_spine',
             'source': (
                 selected_a_clock_evidence.source
                 if selected_a_clock_evidence is not None
@@ -6438,7 +6163,16 @@ def compute_cohort_maturity_rows_v3(
             runtime.request_evidence_candidates,
             _pop_root_for_lookup,
         )
-    if _is_active_carrier and fe.engine_cohorts:
+    if fe.engine_cohorts:
+        # Per-cohort base mass population — uniform across carrier modes
+        # per invariant 6 (COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS
+        # §"Identity carrier is data, not a route"). The candidate's
+        # root-window `n` per anchor day is the authoritative source for
+        # ``a_pop`` whether the carrier route is non-trivial (active) or
+        # collapses to identity (``population_root == X``). The frame-
+        # bundle ``a_frozen`` is never an admissible fallback (Phase 3
+        # plan); the only categorical alternative to real evidence is
+        # the empty-frames unit prior (``tau_observed = -1`` sentinel).
         for ec, ci in zip(fe.engine_cohorts, fe.cohort_list):
             ad = ci.get('anchor_day')
             if ad is None:
@@ -6452,23 +6186,18 @@ def compute_cohort_maturity_rows_v3(
                 ec.a_pop = float(n_root)
                 a_pop_provenance[ad_str] = 'root_window_carrier_n'
             elif int(ci.get('tau_observed', 0) or 0) < 0:
-                # Empty-frames synthesis (`tau_observed = -1` sentinel):
-                # no frames at all, no expectation of root-window carrier
-                # evidence either. Preserve the synthesised `a_pop = 1.0`
-                # so the projection produces the natural Bayesian
-                # degeneracy (posterior = prior) — i.e. the unconditioned
-                # carrier × subject convolution at unit population. The
-                # zero-fallback below only fires when frames ARE present
-                # but root-window evidence is absent, which is the case
-                # the seam invariant excludes from the active projection.
+                # Empty-frames synthesis: no frames at all, no expectation
+                # of root-window carrier evidence either. Preserve the
+                # synthesised ``a_pop = 1.0`` so the projection produces
+                # the natural Bayesian degeneracy — unit cohort through
+                # the predictive carrier × subject convolution.
                 a_pop_provenance[ad_str] = 'empty_frames_prior'
             else:
-                # No admissible root-window carrier evidence for this
-                # anchor day under non-empty frames. The frame-bundle 'a'
-                # is not an admissible fallback (Phase 3 implementation
-                # plan); zero the cohort's base mass so the active
-                # projection excludes it and the downstream sum collapses
-                # correctly.
+                # Frames exist but no admissible root-window carrier
+                # evidence for this anchor day. Zero the cohort's base
+                # mass; the spine treats this as an algebraic no-op
+                # (zero root seed, zero occupancy, zero contribution to
+                # every aggregate).
                 ec.a_pop = 0.0
                 a_pop_provenance[ad_str] = 'no_root_window_evidence'
 
@@ -6611,6 +6340,7 @@ def compute_cohort_maturity_rows_v3(
         tau_future_max=row_tau_future_max,
         sweep_to=sweep_to,
         band_level=band_level,
+        n_by_anchor=n_by_anchor,
         selected_a_clock_evidence=selected_a_clock_evidence,
         projection_bases=projection_bases,
         emit_diagnostics=emit_diagnostics,
@@ -6632,7 +6362,8 @@ def compute_cohort_maturity_rows_v3(
                     tau_solid_max=row_tau_solid_max,
                     max_tau=fe.max_tau,
                 )
-                if emit_diagnostics else ()
+                if emit_diagnostics and selected_a_clock_evidence is not None
+                else ()
             ),
         ),
     )

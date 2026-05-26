@@ -46,13 +46,15 @@ _TOL = 0.05
 _GRAPH = "synth-mirror-4step"
 _EDGE_ID = "m4-registered-to-success"
 
-# Same case matrix as chart-graph-agreement-test.sh (lines 63-66).
+# Representative case matrix. The original bash harness used a fixture-lifetime
+# "full-range" scope here; this test only needs two non-vacuous in-fixture
+# scopes to prove chart/graph agreement without turning into a load test.
 # label | chart_dsl | pp_dsl
 _CASES: list[tuple[str, str, str]] = [
     (
-        "full-range",
-        "from(m4-registered).to(m4-success).cohort(12-Dec-25:21-Mar-26)",
-        "cohort(12-Dec-25:21-Mar-26)",
+        "mid-range",
+        "from(m4-registered).to(m4-success).cohort(1-Feb-26:14-Feb-26)",
+        "cohort(1-Feb-26:14-Feb-26)",
     ),
     (
         "narrow-range",
@@ -127,6 +129,7 @@ def _run_analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
             "--query", dsl,
             "--type", "cohort_maturity",
             "--no-snapshot-cache",
+            "--mc-draws", "64",
             "--format", "json",
         ]
         try:
@@ -138,7 +141,8 @@ def _run_analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
             )
     cmd = [
         "bash", str(_ANALYSE_SH), graph, dsl,
-        "--type", "cohort_maturity", "--no-snapshot-cache", "--format", "json",
+        "--type", "cohort_maturity", "--no-snapshot-cache",
+        "--mc-draws", "64", "--format", "json",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(_REPO_ROOT), timeout=300)
     if result.returncode != 0:

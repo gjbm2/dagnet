@@ -622,14 +622,17 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Analysis results
     """
+    from runner.forecasting_settings import settings_from_dict, use_request_settings
+    settings = settings_from_dict(data.get('forecasting_settings'))
     # Body-level cache bypass — works on every transport (dev FastAPI, Vercel
     # BaseHTTPRequestHandler, direct Python callers). The dev middleware already
     # handles ?no-cache=1 at the URL level; this covers the request body path.
-    if data.get('no_cache'):
-        from snapshot_service import cache_bypass_ctx
-        with cache_bypass_ctx():
-            return _handle_runner_analyze_impl(data)
-    return _handle_runner_analyze_impl(data)
+    with use_request_settings(settings):
+        if data.get('no_cache'):
+            from snapshot_service import cache_bypass_ctx
+            with cache_bypass_ctx():
+                return _handle_runner_analyze_impl(data)
+        return _handle_runner_analyze_impl(data)
 
 
 def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1990,6 +1993,13 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
     and reads p@∞ from the last chart row. This guarantees identical
     numbers to the cohort maturity v3 chart with zero new engine code.
     """
+    from runner.forecasting_settings import settings_from_dict, use_request_settings
+    _request_settings = settings_from_dict(data.get('forecasting_settings'))
+    with use_request_settings(_request_settings):
+        return _handle_conditioned_forecast_impl(data)
+
+
+def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
     import math
     import numpy as _np
     from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3

@@ -27,6 +27,7 @@ edges:
     onset: 0.0
     mu: 0.8
     sigma: 0.4
+    latency_parameter: true
   synth-sk-anchor-to-target:
     from: synth-sk-anchor
     to: synth-sk-target
@@ -34,6 +35,7 @@ edges:
     onset: 0.5
     mu: 1.2
     sigma: 0.5
+    latency_parameter: true
   synth-sk-middle-to-target:
     from: synth-sk-middle
     to: synth-sk-target
@@ -41,6 +43,7 @@ edges:
     onset: 1.0
     mu: 1.0
     sigma: 0.4
+    latency_parameter: true
   synth-sk-target-to-outcome:
     from: synth-sk-target
     to: synth-sk-outcome
@@ -48,6 +51,7 @@ edges:
     onset: 0.5
     mu: 0.8
     sigma: 0.3
+    latency_parameter: true
 simulation:
   mean_daily_traffic: 500
   n_days: 100

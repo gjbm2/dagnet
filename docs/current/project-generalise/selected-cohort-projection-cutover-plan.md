@@ -9,7 +9,8 @@
 
 | Reference | What it pins |
 |---|---|
-| [phase-6-evidence-operator-contract.md](phase-6-evidence-operator-contract.md) | Four rules (§3), unified DAG mass-propagation (§4.3), cohort cancellation (§4.4), window non-cancellation (§4.5), three-stream coverage (§4.8), **empirical kernel form** (§4.9), spine mapping (§5), **strict vs adjusted readout** (§5.6), blind test families (§6.1, §6.2), 14-failure crosswalk (§6.5). **Appendix A (UNDER REVIEW)** — discretisation kernel construction (ΔG vs ΔH); the kernel-shift correction blocks Stage 2 until resolved. |
+| [phase-6-evidence-operator-contract.md](phase-6-evidence-operator-contract.md) | Four rules (§3), unified DAG mass-propagation (§4.3), cohort cancellation (§4.4), window non-cancellation (§4.5), **empirical kernel form** (§4.9), spine mapping (§5), blind test families (§6.1, §6.2), 14-failure crosswalk (§6.5). **Supersession note (25-May-26)**: the old adjusted-evidence / IPW / MCAR §5.6 branch is no longer an active cutover requirement; coverage was reduced to row applicability/freshness after the coverage-design rollback. |
+| [checkpoint-frontier-coverage-proposal.md](checkpoint-frontier-coverage-proposal.md) | Historical coverage proposal. Its adjusted-evidence/IPW direction was not adopted as the active cutover contract after coverage proved poorly designed for row semantics. |
 | [cohort-maturity-evidence-coverage-design.md](../cohort-maturity-evidence-coverage-design.md) | Three-state per-edge trichotomy (§3.1), per-row coverage (§2), display semantics (§4) |
 | [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) | Cohort vs window semantics; Appendix A invariant 5 (two-clocks T1 = role-root) |
 | [CF_ROW_PIPELINE.md](../codebase/CF_ROW_PIPELINE.md) | Current legacy pipeline; the seam invariant (§3) |
@@ -23,8 +24,8 @@ This plan does not restate the algebra or the contracts. It states the imperativ
 
 Replace the legacy selected-Cohort row machinery (`_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, `_RateAttributedSubjectPrefix`, `_selected_cohort_group_rate_draws`, `_build_observed_span_evidence_surface`, `_join_conditioned_carrier_backmap`, `_interpolated_rate_at`, and `SelectedAClockEvidence` as a prefix authority) with a Spine-orchestrated row reducer that reads from **two operator families** through one DP/readout core:
 
-- **Conditioned model operator** (already in place, per Phase 6 §4.1) — per-edge kernel is the fitted posterior CDF (`p × Δcdf`) from `ConditionedTransitionPrimitive` via `condition_primitive`. Drives `midpoint`, `fan_*`, `forecast_x`, `forecast_y`, `completeness`, and — via the §4.8 masked-kernel streams — `coverage_x` / `coverage_y` / `exposure_x` / `exposure_y` / `frontier`.
-- **Empirical evidence operator** (NEW — must be written, per Phase 6 §4.9) — per-edge kernel is `Δk_emp/n_emp` from admitted snapshot rows on the selected clock, forward-filled across absent ages, per-draw. Drives strict per-anchor `evidence_x_strict_by_anchor_tau` / `evidence_y_strict_by_anchor_tau`. The reducer derives strict (`evidence_x`, `evidence_y`, `rate`) and adjusted (`evidence_x_adjusted`, `evidence_y_adjusted`, `rate_adjusted`) row-level surfaces from these plus the conditioned coverage streams, per Phase 6 §5.6.
+- **Conditioned model operator** (already in place, per Phase 6 §4.1) — per-edge kernel is the fitted posterior CDF (`p × Δcdf`) from `ConditionedTransitionPrimitive` via `condition_primitive`. Drives `midpoint`, `fan_*`, `forecast_x`, `forecast_y`, `completeness`, and the model-only surfaces.
+- **Empirical evidence operator** (landed, per Phase 6 §4.9) — per-edge kernel is `Δk_emp/n_emp` from admitted snapshot rows on the selected clock, forward-filled across absent ages, per-draw. Drives strict per-anchor `evidence_x_strict_by_anchor_tau` / `evidence_y_strict_by_anchor_tau`. The reducer derives only strict row-level surfaces (`evidence_x`, `evidence_y`, `rate`) from these. The abandoned adjusted/IPW surfaces (`evidence_x_adjusted`, `evidence_y_adjusted`, `rate_adjusted`) are deliberately absent.
 
 Both operators share: the same admitted candidate rows, the same arrival-map clock placement, the same `compose_primitive_span` composer, the same DAG DP, the same three-stream support/exposure mask, the same `seed_subject_from_carrier` per-cohort handoff. They differ only in the per-edge kernel construction (parametric posterior vs empirical row-derived).
 
@@ -39,7 +40,7 @@ When this plan closes:
 3. Per-cell observation masks (Phase 6 §4.7) plumb from snapshot evidence rows through `bind_primitive_evidence` → `condition_primitive` → `ConditionedTransitionPrimitive` → `compose_primitive_span` → the composer's three-stream DP, and equivalently through the new empirical-evidence path. The `mask = np.ones((S, T))` placeholder at [subject_span_composer.py:473](../../graph-editor/lib/runner/subject_span_composer.py#L473) is gone.
 4. `_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, `_RateAttributedSubjectPrefix`, `_selected_cohort_group_rate_draws`, `_build_observed_span_evidence_surface`, `_build_zero_edge_observed_surface`, `_join_conditioned_carrier_backmap`, `_interpolated_rate_at` (and its caches), `_composed_pair_request_cdf_draws`, and `generalised_span_model_shadow.py` are deleted. `grep -rn` over `graph-editor/lib/runner/` returns zero hits.
 5. `SelectedAClockEvidence` is reduced to a diagnostic/schema adapter — owns no amplitude arithmetic, no prefix construction, no frontier authority.
-6. Outside-in oracle remains green. **Strict E-mode semantics preserved exactly** — `evidence_x`, `evidence_y`, `rate` match legacy aggregations on the selected clock; `coverage`, `evidence_x_coverage`, `evidence_y_coverage`, `cohorts_covered_*`, frontier match legacy reductions. **E+F semantics shift cleanly** from the legacy linear `rate_blended` to the explicit IPW `rate_adjusted` per Phase 6 §5.6 — the row dict carries both names during cutover (`rate_blended` set equal to `rate_adjusted` for back-compat) and the FE switch from `baseRate` to `rate_adjusted` is a post-cutover follow-up. No new xfail markers. No loosened tolerances. No fixture or DSL weakening. No flag-OFF acceptance (per AP59).
+6. Outside-in oracle remains green. **Strict evidence semantics are preserved exactly** — `evidence_x`, `evidence_y`, and `rate` come from the empirical spine and match the accepted selected-clock evidence contract. `coverage` is no longer the old masked-support/IPW surface; it is a simple row applicability/freshness signal. The abandoned `rate_blended` / `rate_adjusted` line is not a closure target. No new xfail markers. No loosened tolerances. No fixture or DSL weakening. No flag-OFF acceptance (per AP59).
 7. Codebase docs ([CF_ROW_PIPELINE.md](../codebase/CF_ROW_PIPELINE.md), [FORECAST_RUNTIME_ARCHITECTURE.md](../codebase/FORECAST_RUNTIME_ARCHITECTURE.md)) describe the cutover state, not the legacy state.
 
 ## Risk structure (honest)
@@ -72,13 +73,13 @@ Shadow comparison (running new alongside legacy under `--diag`) is an **optional
 - [x] Stage 1 — Prep — completed 16-May-26
 - [x] Stage 2 — Build — completed 16-May-26
   - [x] Stage 2(a) — atoms 2.1–2.3 (per-anchor outputs) + core 2.4/2.5 tests — landed 16-May-26
-  - [x] Stage 2(b) — Atom 2.3 row-level fields (strict, adjusted, rate row-level aggregations with admissibility filter and IPW divide) + §6.1/§6.2/§5.6 invariant tests + MCAR battery — landed 16-May-26
+  - [x] Stage 2(b) — strict empirical spine and §6.1/§6.2 blind tests landed 16-May-26. The adjusted/IPW/MCAR branch that briefly existed here is superseded by the coverage rollback; do not count it as remaining work.
   - **16-May-26 review note** — Atom 2.1 source-day mask defect fixed after review: conditioned support/exposure now read row presence by source day where the primitive binding supplies source-day masks, while preserving local-clock aggregate masks for identity/window helper bindings.
-  - **§5.6 adjusted-evidence note** — the reducer-owned adjusted numerator now deliberately avoids strict forward-fill before the IPW divide. Treat this as the intended resolution of the §5.6 / §4.9 interaction, pending contract text cleanup; do not regress it back to `strict / coverage`.
+  - **25-May-26 coverage rollback note** — adjusted evidence, IPW, MCAR recovery, and `rate_adjusted` are no longer active requirements. Coverage is an applicability/freshness display scalar, not an evidence reweighting denominator.
   - **16-May-26 kernel-construction resolution** — the Appendix A discretisation question is answered in code by separating two surfaces from the same per-draw particles: endpoint `G(τ)` is what lives on `TimingPosterior.cdf_draws` (the chart-published "value at age τ" surface, consumed by the composer and the legacy reducer); day-averaged `B(τ) = ∫_τ^{τ+1} G(v) dv` stays local to the IS likelihood cell-differencing in `primitive_conditioning._run_is_proposal` so cell probabilities are formed against the daily-bucket convention snapshot rows already use. The two helpers (`_build_per_draw_cdf` for endpoint, `timing_particles.build_row_aligned_lognormal_cdf_from_draws` for row-aligned) are both scipy-free via `numpy_stats.normal_cdf`. The earlier failure mode — feeding the row-aligned `B(τ)` onto `TimingPosterior.cdf_draws` — shifted the model curve ~½ day forward and was visible as the no-evidence single-hop oracle mismatch in `test_no_evidence_single_hop_matches_unconditioned_fw_convolution_midline` and the two `test_v3_empty_frames_*` contract tests.
-- [ ] Stage 3 — Cut over (blocked on §5.6 contract text cleanup)
+- [/] Stage 3 — Cut over — partially landed; call-site flip is in code, outside-in gate still open
 - [ ] Stage 4 — Clean up
-- [ ] Stage 5 — FE / output follow-ups
+- [ ] Stage 5 — stale FE / output follow-ups
 
 ---
 
@@ -193,22 +194,22 @@ project_selected_cohort_rows(
 `selected_cohorts` as before. `SelectedCohortRowProjection` grows fields to distinguish the two operator readouts:
 
 - **From conditioned operator (model surfaces)**: `rate_draws_model`, `x_draws_model`, `y_draws_model` shape `(S, T)`. These drive `midpoint`, `fan_*`, `forecast_x`, `forecast_y`.
-- **From conditioned operator (masked — §4.8 streams, read at both terminals per Phase 6 §5.6)**:
-  - At X (carrier terminal): `coverage_x_by_anchor_tau`, `exposure_x_by_anchor_tau` from `project_coverage_draws` / `project_cumulative_exposure_draws(read_node_*_draws(composed_carrier, x_node_id))`.
-  - At Z (chain terminal): `coverage_y_by_anchor_tau`, `exposure_y_by_anchor_tau`, `frontier_by_anchor` from the same projections applied at the subject terminal.
-  - All `Mapping[anchor_day, ndarray(T,)]`. Drive `evidence_x_coverage`, `evidence_y_coverage`, row-level `coverage`, `cohorts_covered_*`, frontier τ per anchor, and the IPW scaling factors for the adjusted evidence variants below.
-- **From empirical operator (strict per-anchor cumulatives, per Phase 6 §4.9)**: `evidence_x_strict_by_anchor_tau`, `evidence_y_strict_by_anchor_tau` — `Mapping[anchor_day, ndarray(T,)]`. These are the unadjusted per-anchor cumulatives, summed across draws to the per-anchor scalar surface. The reducer derives the strict (E-mode) and adjusted (E+F-mode) row-level fields from these plus the per-anchor `coverage_x` / `coverage_y` / `exposure_x` / `exposure_y` above, per Phase 6 §5.6.
+- **Applicability/freshness coverage (corrected 25-May-26)**:
+  `applicability_row` and `applicable_cohort_count` are simple selected-Cohort
+  freshness signals. They do not come from masked support/exposure streams
+  and do not drive IPW or adjusted evidence.
+- **From empirical operator (strict per-anchor cumulatives, per Phase 6 §4.9)**: `evidence_x_strict_by_anchor_tau`, `evidence_y_strict_by_anchor_tau` — `Mapping[anchor_day, ndarray(T,)]`. These are the unadjusted per-anchor cumulatives, summed across draws to the per-anchor scalar surface. The reducer derives the strict row-level fields (`evidence_x`, `evidence_y`, `rate`) from these; no adjusted row fields are produced.
 
 Body — top-to-bottom, no branches, two operator passes:
 
 1. Build per-cohort seed at X via `seed_subject_from_carrier(...)` against `composed_carrier` (conditioned). Per-anchor seed for model projection.
 2. Build per-cohort seed at X via `seed_subject_from_carrier(...)` against `composed_empirical_carrier`. Per-anchor seed for evidence projection. (Identity carrier degenerates trivially in both — zero-edge identity span has `δ(0)` at root.)
-3. Read the conditioned operator's three streams (value / support / exposure with row-presence mask, per Phase 6 §4.8) at **both** terminals against the per-anchor model seed:
-   - At Z (chain terminal): aggregate per (draw, anchor, τ) → `rate_draws_model`, `x_draws_model`, `y_draws_model`, `coverage_y_by_anchor_tau`, `exposure_y_by_anchor_tau`.
-   - At X (carrier terminal): aggregate per (anchor, τ) → `coverage_x_by_anchor_tau`, `exposure_x_by_anchor_tau`.
-   Both terminals share the same conditioned propagation through `composed_subject` / `composed_carrier`; only the read node differs. In window or `A=X` mode the carrier is the identity span and `coverage_x = 1`, `exposure_x = 1` trivially per (anchor, τ).
-4. Convolve empirical seed through `composed_empirical_subject` per-node ledgers — value stream only, per Phase 6 §4.9. Aggregate per (anchor, τ) → `evidence_x_strict_by_anchor_tau`, `evidence_y_strict_by_anchor_tau`. These are the per-anchor strict cumulatives the reducer uses to derive both strict (E-mode) and adjusted (E+F-mode) row-level evidence.
-5. Frontier per anchor = `max τ where exposure_y > 0` (chain-terminal exposure; the conditioned mask-propagated stream).
+3. Read the conditioned operator's value stream for model surfaces:
+   aggregate per (draw, anchor, τ) → `rate_draws_model`,
+   `x_draws_model`, `y_draws_model`, plus the unspliced `f_*`
+   conditioned-model surface used by the chart-surface workstream.
+4. Convolve empirical seed through `composed_empirical_subject` per-node ledgers — value stream only, per Phase 6 §4.9. Aggregate per (anchor, τ) → `evidence_x_strict_by_anchor_tau`, `evidence_y_strict_by_anchor_tau`. These are the per-anchor strict cumulatives the reducer uses to derive row-level strict evidence.
+5. Applicability per anchor comes from the selected-Cohort input horizons (`tau_observed` / `tau_max`), not masked support/exposure coverage.
 6. Return populated dataclass.
 
 The reducer never reads `runtime.population_root`, `runtime.denominator_node`, `is_window`, `is_active_carrier`, `engine_cohorts.obs_x/obs_y`, or any mode flag. Identity vs active produces different numerics solely because the carrier spans differ.
@@ -224,38 +225,18 @@ New file: `graph-editor/lib/tests/test_model_span_spine_selected_cohort.py`. Cov
   - `evidence_x_by_anchor_tau` / `evidence_y_by_anchor_tau` reflect the empirical rows.
   - The two surfaces are **distinct** (not numerically equal) but **clock-aligned** (the τ axis is the same; the same per-anchor seed flows through both).
 - **Same-data parity test**: for a fixture where the parametric fit is good and evidence is rich, verify that empirical-operator saturation Y ≈ conditioned-operator saturation Y to within sampling noise. This is the "agreement at the limit" check — they may disagree at finite τ, but at saturation with rich data they converge.
-- **Strict vs adjusted decomposition (Phase 6 §5.6)**:
-  - Strict path: with a fixture of full coverage everywhere, `evidence_x` / `evidence_y` / `rate` equal the per-anchor admissibility-filtered sums of `evidence_*_strict_by_anchor_tau`.
-  - Adjusted path: with a fixture where some cohorts are partially observed (`coverage_y_A ∈ (0, 1)`), `evidence_y_adjusted = Σ_admissible evidence_y_strict_A / coverage_y_A` recovers the model's projected mass exactly when the empirical kernel is set equal to the conditioned kernel (sanity check on the IPW formula). With genuine empirical data, adjusted is bounded above by model-projected total and approaches it as coverage → 1.
-  - Admissibility filter: cohorts with `exposure_y_A[τ] = 0` contribute neither to strict nor adjusted sums at that τ.
-  - Per-terminal coverage: `coverage_x_A` and `coverage_y_A` are read at distinct nodes (X and Z) and used independently in the adjusted formula. Active-cohort fixture verifies `coverage_y_A ≤ coverage_x_A` in mass-weighted terms.
+- **Strict evidence / applicability split (corrected 25-May-26)**:
+  - Strict path: `evidence_x` / `evidence_y` / `rate` equal the accepted empirical selected-clock surface.
+  - Applicability path: `coverage` fades as selected Cohorts move past their last fresh observation.
+  - No adjusted evidence, no IPW divide, and no per-terminal coverage arithmetic are active cutover requirements.
 
-### Atom 2.5 — MCAR sparsity outside-in oracle (new test family)
+### Atom 2.5 — MCAR sparsity oracle (superseded)
 
-New file: `graph-editor/lib/tests/test_mcar_sparsity_recovery.py`. Synthetic-graph oracle that injects missing-completely-at-random sparsity into a fully-observed baseline and verifies the adjusted readout recovers the dense-data baseline within a stated noise tolerance. The dense baseline is the ground truth; sparsity injection is the deviation; IPW under MCAR is the claim that the adjusted output reverts to baseline.
-
-**Fixture shape**:
-
-- Synthetic multi-hop graph (3–4 edges, mix of serial / parallel-paths / branching topologies) generated with deterministic, calibrated edge probabilities and latencies — no MC noise in the data generation itself, so the dense baseline is analytic.
-- A "dense" snapshot pool that admits a row at every (edge, source-day, age) cell in the wavefront support — this is the baseline. Run the row reducer; capture `evidence_y_dense[τ]`, `evidence_x_dense[τ]`, `coverage_dense[τ]`, `rate_dense[τ]`.
-- A "sparse" snapshot pool derived from the dense pool by removing rows at random, independently per cell, with a fixed probability `p_drop ∈ {0.1, 0.3, 0.5}` per fixture variant. Independence is the MCAR injection; the dropout is uncorrelated with `(s, age, edge, k_value, n_value)` by construction.
-- For each `p_drop` variant, run the reducer on the sparse pool. Capture `evidence_y_strict_sparse[τ]`, `evidence_y_adjusted_sparse[τ]`, `coverage_sparse[τ]`, `rate_adjusted_sparse[τ]`.
-
-**Assertions**:
-
-- **Strict shows the drop**: `evidence_y_strict_sparse[τ] < evidence_y_dense[τ]` at sufficiently high τ for `p_drop > 0`. Direction of inequality, not magnitude — strict undercounts when rows are missing, by definition.
-- **Coverage drops proportionally to `p_drop`**: row-level `coverage_sparse[τ] ≈ 1 − p_drop`-ish at small τ where most cohorts are admissible; the relationship is mass-weighted so it's approximate, not exact. Quantitative check: `coverage_sparse` is monotone decreasing in `p_drop` across the variants.
-- **Adjusted recovers the dense baseline**: for each `p_drop` variant, `evidence_y_adjusted_sparse[τ] ≈ evidence_y_dense[τ]` and `rate_adjusted_sparse[τ] ≈ rate_dense[τ]` within an explicit tolerance. The tolerance is bias-free (centred on zero) but grows with `1/coverage²` per Phase 6 §5.6 — use a finite-sample variance bound derived from the per-anchor admissible-count and `p_drop`, not a fixed numeric tolerance.
-- **Admissibility filter behaves**: at τ past the synthetic frontier, exposure_y drops to 0 for late anchors; the adjusted row evidence shrinks toward zero as fewer cohorts contribute, while the model curve (read separately from the conditioned operator) continues smoothly. Verify the adjusted curve does not blow up at the frontier.
-- **Per-terminal coverage**: at the carrier terminal (X), `coverage_x_sparse[τ]` recovers correctly under the same `p_drop`-injected sparsity restricted to carrier edges only; verify it's independent of subject-edge dropouts.
-
-**Tolerance derivation**: the IPW estimator's variance is `Var[evidence_adjusted] ≈ Σ_A (evidence_strict_A)² × Var[1/coverage_A] ≈ Σ_A evidence_strict_A² × p_drop × (1 − p_drop) / (n_admitted_A × coverage_A²)` per Horvitz-Thompson. Use this to set a per-τ tolerance band; pass iff the observed delta is within ~3 standard deviations.
-
-**Build acceptance** (in addition to the existing tests):
-- `test_mcar_sparsity_recovery.py` all green across `p_drop ∈ {0.1, 0.3, 0.5}` variants.
-- A "stress" variant with `p_drop = 0.8` confirmed to fail the standard tolerance but still bias-free in mean over many fixture seeds — proving the variance-blowup story without claiming pointwise accuracy.
-
-Tests are blind — expected numerics from first principles, not from current production output. Tolerance: float precision where deterministic (empirical operator); sampling-noise tolerance where MC (conditioned operator).
+This atom is superseded by the 25-May-26 coverage rollback. The MCAR/IPW
+oracle was only meaningful for the abandoned adjusted-evidence design.
+Do not treat `test_mcar_sparsity_recovery.py` or Horvitz-Thompson
+variance bounds as Stage 3 blockers for the corrected strict-evidence
+cutover.
 
 ### Build acceptance
 
@@ -297,64 +278,39 @@ The implementer may add a temporary `--diag`-only call site in `_project_runtime
 
 ## Stage 2(a) and Stage 2(b) — explicit sub-stage split
 
-Stage 2's atoms were partially landed on 16-May-26 in a context-constrained pass that delivered the load-bearing code (atoms 2.1, 2.2, 2.3) plus a focused subset of the test coverage atoms 2.4 and 2.5 prescribe. The remaining test coverage is **plan-required** (called out by the Build acceptance section above) and must land before the call-site flip in Stage 3 — running Stage 3 against an incomplete blind-test net is the AP59 closure pattern this plan exists to avoid.
+Stage 2's atoms were partially landed on 16-May-26 in a context-constrained pass that delivered the load-bearing code (atoms 2.1, 2.2, 2.3). This split is retained as historical context, but the original Stage 2(b) adjusted/IPW obligations are superseded by the 25-May-26 coverage rollback.
 
 To keep that boundary explicit, Stage 2 is split into two sub-stages:
 
-- **Stage 2(a)** — landed 16-May-26. Atoms 2.1, 2.2, 2.3 fully delivered. Atoms 2.4 and 2.5 landed a focused core (9 reducer tests + 2 directional MCAR tests respectively) — sufficient to prove the code shape works but NOT sufficient to discharge Atom 2.4 / 2.5 acceptance.
-- **Stage 2(b)** — outstanding. Completes Atom 2.4 and Atom 2.5 to the plan's original acceptance criteria. Entry condition: Stage 2(a) is in working order (113 tests passing across substrate + new modules + reducer + minimal MCAR). Exit condition: every bullet in the Build acceptance section above is green.
+- **Stage 2(a)** — landed 16-May-26. Atoms 2.1, 2.2, 2.3 fully delivered.
+- **Stage 2(b)** — corrected 25-May-26. The active closure signal is the strict empirical / conditioned model two-operator split plus §6.1/§6.2 blind coverage. The old adjusted/IPW/MCAR acceptance is not required.
 
-The Stage 2(a) split is not a re-scope — the plan's Build acceptance section is unchanged. Stage 2(b) is the path back to plan compliance, not a deferral.
+### Stage 2(b) status correction — adjusted/IPW branch superseded
 
-### Stage 2(b) — outstanding work
+This section was originally the home for adjusted evidence, MCAR recovery,
+and Horvitz-Thompson tolerance tests. That branch is no longer active.
+The coverage design it depended on was rolled back: row `coverage` now
+means applicability/freshness for display, not a reweighting denominator.
 
-This sub-stage is the bookkeeping that completes Stage 2's blind test obligations. The code surfaces from Stage 2(a) (`empirical_evidence_operator.py`, `project_selected_cohort_rows` in `model_span_spine.py`, `observation_mask_draws` on `ConditionedTransitionPrimitive`) are the substrate every Stage 2(b) test consumes — no code changes here, only new tests.
+Do **not** implement the old outstanding adjusted-evidence checklist:
 
-**Outstanding test work** — distinct files / fixtures:
+- no `evidence_x_adjusted`;
+- no `evidence_y_adjusted`;
+- no `rate_adjusted`;
+- no `rate_blended = rate_adjusted` compatibility shim;
+- no MCAR/IPW battery as a cutover gate.
 
-1. **Atom 2.4 — Phase 6 §6.1 invariants 1–12 against the conditioned operator**. Add to `lib/tests/test_model_span_spine_selected_cohort.py`. Source: [phase-6-evidence-operator-contract.md §6.1](phase-6-evidence-operator-contract.md#61-invariants). Each invariant is a separate test asserting an algebraic identity on the reducer's conditioned-operator outputs (`rate_draws_model`, `x_draws_model`, `y_draws_model`, plus the per-anchor coverage/exposure surfaces). Tests are blind — expected numerics from the §6.1 contract, not from running the reducer and recording outputs.
+The live Stage 2 substrate is:
 
-2. **Atom 2.4 — Phase 6 §6.2 W1–W4 against the conditioned operator**. Same file. Source: [phase-6-evidence-operator-contract.md §6.2](phase-6-evidence-operator-contract.md#62-window-and-cohort-mode-invariants). Four window-mode degeneracy invariants — identity carrier, single-hop, multi-hop, A=X collapse. Blind, derived from §6.2 contract.
+- empirical and conditioned operator families exist;
+- `project_selected_cohort_rows` returns strict empirical surfaces
+  (`evidence_x_strict`, `evidence_y_strict`, `rate_strict`);
+- coverage is reduced to `applicability_row`;
+- the adjusted-output fields are intentionally absent.
 
-3. **Atom 2.4 — Same-data parity (rich evidence + good fit) test**. Same file. Construct a fixture where the parametric posterior closely matches the empirical rate (alpha+k ≈ k_obs, beta+n-k ≈ n_obs−k_obs). At saturation, `y_draws_model[s, -1].mean()` and `evidence_y_strict_by_anchor_tau[anchor][-1]` must agree within sampling noise (≤ 2σ derived from the IS proposal's effective sample size). This proves the two surfaces converge at the limit even though they're separate.
-
-4. **Atom 2.4 — Strict vs adjusted decomposition variants (Phase 6 §5.6)**. Same file. Per the plan's Atom 2.4 spec:
-   - Full-coverage fixture: with `coverage_y_A = 1.0` everywhere, `evidence_y_adjusted = Σ_admissible evidence_y_strict_A`. The IPW divide is a no-op.
-   - Partial-coverage fixture: with `coverage_y_A ∈ (0, 1)`, `evidence_y_adjusted = Σ evidence_y_strict_A / coverage_y_A` recovers the model-projected mass exactly when the empirical kernel is identical to the conditioned kernel (sanity check on the IPW formula).
-   - Admissibility filter: cohorts with `exposure_y_A[τ] = 0` contribute neither to strict nor adjusted sums at τ.
-   - Per-terminal coverage: `coverage_x_A` and `coverage_y_A` are read at distinct nodes (X and Z). Active-cohort fixture verifies `coverage_y_A ≤ coverage_x_A` in mass-weighted terms.
-
-5. **Atom 2.5 — MCAR `p_drop ∈ {0.1, 0.3, 0.5}` battery against a latent multi-hop fixture**. Add to `lib/tests/test_mcar_sparsity_recovery.py`. The Stage 2(a) σ=0 fixture is too degenerate for the IPW story to express; needs a synthetic multi-hop graph (3–4 edges, latent edges with σ ∈ [1, 2]) with deterministic calibrated edge probabilities so the dense baseline is analytic. Inject MCAR sparsity at the row level (drop independently per (edge, source-day, age) cell with probability `p_drop`); verify directionals from the plan's Atom 2.5 spec — strict shows drop, coverage drops proportionally, adjusted recovers dense within Horvitz-Thompson tolerance.
-
-6. **Atom 2.5 — Stress variant `p_drop = 0.8`**. Same file. Confirm the standard tolerance fails (variance is too large for pointwise accuracy) but the bias is centred on zero over ≥ 20 fixture seeds — proves the variance-blowup story per Phase 6 §5.6 rather than claiming pointwise accuracy.
-
-7. **Atom 2.5 — Horvitz-Thompson per-τ variance bound derivation**. Same file. Implement the IPW variance estimator from the plan's Atom 2.5 spec: `Var[evidence_adjusted] ≈ Σ_A (evidence_strict_A)² × p_drop × (1 − p_drop) / (n_admitted_A × coverage_A²)`. Use it to set per-τ tolerance bands; pass iff the observed delta is within ~3σ.
-
-### Stage 2(b) acceptance
-
-- All seven outstanding items above land as new tests; existing Stage 2(a) tests remain green.
-- The Build acceptance section above is fully discharged with no remaining "deferred" or "scope-reduced" caveats in the tracking ledger.
-- The progress block shows `[x] Stage 2(b)` only after the test suite passes end-to-end.
-
-### Stage 2(b) entry condition
-
-Read this section, then the Stage 2(a) tests already in the tree (`test_empirical_evidence_operator.py`, `test_model_span_spine_selected_cohort.py`, `test_mcar_sparsity_recovery.py`) — they are the working examples of fixture construction (the σ=0 limitation noted in MCAR is the trap to avoid for Atom 2.5's outstanding work; switch to σ > 0 latent fixtures). Then load Phase 6 contract §6.1 / §6.2 / §5.6 from [phase-6-evidence-operator-contract.md](phase-6-evidence-operator-contract.md) — those define the expected numerics for items 1, 2, 4.
-
-### Stage 2(b) discovery — §5.6 IPW unbiasedness vs §4.9 forward-fill
-
-**Surfaced**: 16-May-26 during Stage 2(b) test landing. **Resolution direction accepted 16-May-26**: adjusted evidence should not be computed as literal `strict / coverage` where `strict` is the forward-filled empirical cumulative. The reducer-owned adjusted numerator uses observed adjacent increments only, then applies the IPW divide by the conditioned coverage stream. This preserves strict as "what was literally observed under latest-at-or-before" while giving adjusted a non-forward-filled numerator appropriate for the MCAR recovery claim.
-
-**The discrepancy.** The Stage 2(b) MCAR test battery surfaces evidence that the §5.6 `adjusted = strict / coverage` formula, applied against the §4.9 forward-fill empirical kernel, does not satisfy the §5.6 unbiasedness claim under MCAR. Forward-fill imputes the latest observed `k` across absent ages — a local degeneracy that makes the cumulative approximately insensitive to per-cell dropout at saturation, while coverage drops as a function of mass-weighted mask presence. The IPW divide therefore appears to overshoot the dense baseline rather than recover it.
-
-The Stage 2(b) tests now pin the intended reducer contract at the engine level: strict remains forward-filled; adjusted is reducer-owned and must not be recomputed as `strict / coverage`; the HT tolerance helpers and MCAR battery check the accepted adjusted-output semantics. The contract document still needs wording cleanup because Phase 6 §5.6 currently states the older `strict / coverage` formula.
-
-**Contract cleanup required before Stage 3**:
-
-- Update Phase 6 §5.6 so "adjusted evidence" is defined from the adjusted empirical numerator, not from the strict forward-filled cumulative.
-- Preserve the display distinction: E mode reads strict; E+F mode reads adjusted plus model; neither mode reintroduces the old row-level `empirical × coverage + model × (1 − coverage)` blend.
-- Keep the MCAR/HT tests as the acceptance guard for the adjusted numerator; do not weaken them or replace them with a tautological recomputation from reducer outputs.
-
-**Stage 2 status**: The Atom 2.3 row-level fields (`evidence_x_strict`, `evidence_y_strict`, `rate_strict`, `evidence_x_adjusted`, `evidence_y_adjusted`, `rate_adjusted`) are built with the accepted strict-vs-adjusted split. The source-day mask defect below is fixed; Stage 3 cannot enter until the Phase 6 §5.6 prose is updated to match the accepted reducer contract.
+Stage 3 may proceed against this corrected contract. Any future patch that
+reintroduces adjusted evidence must be treated as new design work, not as
+completion of this cutover plan.
 
 **Empirical operator dependency note**: across this section and §5.6, the empirical operator is described as sharing inputs with the conditioned operator. To be precise: both operators share the *same admitted candidate rows* and the *same pre-conditioning arrival-map weighting* (the role-clock latency map built upstream of primitive conditioning). The empirical operator does NOT read conditioned probability, value-stream, coverage, exposure, or any posterior-conditioned output. Phrasings that suggest otherwise (e.g. "depends on the conditioned operator") are imprecise — the correct framing is "shares the pre-conditioning arrival-map input used by evidence binding".
 
@@ -374,7 +330,7 @@ The Stage 2(b) tests now pin the intended reducer contract at the engine level: 
 - Add a blind regression in `test_model_span_spine_selected_cohort.py` or `test_subject_span_composer.py`: two source days, same edge, row present at `(s1, age=a)` and absent at `(s2, age=a)`; seed mass routed through both source days; assert coverage/support drops only for the `s2` wavefront and remains observed for `s1`.
 - Add an active-carrier-style regression where carrier timing lands mass at multiple X source days and subject evidence is sparse by source day. This is the high-risk production shape because the current age-only mask can look correct in single-source-day window tests.
 
-**Exit condition**: focused Stage 2 tests still pass, plus the new source-day-mask regression protects against the age-only collapse. The remaining Stage 2 blocker is Phase 6 §5.6 prose cleanup for the accepted adjusted-evidence semantics.
+**Exit condition**: focused Stage 2 tests still pass, plus the new source-day-mask regression protects against the age-only collapse. There is no remaining adjusted-evidence prose blocker for Stage 3; cleanup now means removing stale adjusted/IPW references from docs.
 
 ---
 
@@ -385,6 +341,8 @@ The Stage 2(b) tests now pin the intended reducer contract at the engine level: 
 ### Atom 3.1 — Build the cohort-list helper
 
 Add `_build_selected_cohort_inputs(engine_cohorts, n_by_anchor) -> Sequence[Mapping]` in `cohort_forecast_v3.py`. Returns the per-cohort dict the new reducer takes — `anchor_day`, `N_anchor` from `n_by_anchor`, `tau_max` from `engine_cohorts`. This is the only piece of the row layer that still touches per-anchor `N` — appropriate at the row layer because it is perimeter admission (Phase 6 §5.2).
+
+**Current status (25-May-26)**: landed in `cohort_forecast_v3.py`.
 
 ### Atom 3.2 — Flip the call site
 
@@ -403,26 +361,30 @@ selected_projection = project_selected_cohort_rows(
 
 Both empirical spans are required — Atom 2.2 puts them on `ResolvedSpans` and Atom 2.3 reads from them to produce strict per-anchor evidence cumulatives. Dropping either empirical span here would silently revert the strict E-mode readout to model-projected mass, violating I-46 and the two-operator contract. Preserve the variable name `selected_projection` so downstream `_quantiles` / `_draw_mean` calls keep working.
 
+**Current status (25-May-26)**: landed. `_project_runtime_rows` calls
+`model_span_spine.project_selected_cohort_rows(...)` with conditioned,
+predictive, and empirical carrier/subject spans.
+
 ### Atom 3.3 — Migrate row-field reads
 
-Inside `_project_runtime_rows`, update the row-field reads to source from the new projection. **Existing row schema preserved for back-compat; strict/adjusted fields added** per Phase 6 §5.6. Each row field is routed to one of: empirical operator (strict observed counts), conditioned operator (model projection), or conditioned-with-mask (§4.8 streams). Evidence fields exist in both strict and adjusted variants; the chart picks the variant per display mode.
+Inside `_project_runtime_rows`, update the row-field reads to source from the new projection. Existing row schema is preserved except that the abandoned adjusted/IPW fields are **not** added. Each row field is routed to one of: empirical operator (strict observed counts), conditioned operator (model projection), or row applicability/freshness.
 
 | Row field | Legacy source | New source | Operator family |
 |---|---|---|---|
 | `midpoint`, `fan_*`, `fan_bands`, `projected_rate` | `_selected_cohort_group_rate_draws.rate_draws` quantiled at τ | `project_selected_cohort_rows.rate_draws_model` quantiled — identical algebra | **Conditioned** |
 | `forecast_x`, `forecast_y` | Reducer's `.x_draws`/`.y_draws` mean − evidence | New projection's `.x_draws_model`/`.y_draws_model` mean − evidence | **Conditioned** |
-| `evidence_x`, `evidence_y` (strict — E-mode line) | `selected_evidence_by_tau[tau]['sum_x'/'sum_y']` from `SelectedAClockEvidence.aggregate_by_tau` over admitted rows | `Σ_admissible evidence_y_strict_by_anchor_tau[anchor][tau]` (and `_x_strict`) — empirical operator's per-anchor terminal cumulative, admissibility-filtered by `exposure_y_A > 0` then summed across anchors | **Empirical (strict)** |
+| `evidence_x`, `evidence_y` (strict evidence line) | `selected_evidence_by_tau[tau]['sum_x'/'sum_y']` from `SelectedAClockEvidence.aggregate_by_tau` over admitted rows | `project_selected_cohort_rows.evidence_x_strict[tau]` / `.evidence_y_strict[tau]` — empirical operator's strict per-anchor terminal cumulative, frozen past each Cohort's data extent and summed across anchors | **Empirical (strict)** |
 | `rate` (strict — E-mode line) | `evidence_y / evidence_x` from `SelectedAClockEvidence.aggregate_by_tau` | `evidence_y / evidence_x` (both strict). Legacy formula preserved; the inputs are the strict empirical sums above. | **Empirical (strict)** |
-| `evidence_x_adjusted`, `evidence_y_adjusted` (NEW — E+F-mode line) | (none — replaces legacy `rate_blended`) | `Σ_admissible evidence_y_strict_A[τ] / coverage_y_A[τ]` (and `_x` analogously with `coverage_x_A`). IPW under MCAR per Phase 6 §5.6. | **Empirical (adjusted)** |
-| `rate_adjusted` (NEW — E+F-mode line) | (none) | `evidence_y_adjusted / evidence_x_adjusted`. Supersedes legacy `rate_blended`. | **Empirical (adjusted)** |
-| `coverage`, `evidence_x_coverage`, `evidence_y_coverage` | Per-cell `*_landing_coverage` aggregated and capped at [cohort_forecast_v3.py:5548-5571](../../graph-editor/lib/runner/cohort_forecast_v3.py#L5548-L5571) | Per-anchor `coverage_x_by_anchor_tau` (at X, carrier terminal) and `coverage_y_by_anchor_tau` (at Z, chain terminal) from the §4.8 masked-kernel construction against the conditioned operator; reduced across anchors via the same `min(...)` cap-and-reduce. `evidence_x_coverage` and `evidence_y_coverage` are the per-terminal row-level scalars; `coverage` is the combined min reduction. | **Conditioned (masked)** |
-| `cohorts_covered_base`, `cohorts_covered_projected`, frontier τ per anchor | `bucket['n_cohorts']` and `_observation_frontier` | `Σ_anchor 𝟙[exposure_y_A > 0]` and `frontier_by_anchor` from the conditioned operator's exposure stream at Z. Admissibility per (anchor, τ) drives both. | **Conditioned (masked)** |
+| `evidence_x_adjusted`, `evidence_y_adjusted`, `rate_adjusted` | n/a | **Absent by design.** The adjusted/IPW branch was removed with the coverage rollback. | n/a |
+| `coverage` | Per-cell `*_landing_coverage` aggregated and capped at [cohort_forecast_v3.py:5548-5571](../../graph-editor/lib/runner/cohort_forecast_v3.py#L5548-L5571) | `project_selected_cohort_rows.applicability_row[tau]` — applicable Cohorts / selected Cohorts. This is display freshness, not masked-support evidence coverage and not an IPW denominator. | **Applicability** |
+| `evidence_x_coverage`, `evidence_y_coverage` | Per-terminal coverage scalars | **No active owner in the corrected Stage 3 contract.** If a downstream consumer still requires these fields, define them explicitly before deletion rather than reviving masked-support/IPW semantics. | n/a |
+| `cohorts_covered_base`, `cohorts_covered_projected` | `bucket['n_cohorts']` and `_observation_frontier` | `applicable_cohort_count[tau]` from the projection. | **Applicability** |
 | `model_midpoint`, `model_fan_*`, `model_bands`, `model_curve_*` | F-mode + epistemic overlay through spine | **Unchanged** (already on spine, conditioned operator with prior-only primitives) | **Conditioned (unconditioned overlay)** |
 | `rate_pure` | Empirical aggregation | Strict empirical per `rate` above. | **Empirical (strict)** |
-| `rate_blended` (DEPRECATED) | Legacy linear blend at [cohort_forecast_v3.py:5701-5704](../../graph-editor/lib/runner/cohort_forecast_v3.py#L5701-L5704) | **Superseded by `rate_adjusted`** per Phase 6 §5.6. During cutover the field can be set equal to `rate_adjusted` for back-compat with any consumer still reading it; final removal is a post-cutover follow-up. | n/a — deprecated |
+| `rate_blended` | Legacy linear blend at [cohort_forecast_v3.py:5701-5704](../../graph-editor/lib/runner/cohort_forecast_v3.py#L5701-L5704) | **Removed / stale consumer surface.** Do not remap to `rate_adjusted`; adjusted no longer exists. | n/a |
 | `p_infinity_*`, `completeness*` | `ResolvedCFRuntime.public_moments` / `_runtime_completeness` | **Unchanged** | (Scalar; orthogonal to the row-reducer) |
 
-**Why this split matters**: three distinct chart concerns route to three different operator readouts per Phase 6 §4.9 + §5.6 — (1) empirical readout in strict / adjusted variants from the empirical operator; (2) coverage / frontier from the conditioned operator with row-presence mask (§4.8 — requires a value kernel positive everywhere; the empirical kernel's value collapses the ratio to 1); (3) model surfaces from the conditioned operator. The strict / adjusted decomposition replaces the legacy `rate_blended` linear blend with explicit IPW under MCAR; E+F shows adjusted and model as two separate lines, not a row-level blend. Collapsing any two of the three concerns into a single operator is AP58.
+**Why this split matters**: two distinct chart concerns route to different operator readouts — empirical strict evidence from the empirical operator, and model/forecast surfaces from the conditioned operator. Coverage is no longer a third evidence arithmetic authority; it is display applicability. Reintroducing `rate_blended`, adjusted evidence, or masked-support/IPW coverage would reopen the design branch this rollback closed.
 
 ### Atom 3.4 — Outside-in gate
 
@@ -451,9 +413,9 @@ If a shadow comparison was added during build (optional Atom 2's aid), delete it
 
 ### Output routing post-cutover
 
-The row dict schema is unchanged. JSON shape is preserved. Downstream consumers (cohort_maturity endpoint, conditioned-forecast endpoint, FE chart code at [cohortComparisonBuilders.ts](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts)) don't change as a result of cutover.
+The row dict schema is mostly preserved. Downstream consumers (cohort_maturity endpoint, conditioned-forecast endpoint, FE chart code at [cohortComparisonBuilders.ts](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts)) should not receive or expect `rate_adjusted`, `evidence_x_adjusted`, or `evidence_y_adjusted`.
 
-The FE rate-line switch from raw `baseRate` (strict, E-mode) to `rate_adjusted` (IPW-scaled, E+F-mode) at [cohortComparisonBuilders.ts:519-528](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L519-L528) is **not** a Stage 3 atom; it's a post-cutover follow-up per Phase 6 §5.6. It needs production data showing the adjusted curve degrades smoothly across the frontier (admissibility-filtering thins contributing anchors → adjusted thins toward zero) while the unconditioned model curve continues as a separate line. The legacy `rate_blended` field is set equal to `rate_adjusted` during cutover for back-compat and removed in a later cleanup once consumers migrate to the explicit `_adjusted` names.
+The FE follow-up is stale-comment cleanup and removal of any `rate_blended` diagnostic remnants, not a switch to `rateAdjusted`.
 
 Diagnostic side-channels (`rows[0]['_selected_a_clock_evidence']`, `rows[0]['_selected_cohort_projection']`) — shape preserved by the Stage 4 adapter; values now derive from spine surfaces.
 
@@ -541,15 +503,15 @@ Any violation found is a Stage 2 defect; fix before closing.
 
 ### Atom 4.6 — Codebase docs
 
-The legacy `rate_blended = empirical × coverage + model × (1 − coverage)` linear blend is superseded by IPW-based `rate_adjusted` — a user-visible contract change. The display-contract docs that previously described the linear-blend semantic MUST be updated explicitly; silent supersession across authority docs is itself an AP58 hazard.
+The legacy `rate_blended = empirical × coverage + model × (1 − coverage)` linear blend and the abandoned `rate_adjusted` / IPW replacement are both superseded. The active contract is strict empirical evidence plus model/forecast surfaces; `coverage` is applicability/freshness only. The display-contract docs that previously described either linear blending or adjusted evidence MUST be updated explicitly; silent supersession across authority docs is itself an AP58 hazard.
 
-- [CF_ROW_PIPELINE.md](../codebase/CF_ROW_PIPELINE.md) — rewrite §1–§4 to describe the new pipeline including the empirical / conditioned operator split (Phase 6 §4.9) and the strict / adjusted readout decomposition (Phase 6 §5.6); delete §7 detail and §8 midpoint-shift block; replace any `rate_blended`-as-E+F-contract passage with the new strict / adjusted decomposition.
-- [cohort-maturity-evidence-coverage-design.md](../cohort-maturity-evidence-coverage-design.md) — update §2 (per-row coverage) and §4 (display semantics): remove the linear-blend carry-forward formula and replace with the strict (E) / adjusted (E+F) decomposition per §5.6. Coverage continues to drive alpha-on-blobs and dashing; E+F shows adjusted and model as two separate curves.
-- [FORECAST_RUNTIME_ARCHITECTURE.md](../codebase/FORECAST_RUNTIME_ARCHITECTURE.md) — update §1, §2, §4, §5, §6 to remove deleted fields and the mode-equality identity-carrier check; add per-terminal coverage / exposure streams (`coverage_x`, `coverage_y`, `exposure_x`, `exposure_y`) as engine outputs.
+- [CF_ROW_PIPELINE.md](../codebase/CF_ROW_PIPELINE.md) — rewrite §1–§4 to describe the new pipeline including the empirical / conditioned operator split (Phase 6 §4.9), strict empirical evidence ownership, and applicability-only coverage; delete §7 detail and §8 midpoint-shift block; replace any `rate_blended`, `rate_adjusted`, or adjusted-evidence-as-E+F-contract passage with the corrected contract.
+- [cohort-maturity-evidence-coverage-design.md](../cohort-maturity-evidence-coverage-design.md) — update §2 (per-row coverage) and §4 (display semantics): remove the linear-blend carry-forward formula and do not replace it with adjusted/IPW semantics. Coverage continues only as a display freshness/applicability signal.
+- [FORECAST_RUNTIME_ARCHITECTURE.md](../codebase/FORECAST_RUNTIME_ARCHITECTURE.md) — update §1, §2, §4, §5, §6 to remove deleted fields, the mode-equality identity-carrier check, and stale per-terminal coverage / exposure claims if those are no longer engine outputs.
 - [INVARIANTS.md](../codebase/INVARIANTS.md) I-45/I-46/I-48 — add the cutover as a realisation; remove citations to deleted authorities.
-- [KNOWN_ANTI_PATTERNS.md](../codebase/KNOWN_ANTI_PATTERNS.md) AP58 — record the realised closure of the BE cohort-forecast row reducer fork and the `rate_blended` → `rate_adjusted` supersession.
+- [KNOWN_ANTI_PATTERNS.md](../codebase/KNOWN_ANTI_PATTERNS.md) AP58 — record the realised closure of the BE cohort-forecast row reducer fork and the removal of both `rate_blended` and adjusted/IPW coverage semantics.
 - [cf-defensive-coding-audit.md](cf-defensive-coding-audit.md) — mark H-5, F-1, H-1, H-4, M-1 closed.
-- Cross-check: `grep -rn 'rate_blended\|coverage-blended\|linear blend' docs/current/` returns only superseded-as-of references.
+- Cross-check: `grep -rn 'rate_blended\|rate_adjusted\|coverage-blended\|linear blend\|IPW\|MCAR' docs/current/` returns only historical/superseded references.
 
 ### Atom 4.7 — Performance / vectorisation review
 
@@ -568,54 +530,40 @@ Exit condition: every remaining conditional in these two files is pure algebraic
 
 ## Stage 5 — FE / output follow-ups
 
-The row dict carries the strict and adjusted fields after Stage 3; this stage adopts them in the chart code and in published terminology. Stage 5 atoms are post-cutover but blocking for closure of this plan, per the user-visible E+F semantic change.
+Stage 5 is no longer a `rateAdjusted` adoption stage. It is a stale-surface cleanup stage after the BE row contract is proven and legacy authorities are deleted.
 
-### Atom 5.1 — Parse new row fields in the FE
+### Atom 5.1 — Remove stale adjusted/blended FE surfaces
 
-At [cohortComparisonBuilders.ts:170-242](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L170-L242), add the new row fields to the point object:
+At [cohortComparisonBuilders.ts](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts), remove or explicitly quarantine stale `rateBlended` / `rate_blended` parsing, hidden diagnostic lines, and TEMP DIAGNOSTIC comments that imply a future switch to `rate_adjusted`.
 
-- `rateAdjusted: parse(r?.rate_adjusted)`
-- `evidenceXAdjusted: parse(r?.evidence_x_adjusted)`
-- `evidenceYAdjusted: parse(r?.evidence_y_adjusted)`
+Do **not** add:
 
-Existing fields stay (`baseRate ← rate`, `rateBlended ← rate_blended`, `evidenceXCoverage`, `evidenceYCoverage`). `rate_blended` is set equal to `rate_adjusted` in the row dict per Atom 3.3, so legacy consumers keep working.
+- `rateAdjusted`;
+- `evidenceXAdjusted`;
+- `evidenceYAdjusted`;
+- an E+F line sourced from `rate_adjusted`.
 
-### Atom 5.2 — Switch E+F mode to `rateAdjusted`
+### Atom 5.2 — Preserve active FE paths
 
-At [cohortComparisonBuilders.ts:519-555](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L519-L555):
+No semantic FE switch is required by this cutover unless Stage 3/4 discovers a live consumer of a deleted field. Preserve:
 
-- Replace the `baseRate` filter/map in `solidPts` / `dashedPts` with `rateAdjusted` (the E+F line is now IPW-scaled empirical, not strict).
-- Remove the `rateBlended` hidden dashed diagnostic line ([cohortComparisonBuilders.ts:557-570](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L557-L570)) — superseded; the visible E+F line IS `rateAdjusted`.
-- Remove the TEMP DIAGNOSTIC comment block; replace with a comment noting "E+F shows `rate_adjusted` (IPW under MCAR per Phase 6 §5.6); E mode shows `baseRate` (strict per Phase 6 §5.6); F mode shows model curve only."
-- Keep the `midpoint` dotted line (the model curve in E+F mode) unchanged.
+- E-mode line reading strict `baseRate`;
+- F-mode/model surfaces that were moved to `model_midpoint` / `model_curve_midpoint` by the FC chart-surface workstream;
+- alpha/freshness rendering driven by `coverage`, now understood as applicability/freshness rather than IPW coverage.
 
-### Atom 5.3 — Preserve unchanged FE paths (no-change confirmation)
+### Atom 5.3 — Tooltip and copy audit
 
-No FE change at three sites; flagged explicitly to prevent accidental drift:
-- E-mode solid/dashed lines ([cohortComparisonBuilders.ts:491-516](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L491-L516)) — continue reading `baseRate` (strict).
-- F-mode midpoint ([cohortComparisonBuilders.ts:573-580](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L573-L580)) — unchanged.
-- Alpha-on-blobs ([cohortComparisonBuilders.ts:702-711](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L702-L711)) — continue reading `coverage` (min-reduction of `evidence_x_coverage` and `evidence_y_coverage` per Atom 3.3); document the min reduction in the comment.
+Audit tooltip/copy consumers via `grep -rn "baseRate\|rate_blended\|rate_adjusted\|coverage" graph-editor/src/`. Remove copy promising adjusted evidence, IPW, or coverage-blended E+F. Keep user-facing language centred on strict observed evidence plus model/forecast surfaces.
 
-### Atom 5.4 — Update FE row-meta type for type safety
+### Atom 5.4 — Glossary updates
 
-In the same file's `Point` interface ([cohortComparisonBuilders.ts:170](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L170)):
+Add or update only the terms that survive the rollback:
 
-- Add `rateAdjusted: number | null`, `evidenceXAdjusted: number | null`, `evidenceYAdjusted: number | null`.
-- Leave `rateBlended` for back-compat; comment that it is now `rate_adjusted` carried under the legacy field name and that consumers should migrate.
-
-### Atom 5.5 — Tooltip and copy update
-
-At [cohortComparisonBuilders.ts:886-911](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts#L886-L911): tooltip currently reads `baseRate` as the rate. In E+F mode the rate-shown-to-user is now `rate_adjusted`; tooltip should reflect the active value (whichever curve the user is hovering, with a label distinguishing strict vs adjusted). Audit other tooltip consumers in the codebase via `grep -rn "baseRate\|rate_blended" graph-editor/src/`.
-
-### Atom 5.6 — Glossary updates
-
-Add the novel terms of art to both glossaries (per Phase 6 §4.9 + §5.6):
-
-- **Codebase glossary** ([docs/current/codebase/GLOSSARY.md](../codebase/GLOSSARY.md)): empirical operator, conditioned operator, value kernel, support kernel, exposure kernel, masked kernel, row-presence mask, coverage (§4.8), exposure (§4.8), strict evidence, adjusted evidence, IPW, MCAR, admissibility, frontier τ per anchor, per-terminal coverage (X vs Z).
-- **Public glossary** ([graph-editor/public/docs/glossary.md](../../graph-editor/public/docs/glossary.md)): user-facing subset — coverage, exposure, frontier, strict evidence, adjusted evidence, IPW (with friendly explanation), MCAR (with friendly explanation). Omit internal-only algebraic concepts (carrier span, subject span, value/support/exposure kernels as named entities — fold their behaviour into the user-facing entries).
+- **Codebase glossary** ([docs/current/codebase/GLOSSARY.md](../codebase/GLOSSARY.md)): empirical operator, conditioned operator, value kernel, row-presence mask, strict evidence, applicability/freshness coverage, frontier τ per anchor if still live.
+- **Public glossary** ([graph-editor/public/docs/glossary.md](../../graph-editor/public/docs/glossary.md)): user-facing subset — coverage/freshness, frontier, strict evidence. Do not add adjusted evidence, IPW, or MCAR as active product terms.
 - **Existing Bayes terms** — audit and add standalone entries for those currently only mentioned within other definitions: EWMA, ESS, R̂ (rhat), PPC. Cross-check against [docs/current/codebase/GLOSSARY.md](../codebase/GLOSSARY.md) §Statistical.
 
-### Atom 5.7 — Archive the plan
+### Atom 5.5 — Archive the plan
 
 Move this plan from `docs/current/project-generalise/selected-cohort-projection-cutover-plan.md` to `docs/archive/project-generalise/selected-cohort-projection-cutover-plan.md`. Move the superseded `ACTION_PLAN_selected_cohort_spine_cutover.md` likewise. Update [docs/current/project-generalise/README.md](README.md) §"Picking this up later" to point at the archive.
 
@@ -626,10 +574,10 @@ Move this plan from `docs/current/project-generalise/selected-cohort-projection-
 Halt if:
 
 - **The plan is about to source strict empirical fields (`evidence_x`, `evidence_y`, `rate`, `evidence_x_strict_by_anchor_tau`, `evidence_y_strict_by_anchor_tau`) from the conditioned operator.** Per Phase 6 §4.9, these must come from the empirical kernel (per-anchor `Δk_emp/n_emp` propagated through the DAG DP and summed). Sourcing them from the conditioned operator's terminal cumulative is the silent semantic regression — the E line would become a posterior projection of admitted evidence rather than a display of admitted evidence. Hard stop.
-- **The plan is about to source coverage or exposure from the empirical operator.** Per Phase 6 §4.9 coverage paragraph, the empirical kernel is zero exactly where the mask is zero, so support/value collapses to 1 — coverage from the empirical operator is meaningless. Coverage and exposure must come from the conditioned operator with the row-presence mask (§4.8), read at X and Z. Hard stop.
+- **The plan is about to use `coverage` as an evidence reweighting denominator.** Coverage is now applicability/freshness only. Do not source coverage from the empirical operator, the conditioned masked stream, or any revived support/exposure ratio for IPW arithmetic without a new accepted design.
 - **The two-surface separation test (Atom 2.4) fails** because `rate_draws_model` and the strict empirical readout (`evidence_y_strict_by_anchor_tau` / `evidence_x_strict_by_anchor_tau`) are numerically equal where they shouldn't be. This means the operators have been wired with the same kernel family by mistake. The operator construction in Atom 2.2 has collapsed; fix before continuing.
 - **Appendix A (discretisation kernel) of the Phase 6 contract has not closed** for the conditioned operator. Stage 2 cannot finalise the conditioned operator's kernel construction until that closes. The empirical operator can be built and tested independently while Appendix A is open.
-- **A patch reverts adjusted evidence to literal `strict / coverage` using the forward-filled strict cumulative.** The accepted Stage 2(b) resolution uses a separate adjusted empirical numerator with adjacent observed increments only, then applies IPW. The Phase 6 prose must be updated to match; code should not be regressed to the old prose.
+- **A patch reintroduces adjusted evidence, IPW, MCAR recovery, `rate_adjusted`, or `rate_blended` as active output semantics.** Those were removed with the coverage rollback. Treat reintroduction as new design work requiring explicit approval, not cutover completion.
 - A Phase 6 §6.1 / §6.2 blind test fails and the failure is not pinned to a Stage 2 mask-plumbing or reducer defect.
 - An outside-in failure at Stage 3 cannot be triaged into one of the three categories (new-path defect, legacy-was-accidentally-right, legacy-was-wrong).
 - A new code path is needed inside the reducer (`if mode == ...`, `if carrier_is_identity ...`, `if window_or_a_equals_x ...`). The spine's degeneracy-by-data principle has broken; fix the spine before continuing.
@@ -648,15 +596,15 @@ Halt if:
 | 1.3 strict-xfail ledger | ✓ 16-May-26 | see [Atom 1.3 strict-xfail ledger](#atom-13-strict-xfail-ledger) |
 | 2.1 mask plumbing | ✓ fixed 16-May-26 | `observation_mask_draws_by_source_day` added; composer support/exposure DP selects source-day masks for composed bindings and preserves aggregate local-clock masks for identity/window helpers. Regression: `test_composer_masks_support_by_source_day_not_age_only`. |
 | 2.2 empirical operator | ✓ 16-May-26 | `empirical_evidence_operator.py` + 11 blind tests + spine integration |
-| 2.3 row reducer in spine | ✓ 16-May-26 | `project_selected_cohort_rows` in `model_span_spine.py` with per-anchor maps (Stage 2(a)) + row-level strict, adjusted, rate fields (Stage 2(b)). Adjusted uses the accepted non-forward-filled numerator + IPW semantics; Phase 6 §5.6 prose still needs cleanup. |
-| 2.4 blind algebra tests | ✓ 16-May-26 (Stage 2(a) + 2(b)) | 9 core tests (Stage 2(a)) + §6.1/§6.2/§5.6 blind tests (Stage 2(b)). |
-| 2.5 MCAR sparsity oracle | ✓ 16-May-26 (Stage 2(b), engine-level) | Stage 2(a) directional tests + Stage 2(b) engine-level MCAR/HT battery. Acceptance now pins adjusted as a reducer-owned non-forward-filled numerator plus IPW, not `strict / coverage` over the strict forward-filled cumulative. |
-| 3.2 call-site flip | — | _commit sha_ |
+| 2.3 row reducer in spine | ✓ 16-May-26; corrected 25-May-26 | `project_selected_cohort_rows` in `model_span_spine.py` with strict empirical row fields. Adjusted/IPW fields were removed by the coverage rollback and are not part of closure. |
+| 2.4 blind algebra tests | ✓ 16-May-26 (Stage 2(a) + 2(b)) | Core §6.1/§6.2 blind tests protect the two-operator split. Any §5.6 adjusted-evidence assertions are historical only. |
+| 2.5 MCAR sparsity oracle | superseded 25-May-26 | MCAR/HT adjusted-evidence acceptance is obsolete because adjusted evidence was removed. |
+| 3.2 call-site flip | ✓ landed | `_project_runtime_rows` calls `model_span_spine.project_selected_cohort_rows(...)`; ledger still needs commit SHA if desired. |
 | 3.4 outside-in gate | — | pass count + which strict xfails XPASSed and were deleted |
 | 4.2 deletions | — | post-cutover `wc -l cohort_forecast_v3.py`: _N_ |
 | 4.6 codebase docs | — | |
-| 5.2 FE rateAdjusted switch | — | E+F mode reads rate_adjusted from row dict |
-| 5.6 glossary updates | — | codebase + public glossaries |
+| 5.1 FE stale adjusted/blended cleanup | — | remove/quarantine `rateBlended` / `rate_blended` / `rate_adjusted` promises |
+| 5.4 glossary updates | — | codebase + public glossaries; no adjusted/IPW/MCAR active terms |
 
 ---
 

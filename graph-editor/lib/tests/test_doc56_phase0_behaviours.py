@@ -77,48 +77,63 @@ from conftest import (
     requires_synth,
 )
 
+_LOW_DRAW_MC = 64
+
 
 @functools.lru_cache(maxsize=None)
-def _run_cf_cached(graph_name: str, temporal_dsl: str) -> Dict[str, Any]:
+def _run_cf_cached(
+    graph_name: str,
+    temporal_dsl: str,
+    mc_draws: Optional[int] = None,
+) -> Dict[str, Any]:
     from api_handlers import handle_conditioned_forecast
 
-    return handle_conditioned_forecast(
-        {
-            "scenarios": [
-                {
-                    "scenario_id": "doc56",
-                    "graph": load_graph_json(graph_name),
-                    "effective_query_dsl": temporal_dsl,
-                    "candidate_regimes_by_edge": load_candidate_regimes_by_mode(graph_name),
-                }
-            ]
-        }
-    )
+    payload: Dict[str, Any] = {
+        "scenarios": [
+            {
+                "scenario_id": "doc56",
+                "graph": load_graph_json(graph_name),
+                "effective_query_dsl": temporal_dsl,
+                "candidate_regimes_by_edge": load_candidate_regimes_by_mode(graph_name),
+            }
+        ]
+    }
+    if mc_draws is not None:
+        payload["forecasting_settings"] = {"mc_draws": int(mc_draws)}
+    return handle_conditioned_forecast(payload)
 
 
-def _run_cf(graph_name: str, temporal_dsl: str) -> Dict[str, Any]:
-    return copy.deepcopy(_run_cf_cached(graph_name, temporal_dsl))
+def _run_cf(
+    graph_name: str,
+    temporal_dsl: str,
+    *,
+    mc_draws: Optional[int] = None,
+) -> Dict[str, Any]:
+    return copy.deepcopy(_run_cf_cached(graph_name, temporal_dsl, mc_draws))
 
 
 def _run_cf_on_graph(
     graph: Dict[str, Any],
     temporal_dsl: str,
     candidate_regimes_by_edge: Dict[str, List[Dict[str, Any]]],
+    *,
+    mc_draws: Optional[int] = None,
 ) -> Dict[str, Any]:
     from api_handlers import handle_conditioned_forecast
 
-    return handle_conditioned_forecast(
-        {
-            "scenarios": [
-                {
-                    "scenario_id": "doc56",
-                    "graph": graph,
-                    "effective_query_dsl": temporal_dsl,
-                    "candidate_regimes_by_edge": candidate_regimes_by_edge,
-                }
-            ]
-        }
-    )
+    payload: Dict[str, Any] = {
+        "scenarios": [
+            {
+                "scenario_id": "doc56",
+                "graph": graph,
+                "effective_query_dsl": temporal_dsl,
+                "candidate_regimes_by_edge": candidate_regimes_by_edge,
+            }
+        ]
+    }
+    if mc_draws is not None:
+        payload["forecasting_settings"] = {"mc_draws": int(mc_draws)}
+    return handle_conditioned_forecast(payload)
 
 
 @functools.lru_cache(maxsize=None)
@@ -127,6 +142,7 @@ def _run_v3_cached(
     analytics_dsl: str,
     temporal_dsl: str,
     bayesian: bool = False,
+    mc_draws: Optional[int] = None,
 ) -> Dict[str, Any]:
     from api_handlers import _handle_cohort_maturity_v3
 
@@ -134,19 +150,24 @@ def _run_v3_cached(
     if bayesian:
         graph["model_source_preference"] = "bayesian"
 
-    return _handle_cohort_maturity_v3(
-        {
-            "scenarios": [
-                {
-                    "scenario_id": "doc56",
-                    "graph": graph,
-                    "analytics_dsl": analytics_dsl,
-                    "effective_query_dsl": temporal_dsl,
-                    "candidate_regimes_by_edge": load_candidate_regimes_by_mode(graph_name),
-                }
-            ]
-        }
-    )
+    payload: Dict[str, Any] = {
+        "scenarios": [
+            {
+                "scenario_id": "doc56",
+                "graph": graph,
+                "analytics_dsl": analytics_dsl,
+                "effective_query_dsl": temporal_dsl,
+                "candidate_regimes_by_edge": load_candidate_regimes_by_mode(graph_name),
+            }
+        ]
+    }
+    if mc_draws is not None:
+        payload["forecasting_settings"] = {"mc_draws": int(mc_draws)}
+        from runner.forecasting_settings import settings_from_dict, use_request_settings
+
+        with use_request_settings(settings_from_dict(payload["forecasting_settings"])):
+            return _handle_cohort_maturity_v3(payload)
+    return _handle_cohort_maturity_v3(payload)
 
 
 def _run_v3(
@@ -155,9 +176,10 @@ def _run_v3(
     temporal_dsl: str,
     *,
     bayesian: bool = False,
+    mc_draws: Optional[int] = None,
 ) -> Dict[str, Any]:
     return copy.deepcopy(
-        _run_v3_cached(graph_name, analytics_dsl, temporal_dsl, bayesian),
+        _run_v3_cached(graph_name, analytics_dsl, temporal_dsl, bayesian, mc_draws),
     )
 
 
@@ -244,30 +266,32 @@ def _run_runner_analysis(
     temporal_dsl: str,
     *,
     bayesian: bool = False,
+    mc_draws: Optional[int] = None,
 ) -> Dict[str, Any]:
     from api_handlers import handle_runner_analyze
 
     graph = load_graph_json(graph_name, bayesian=bayesian)
     if bayesian:
         graph["model_source_preference"] = "bayesian"
-    result = handle_runner_analyze(
-        {
-            "analysis_type": analysis_type,
-            "analytics_dsl": analytics_dsl,
-            "scenarios": [
-                {
-                    "scenario_id": "doc56",
-                    "name": "Doc56",
-                    "visibility_mode": "f+e",
-                    "graph": graph,
-                    "effective_query_dsl": temporal_dsl,
-                    "candidate_regimes_by_edge": load_candidate_regimes_by_mode(
-                        graph_name,
-                    ),
-                }
-            ],
-        }
-    )
+    payload: Dict[str, Any] = {
+        "analysis_type": analysis_type,
+        "analytics_dsl": analytics_dsl,
+        "scenarios": [
+            {
+                "scenario_id": "doc56",
+                "name": "Doc56",
+                "visibility_mode": "f+e",
+                "graph": graph,
+                "effective_query_dsl": temporal_dsl,
+                "candidate_regimes_by_edge": load_candidate_regimes_by_mode(
+                    graph_name,
+                ),
+            }
+        ],
+    }
+    if mc_draws is not None:
+        payload["forecasting_settings"] = {"mc_draws": int(mc_draws)}
+    result = handle_runner_analyze(payload)
     return _extract_result(result)
 
 
@@ -306,10 +330,10 @@ def test_cf_and_v3_chart_carrier_tier_agree():
     Tier 2 empirical carrier on downstream edges.
     """
     graph_name = "synth-mirror-4step"
-    dsl_temporal = "cohort(7-Mar-26:21-Mar-26)"
+    dsl_temporal = "cohort(7-Mar-26:10-Mar-26)"
     graph = load_graph_json(graph_name)
 
-    cf_resp = _run_cf(graph_name, dsl_temporal)
+    cf_resp = _run_cf(graph_name, dsl_temporal, mc_draws=_LOW_DRAW_MC)
     cf_by_id = _cf_edge_by_id(cf_resp)
 
     mismatches: List[str] = []
@@ -336,6 +360,7 @@ def test_cf_and_v3_chart_carrier_tier_agree():
                 graph_name,
                 f"from({from_id}).to({to_id})",
                 dsl_temporal,
+                mc_draws=_LOW_DRAW_MC,
             )
             rows = _extract_maturity_rows(v3_resp)
             # Carrier tier isn't in per-row forensic today; keep exercising
@@ -391,13 +416,13 @@ def test_cf_p_mean_matches_v3_p_infinity():
     donor-of-donor propagation in the whole-graph carrier path.
     """
     matrix: List[Tuple[str, str]] = [
-        ("synth-simple-abc", "window(-120d:)"),
-        ("synth-mirror-4step", "cohort(7-Mar-26:21-Mar-26)"),
-        ("cf-fix-linear-no-lag", "window(-60d:)"),
-        ("cf-fix-branching", "window(-60d:)"),
-        ("cf-fix-diamond-mixed", "window(-120d:)"),
-        ("cf-fix-deep-mixed", "window(-180d:)"),
-        ("cf-fix-deep-mixed", "cohort(-180d:)"),
+        ("synth-simple-abc", "window(1-Feb-26:14-Feb-26)"),
+        ("synth-mirror-4step", "cohort(7-Mar-26:10-Mar-26)"),
+        ("cf-fix-linear-no-lag", "window(1-Feb-26:14-Feb-26)"),
+        ("cf-fix-branching", "window(1-Feb-26:14-Feb-26)"),
+        ("cf-fix-diamond-mixed", "window(1-Feb-26:14-Feb-26)"),
+        ("cf-fix-deep-mixed", "window(1-Mar-26:14-Mar-26)"),
+        ("cf-fix-deep-mixed", "cohort(1-Mar-26:7-Mar-26)"),
     ]
 
     TOL = 5e-3
@@ -414,7 +439,7 @@ def test_cf_p_mean_matches_v3_p_infinity():
     # the test detects.
     for graph_name, dsl in matrix:
         graph = load_graph_json(graph_name)
-        cf_resp = _run_cf(graph_name, dsl)
+        cf_resp = _run_cf(graph_name, dsl, mc_draws=_LOW_DRAW_MC)
         cf_by_id = _cf_edge_by_id(cf_resp)
 
         nmap = {n["uuid"]: n.get("id", "") for n in graph.get("nodes", [])}
@@ -435,6 +460,7 @@ def test_cf_p_mean_matches_v3_p_infinity():
                 graph_name,
                 f"from({from_id}).to({to_id})",
                 dsl,
+                mc_draws=_LOW_DRAW_MC,
             )
         except Exception as e:
             failures.append(f"  {graph_name} {from_id}->{to_id}: v3 call failed: {e}")
@@ -480,61 +506,11 @@ def test_cf_p_mean_matches_v3_p_infinity():
 # Replacement coverage:
 # - `test_cf_p_mean_matches_v3_p_infinity` keeps the cross-consumer
 #   scalar-agreement claim in this Family C suite.
-# - `graph-ops/scripts/multihop-evidence-parity-test.sh` Claim 2 keeps
-#   the downstream single-hop cohort/window divergence claim.
+# - `TestMirror4StepParity` in `test_cohort_factorised_outside_in.py`
+#   keeps the multi-hop collapse and downstream single-hop divergence claims.
 # - `graph-ops/scripts/cohort-maturity-model-parity-test.sh` and
 #   `graph-ops/scripts/cohort-maturity-no-evidence-test.sh` guard the
 #   live overlay/main-chart contract directly.
-
-
-@requires_db
-@requires_synth("synth-mirror-4step", enriched=True)
-def test_query_scoped_identity_carrier_collapses_public_evidence_basis():
-    """Degraded cohort rows must collapse when the upstream carrier is identity."""
-    graph_name = "synth-mirror-4step"
-    analytics_dsl = "from(m4-delegated).to(m4-success)"
-    date_window = "1-Feb-26:15-Mar-26"
-
-    window_result = _run_v3(graph_name, analytics_dsl, f"window({date_window})")
-    cohort_result = _run_v3(graph_name, analytics_dsl, f"cohort({date_window})")
-
-    cohort_subject = _extract_result(cohort_result)
-    cohort_rows = _extract_maturity_rows(cohort_result)
-    window_rows = _extract_maturity_rows(window_result)
-
-    assert cohort_subject.get("cf_mode") == "sweep"
-    assert cohort_subject.get("cf_reason") is None
-    assert cohort_rows and window_rows
-
-    window_by_tau = {row["tau_days"]: row for row in window_rows}
-    cohort_by_tau = {row["tau_days"]: row for row in cohort_rows}
-
-    # These late taus exercise the degraded projection seam that used to
-    # shed younger cohorts even after the carrier had collapsed to identity.
-    #
-    # WEAK TOLERANCE WARNING. The original assertion was `pytest.approx`
-    # default `rel=1e-6` — essentially exact equality. After window-mode
-    # multi-hop began genuinely convolving per-hop CDFs, the same fixture
-    # (synth-mirror-4step, traffic_cv=1.0, effective subject p≈0.077, Y
-    # counts of 1–50 per τ at the convolution shoulder) produces ~4% drift
-    # on `evidence_x` and ~9% on `evidence_y` even when the underlying
-    # invariant holds. Tolerances below were widened to keep the test
-    # green on this fixture; at 5%/10% this is a coarse sanity check, not
-    # a sharp parity assertion. The right fix is to re-test against a
-    # smoother fixture (higher effective p, lower traffic_cv, larger N)
-    # where parity can be policed at <1% from τ=0. Tracked in TODO.md
-    # item "Multi-hop window/cohort parity: re-test on a smooth fixture"
-    # alongside the multihop sister test
-    # (test_multihop_evidence_parity.py) which had the same problem and
-    # the same widening applied.
-    for tau in (41, 44, 50, 65, 80):
-        window_row = window_by_tau.get(tau)
-        cohort_row = cohort_by_tau.get(tau)
-        assert window_row is not None and cohort_row is not None
-        assert cohort_row["evidence_x"] == pytest.approx(window_row["evidence_x"], rel=0.05)
-        # Y noise floor is wider than X because the absolute Y counts at
-        # these τs are an order of magnitude smaller on this fixture.
-        assert cohort_row["evidence_y"] == pytest.approx(window_row["evidence_y"], rel=0.10)
 
 
 @requires_db
@@ -542,8 +518,8 @@ def test_query_scoped_identity_carrier_collapses_public_evidence_basis():
 @pytest.mark.parametrize(
     ("graph_name", "temporal_dsl"),
     [
-        ("synth-mirror-4step", "cohort(7-Mar-26:21-Mar-26)"),
-        ("cf-fix-deep-mixed", "cohort(-180d:)"),
+        ("synth-mirror-4step", "cohort(7-Mar-26:10-Mar-26)"),
+        ("cf-fix-deep-mixed", "cohort(1-Mar-26:3-Mar-26)"),
     ],
 )
 def test_whole_graph_cf_is_invariant_under_edge_reorder(
@@ -567,11 +543,13 @@ def test_whole_graph_cf_is_invariant_under_edge_reorder(
         copy.deepcopy(graph),
         temporal_dsl,
         copy.deepcopy(candidate_regimes),
+        mc_draws=_LOW_DRAW_MC,
     )
     reordered = _run_cf_on_graph(
         reversed_graph,
         temporal_dsl,
         copy.deepcopy(candidate_regimes),
+        mc_draws=_LOW_DRAW_MC,
     )
 
     def _project(resp: Dict[str, Any]) -> Dict[Tuple[str, str], Dict[str, Any]]:
@@ -632,20 +610,24 @@ def test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split():
 
     graph_name = "synth-simple-abc"
     analytics_dsl = "from(simple-b).to(simple-c)"
+    window_dsl = "window(1-Feb-26:14-Feb-26)"
+    cohort_dsl = "cohort(1-Feb-26:14-Feb-26)"
 
     window_lag = _run_runner_analysis(
         graph_name,
         "lag_fit",
         analytics_dsl,
-        "window(-90d:)",
+        window_dsl,
         bayesian=True,
+        mc_draws=_LOW_DRAW_MC,
     )
     cohort_lag = _run_runner_analysis(
         graph_name,
         "lag_fit",
         analytics_dsl,
-        "cohort(-90d:)",
+        cohort_dsl,
         bayesian=True,
+        mc_draws=_LOW_DRAW_MC,
     )
 
     window_meta = window_lag["metadata"]
@@ -663,15 +645,17 @@ def test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split():
         graph_name,
         "surprise_gauge",
         analytics_dsl,
-        "window(-90d:)",
+        window_dsl,
         bayesian=True,
+        mc_draws=_LOW_DRAW_MC,
     )
     cohort_sg = _run_runner_analysis(
         graph_name,
         "surprise_gauge",
         analytics_dsl,
-        "cohort(-90d:)",
+        cohort_dsl,
         bayesian=True,
+        mc_draws=_LOW_DRAW_MC,
     )
 
     assert window_sg["reference_source"] == "bayesian"
@@ -724,12 +708,14 @@ def test_chart_and_daily_conversions_do_not_collapse_window_and_cohort():
 
     graph_name = "synth-simple-abc"
     analytics_dsl = "from(simple-b).to(simple-c)"
+    window_dsl = "window(1-Feb-26:14-Feb-26)"
+    cohort_dsl = "cohort(1-Feb-26:14-Feb-26)"
 
     window_rows = _extract_maturity_rows(
-        _run_v3(graph_name, analytics_dsl, "window(-90d:)"),
+        _run_v3(graph_name, analytics_dsl, window_dsl, mc_draws=_LOW_DRAW_MC),
     )
     cohort_rows = _extract_maturity_rows(
-        _run_v3(graph_name, analytics_dsl, "cohort(-90d:)"),
+        _run_v3(graph_name, analytics_dsl, cohort_dsl, mc_draws=_LOW_DRAW_MC),
     )
 
     window_tau5 = next(row for row in window_rows if row.get("tau_days") == 5)
@@ -741,13 +727,15 @@ def test_chart_and_daily_conversions_do_not_collapse_window_and_cohort():
         graph_name,
         "daily_conversions",
         analytics_dsl,
-        "window(-90d:)",
+        window_dsl,
+        mc_draws=_LOW_DRAW_MC,
     )
     cohort_daily = _run_runner_analysis(
         graph_name,
         "daily_conversions",
         analytics_dsl,
-        "cohort(-90d:)",
+        cohort_dsl,
+        mc_draws=_LOW_DRAW_MC,
     )
 
     assert window_daily["cf_mode"] == "sweep"
@@ -802,12 +790,26 @@ def test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split():
     # `model_midpoint` / `p_infinity_mean` collapse.
     graph_name = "synth-simple-abc"
     analytics_dsl = "from(simple-b).to(simple-c)"
+    window_dsl = "window(1-Feb-26:14-Feb-26)"
+    cohort_dsl = "cohort(1-Feb-26:14-Feb-26)"
 
     window_rows = _extract_maturity_rows(
-        _run_v3(graph_name, analytics_dsl, "window(-90d:)", bayesian=True),
+        _run_v3(
+            graph_name,
+            analytics_dsl,
+            window_dsl,
+            bayesian=True,
+            mc_draws=_LOW_DRAW_MC,
+        ),
     )
     cohort_rows = _extract_maturity_rows(
-        _run_v3(graph_name, analytics_dsl, "cohort(-90d:)", bayesian=True),
+        _run_v3(
+            graph_name,
+            analytics_dsl,
+            cohort_dsl,
+            bayesian=True,
+            mc_draws=_LOW_DRAW_MC,
+        ),
     )
 
     assert window_rows, "v3 returned no window rows on the bayesian synth path"

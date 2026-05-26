@@ -112,7 +112,8 @@ algebraic truth, visible degradation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from datetime import date
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -120,45 +121,47 @@ from .empirical_evidence_operator import (
     EmpiricalEvidencePrimitive,
     build_empirical_evidence_primitive,
     compose_empirical_span,
+    evaluate_empirical_span_from_seed_flat_origins,
+    evaluate_empirical_span_from_seed_flat_origins_with_provenance,
 )
 from .primitive_conditioning import (
     ConditioningPolicyOptions,
     make_unconditioned_primitive,
 )
 from .primitive_evidence import RequestPrimitiveRegistry
-from .primitives import ConditionedTransitionPrimitive
-from .span_operator_supply import (
-    PrimitiveDrawSurface,
-    draw_model_primitive_operators,
-)
+from .primitives import ConditionedTransitionPrimitive, TimingFamily
+from .bucket_transition import BucketSourceBasis
+from .frontier_continuation_dp import run_dp_from_node_source_ledgers
+from .frontier_residual_kernel import make_frontier_residual_kernel_provider
+from .span_kernel import ConcreteEdge, SpanTopology
 from .span_readout import PrefixSurface, SpanOperator, evaluate_span_readout
 from .subject_span_composer import (
     ComposedPrimitiveSpan,
     ComposeOptions,
+    EvidenceReadoutBinding,
+    _conditioned_kernel_maps,
     compose_primitive_span,
+    evaluate_conditioned_span_from_seed_flat_origins,
+    evaluate_conditioned_span_from_seed_flat_origins_with_provenance,
 )
+from .timing_span import DPExecutionPolicy, SpanDPTrace
 
 
 __all__ = [
     "ResolvedSpans",
     "ComposedUnconditionedOverlay",
     "SelectedCohortRowProjection",
+    "FrontierOccupancyLedger",
+    "build_frontier_occupancy",
     "build_per_draw_chain",
     "evaluate_model_rate_draws",
     "evaluate_request_cdf_draws",
     "project_selected_cohort_rows",
     "resolve_request_spans",
     # Engine readout helpers over the per-node / per-edge ledgers
-    # retained by `ComposedPrimitiveSpan` (Phase 6 §5 / proposal §5).
+    # retained by ``ComposedPrimitiveSpan``.
     "read_node_mass_draws",
-    "read_node_support_draws",
-    "read_node_exposure_draws",
     "read_edge_contribution_draws",
-    "read_edge_support_contribution_draws",
-    "read_edge_exposure_contribution_draws",
-    "project_coverage_draws",
-    "project_cumulative_exposure_draws",
-    "seed_subject_from_carrier",
 ]
 
 
@@ -186,16 +189,18 @@ class ResolvedSpans:
     zero-edge identity composition for window/cohort(A=X) — never None.
 
     ``composed_empirical_carrier`` / ``composed_empirical_subject`` are
-    sibling spans produced by the empirical evidence operator (Phase 6
-    §4.9) — same admitted rows, same arrival-map weighting, same DAG
-    DP/readout core as the conditioned spans above, differing only at
-    the per-edge kernel supply boundary (``Δ(k_emp/n_emp)`` vs
-    ``p × Δcdf``). ``resolve_request_spans`` populates them on every
-    request; identity carrier degenerates to a zero-edge empirical
-    composition just as the conditioned carrier does.
+    sibling spans produced by the empirical evidence operator: same
+    admitted rows, same arrival-map weighting, same DAG DP/readout core
+    as the conditioned spans above, differing only at the per-edge
+    kernel supply boundary (``Δ(k_emp/n_emp)`` vs ``p × Δcdf``).
+    ``resolve_request_spans`` populates them on every request; identity
+    carrier degenerates to a zero-edge empirical composition just as the
+    conditioned carrier does.
     """
     composed_carrier: ComposedPrimitiveSpan
     composed_subject: ComposedPrimitiveSpan
+    composed_carrier_predictive: ComposedPrimitiveSpan
+    composed_subject_predictive: ComposedPrimitiveSpan
     overlays: Mapping[str, ComposedUnconditionedOverlay]
     registry: RequestPrimitiveRegistry
     composed_empirical_carrier: ComposedPrimitiveSpan
@@ -205,6 +210,8 @@ class ResolvedSpans:
     ] = field(default_factory=dict)
     carrier_primitives: Tuple[ConditionedTransitionPrimitive, ...] = ()
     subject_primitives: Tuple[ConditionedTransitionPrimitive, ...] = ()
+    carrier_primitives_predictive: Tuple[ConditionedTransitionPrimitive, ...] = ()
+    subject_primitives_predictive: Tuple[ConditionedTransitionPrimitive, ...] = ()
     empirical_carrier_primitives: Tuple[EmpiricalEvidencePrimitive, ...] = ()
     empirical_subject_primitives: Tuple[EmpiricalEvidencePrimitive, ...] = ()
 
@@ -214,7 +221,7 @@ class RuntimeRootMass:
     cohort_ids: tuple[str, ...]
     root_days: np.ndarray
     root_counts: np.ndarray
-    root_support: np.ndarray
+    root_weights: np.ndarray
 
 
 def evaluate_with_operators(
@@ -228,7 +235,7 @@ def evaluate_with_operators(
         cohort_ids=root_mass.cohort_ids,
         root_days=root_mass.root_days,
         root_counts=root_mass.root_counts,
-        root_supports=root_mass.root_support,
+        root_supports=root_mass.root_weights,
         operators=tuple(operators),
         days=days,
         max_tau=max_tau,
@@ -269,6 +276,10 @@ def resolve_request_spans(
     """
     registry = RequestPrimitiveRegistry(arrival_map=subject_arrival_map)
     empirical_horizon_len = int(options.timing_cdf_max_tau) + 1
+    evidence_readout_binding = {
+        True: EvidenceReadoutBinding.window(),
+        False: EvidenceReadoutBinding.cohort(),
+    }[bool(is_window)]
 
     carrier_family = _prepare_carrier_operator_family(
         carrier_resolutions=carrier_resolutions,
@@ -281,10 +292,12 @@ def resolve_request_spans(
         empirical_horizon_len=empirical_horizon_len,
     )
     subject_family = _prepare_subject_operator_family(
+        x_node_id=str(x_node_id),
         subject_resolutions=subject_resolutions,
         subject_arrival_map=subject_arrival_map,
         registry=registry,
         is_window=is_window,
+        evidence_readout_binding=evidence_readout_binding,
         scenario_seed=scenario_seed,
         options=options,
         prior_source=prior_source,
@@ -299,6 +312,7 @@ def resolve_request_spans(
         registry=registry,
         primitives_by_edge_id=carrier_family.conditioned_by_edge_id,
         options=compose_options,
+        evidence_readout_binding=evidence_readout_binding,
     )
     composed_subject = _compose_conditioned_span(
         graph=graph,
@@ -307,6 +321,59 @@ def resolve_request_spans(
         registry=registry,
         primitives_by_edge_id=subject_family.conditioned_by_edge_id,
         options=compose_options,
+        evidence_readout_binding=evidence_readout_binding,
+    )
+    # FC plan §9.4: build a SECOND conditioned family per role with
+    # ``dispersion_basis='predictive'`` from the same bound evidence
+    # the epistemic family used. These are the spans the FC shadow
+    # surface consumes (§9.5 — predictive-basis residual kernels). The
+    # unconditioned-predictive overlay is NOT a substitute: it carries
+    # no evidence binding.
+    carrier_predictive_by_edge_id, carrier_predictive_primitives = (
+        _prepare_conditioned_only_family(
+            resolutions=carrier_resolutions,
+            arrival_map=carrier_arrival_map,
+            is_window=is_window,
+            evidence_readout_binding=evidence_readout_binding,
+            scenario_seed=scenario_seed,
+            options=options,
+            prior_source=prior_source,
+            request_evidence_candidates=request_evidence_candidates,
+            dispersion_basis='predictive',
+            carrier_mode=True,
+        )
+    )
+    subject_predictive_by_edge_id, subject_predictive_primitives = (
+        _prepare_conditioned_only_family(
+            resolutions=subject_resolutions,
+            arrival_map=subject_arrival_map,
+            is_window=is_window,
+            evidence_readout_binding=evidence_readout_binding,
+            scenario_seed=scenario_seed,
+            options=options,
+            prior_source=prior_source,
+            request_evidence_candidates=request_evidence_candidates,
+            dispersion_basis='predictive',
+            carrier_mode=False,
+        )
+    )
+    composed_carrier_predictive = _compose_conditioned_span(
+        graph=graph,
+        x_node_id=str(population_root_node_id),
+        end_node_id=str(x_node_id),
+        registry=registry,
+        primitives_by_edge_id=carrier_predictive_by_edge_id,
+        options=compose_options,
+        evidence_readout_binding=evidence_readout_binding,
+    )
+    composed_subject_predictive = _compose_conditioned_span(
+        graph=graph,
+        x_node_id=str(x_node_id),
+        end_node_id=str(end_node_id),
+        registry=registry,
+        primitives_by_edge_id=subject_predictive_by_edge_id,
+        options=compose_options,
+        evidence_readout_binding=evidence_readout_binding,
     )
     composed_empirical_carrier = _compose_empirical_span_for_family(
         graph=graph,
@@ -315,6 +382,7 @@ def resolve_request_spans(
         primitives_by_edge_id=carrier_family.empirical_by_edge_id,
         draw_count=options.draw_count,
         horizon_len=empirical_horizon_len,
+        evidence_readout_binding=evidence_readout_binding,
     )
     composed_empirical_subject = _compose_empirical_span_for_family(
         graph=graph,
@@ -323,6 +391,7 @@ def resolve_request_spans(
         primitives_by_edge_id=subject_family.empirical_by_edge_id,
         draw_count=options.draw_count,
         horizon_len=empirical_horizon_len,
+        evidence_readout_binding=evidence_readout_binding,
     )
     overlays = _compose_unconditioned_overlays(
         graph=graph,
@@ -337,6 +406,7 @@ def resolve_request_spans(
         options=options,
         compose_options=compose_options,
         prior_source=prior_source,
+        evidence_readout_binding=evidence_readout_binding,
     )
 
     conditioned_primitive_map = {
@@ -347,11 +417,15 @@ def resolve_request_spans(
     return ResolvedSpans(
         composed_carrier=composed_carrier,
         composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier_predictive,
+        composed_subject_predictive=composed_subject_predictive,
         overlays=overlays,
         registry=registry,
         conditioned_primitive_map=conditioned_primitive_map,
         carrier_primitives=carrier_family.conditioned_primitives,
         subject_primitives=subject_family.conditioned_primitives,
+        carrier_primitives_predictive=carrier_predictive_primitives,
+        subject_primitives_predictive=subject_predictive_primitives,
         composed_empirical_carrier=composed_empirical_carrier,
         composed_empirical_subject=composed_empirical_subject,
         empirical_carrier_primitives=carrier_family.empirical_primitives,
@@ -421,6 +495,12 @@ def _prepare_carrier_operator_family(
             candidates=request_evidence_candidates,
             draw_count=options.draw_count,
             horizon_len=empirical_horizon_len,
+            bucket_read_offset=0.0,
+            use_source_basis=False,
+            timing_family=_empirical_timing_family(
+                c_res.resolved_model,
+                prepared.primitive,
+            ),
         )
         _register_primitive_in_lookup(
             empirical_by_edge_id, c_res.transition, empirical,
@@ -438,10 +518,12 @@ def _prepare_carrier_operator_family(
 
 def _prepare_subject_operator_family(
     *,
+    x_node_id: str,
     subject_resolutions: Sequence[Any],
     subject_arrival_map: Any,
     registry: RequestPrimitiveRegistry,
     is_window: bool,
+    evidence_readout_binding: EvidenceReadoutBinding,
     scenario_seed: int,
     options: ConditioningPolicyOptions,
     prior_source: Optional[str],
@@ -459,6 +541,9 @@ def _prepare_subject_operator_family(
     conditioned_by_registry_key: dict[str, ConditionedTransitionPrimitive] = {}
     conditioned_primitives: list[ConditionedTransitionPrimitive] = []
     empirical_primitives: list[EmpiricalEvidencePrimitive] = []
+    node_phase: dict[str, float] = {
+        str(x_node_id): -float(evidence_readout_binding.empirical_subject_read_offset),
+    }
 
     for s_res in subject_resolutions:
         subject_arrival = (
@@ -484,6 +569,15 @@ def _prepare_subject_operator_family(
             conditioned_by_edge_id, s_res.transition, prepared.primitive,
         )
         conditioned_primitives.append(prepared.primitive)
+        empirical_family = _empirical_timing_family(
+            s_res.resolved_model,
+            prepared.primitive,
+        )
+        source_phase = node_phase.get(
+            str(s_res.transition.source_node),
+            -float(evidence_readout_binding.empirical_subject_read_offset),
+        )
+        empirical_read_offset = -float(source_phase)
 
         empirical = build_empirical_evidence_primitive(
             transition=s_res.transition,
@@ -497,11 +591,21 @@ def _prepare_subject_operator_family(
             candidates=request_evidence_candidates,
             draw_count=options.draw_count,
             horizon_len=empirical_horizon_len,
+            bucket_read_offset=empirical_read_offset,
+            evidence_basis="raw_local",
+            use_source_basis=True,
+            timing_family=empirical_family,
         )
         _register_primitive_in_lookup(
             empirical_by_edge_id, s_res.transition, empirical,
         )
         empirical_primitives.append(empirical)
+        output_phase = (
+            source_phase
+            if empirical_family in (TimingFamily.NON_LATENT, TimingFamily.DETERMINISTIC)
+            else -float(evidence_readout_binding.empirical_subject_read_offset)
+        )
+        node_phase[str(s_res.transition.destination_node)] = output_phase
 
     return _PreparedOperatorFamily(
         conditioned_by_edge_id=conditioned_by_edge_id,
@@ -510,6 +614,69 @@ def _prepare_subject_operator_family(
         conditioned_primitives=tuple(conditioned_primitives),
         empirical_primitives=tuple(empirical_primitives),
     )
+
+
+def _prepare_conditioned_only_family(
+    *,
+    resolutions: Sequence[Any],
+    arrival_map: Any,
+    is_window: bool,
+    evidence_readout_binding: EvidenceReadoutBinding,
+    scenario_seed: int,
+    options: ConditioningPolicyOptions,
+    prior_source: Optional[str],
+    request_evidence_candidates: Sequence[Any],
+    dispersion_basis: str,
+    carrier_mode: bool,
+) -> Tuple[
+    Dict[str, ConditionedTransitionPrimitive],
+    Tuple[ConditionedTransitionPrimitive, ...],
+]:
+    """Build a single conditioned-primitive family at the given basis.
+
+    Mirrors the conditioned half of ``_prepare_carrier_operator_family``
+    / ``_prepare_subject_operator_family`` but skips the empirical-side
+    construction (empirical primitives are basis-invariant — they are
+    raw ``k/n`` evidence — so they are built once by the epistemic
+    pass and reused across both bases). Used by ``resolve_request_spans``
+    to add a second predictive-basis conditioned family for the FC
+    shadow surface (FC plan §9.4: FC consumes predictive-basis
+    conditioned primitives, NOT the unconditioned-predictive overlay).
+    """
+    from .primitive_readout import (
+        _window_identity_arrival_weights,
+        prepare_primitive,
+    )
+
+    conditioned_by_edge_id: Dict[str, ConditionedTransitionPrimitive] = {}
+    conditioned_primitives: List[ConditionedTransitionPrimitive] = []
+    for res in resolutions:
+        if carrier_mode:
+            arrival = arrival_map.nodes[res.transition.source_node]
+        else:
+            arrival = (
+                _window_identity_arrival_weights(
+                    res.primitive_scope, draw_count=options.draw_count,
+                )
+                if is_window
+                else arrival_map.nodes[res.transition.source_node]
+            )
+        prepared = prepare_primitive(
+            transition=res.transition,
+            primitive_scope=res.primitive_scope,
+            resolved_model=res.resolved_model,
+            arrival_weights=arrival,
+            scenario_seed=scenario_seed,
+            options=options,
+            prior_source=prior_source,
+            request_candidates=request_evidence_candidates,
+            dispersion_basis=dispersion_basis,
+        )
+        _register_primitive_in_lookup(
+            conditioned_by_edge_id, res.transition, prepared.primitive,
+        )
+        conditioned_primitives.append(prepared.primitive)
+    return conditioned_by_edge_id, tuple(conditioned_primitives)
 
 
 def _lookup_by_concrete_edge_id(primitives_by_edge_id: Mapping[Any, Any]):
@@ -557,6 +724,15 @@ def _register_primitive_in_lookup(
     lookup[(transition.source_node, transition.destination_node)] = primitive
 
 
+def _empirical_timing_family(
+    resolved_model: Any,
+    primitive: ConditionedTransitionPrimitive,
+) -> TimingFamily:
+    if resolved_model.latency.latency_parameter is False:
+        return TimingFamily.NON_LATENT
+    return primitive.timing_family
+
+
 def _compose_conditioned_span(
     *,
     graph: Mapping[str, Any],
@@ -565,6 +741,7 @@ def _compose_conditioned_span(
     registry: RequestPrimitiveRegistry,
     primitives_by_edge_id: Mapping[str, ConditionedTransitionPrimitive],
     options: ComposeOptions,
+    evidence_readout_binding: EvidenceReadoutBinding | None = None,
 ) -> ComposedPrimitiveSpan:
     return compose_primitive_span(
         graph=graph,
@@ -573,6 +750,7 @@ def _compose_conditioned_span(
         registry=registry,
         edge_to_primitive_lookup=_lookup_by_concrete_edge_id(primitives_by_edge_id),
         options=options,
+        evidence_readout_binding=evidence_readout_binding,
     )
 
 
@@ -584,6 +762,7 @@ def _compose_empirical_span_for_family(
     primitives_by_edge_id: Mapping[str, EmpiricalEvidencePrimitive],
     draw_count: int,
     horizon_len: int,
+    evidence_readout_binding: EvidenceReadoutBinding | None = None,
 ) -> ComposedPrimitiveSpan:
     return compose_empirical_span(
         graph=graph,
@@ -594,6 +773,7 @@ def _compose_empirical_span_for_family(
         ),
         draw_count=draw_count,
         horizon_len=horizon_len,
+        evidence_readout_binding=evidence_readout_binding,
     )
 
 
@@ -611,6 +791,7 @@ def _compose_unconditioned_overlays(
     options: ConditioningPolicyOptions,
     compose_options: ComposeOptions,
     prior_source: Optional[str],
+    evidence_readout_binding: EvidenceReadoutBinding | None = None,
 ) -> Mapping[str, ComposedUnconditionedOverlay]:
     overlays: dict[str, ComposedUnconditionedOverlay] = {}
     for basis in unconditioned_overlay_bases:
@@ -646,6 +827,7 @@ def _compose_unconditioned_overlays(
             registry=registry,
             primitives_by_edge_id=c_map_eid,
             options=compose_options,
+            evidence_readout_binding=evidence_readout_binding,
         )
         overlay_subject = _compose_conditioned_span(
             graph=graph,
@@ -654,6 +836,7 @@ def _compose_unconditioned_overlays(
             registry=registry,
             primitives_by_edge_id=s_map_eid,
             options=compose_options,
+            evidence_readout_binding=evidence_readout_binding,
         )
         overlays[basis] = ComposedUnconditionedOverlay(
             subject=overlay_subject, carrier=overlay_carrier,
@@ -669,7 +852,7 @@ _MODEL_CURVE_ROOT_MASS = RuntimeRootMass(
     cohort_ids=("model-curve",),
     root_days=np.asarray([0], dtype=int),
     root_counts=np.asarray([1.0], dtype=float),
-    root_support=np.asarray([1.0], dtype=float),
+    root_weights=np.asarray([1.0], dtype=float),
 )
 
 
@@ -677,7 +860,7 @@ _REQUEST_ROOT_MASS = RuntimeRootMass(
     cohort_ids=("request",),
     root_days=np.asarray([0], dtype=int),
     root_counts=np.asarray([1.0], dtype=float),
-    root_support=np.asarray([1.0], dtype=float),
+    root_weights=np.asarray([1.0], dtype=float),
 )
 
 
@@ -721,15 +904,69 @@ def build_per_draw_chain(
     if reach_draws is None:
         reach_draws = np.asarray(span.span_p_draws, dtype=float)
     cdf_padded = _pad_draw_cdfs(span.cdf_draws, days)
-    ops = draw_model_primitive_operators(
-        PrimitiveDrawSurface(
-            edge_id=edge_id,
-            p_draws=reach_draws,
-            conditional_cdf_draws=cdf_padded,
-            timing_family="latent",
+    value = np.diff(cdf_padded, prepend=0.0, axis=1) * reach_draws[:, None]
+    return tuple(
+        (
+            SpanOperator(
+                name=f"{edge_id}::draw:{draw_index}",
+                value=value[draw_index : draw_index + 1],
+                family="composed_model_draw",
+            ),
         )
+        for draw_index in range(S)
     )
-    return tuple((op,) for op in ops)
+
+
+def _stack_per_draw_chain_kernels(
+    chain: tuple, S: int, days: int,
+) -> Tuple[np.ndarray, ...]:
+    """Stack a per-draw operator chain into a tuple of ``(S, kernel_length)``
+    batched kernels — one batched array per chain element.
+
+    ``chain`` is what ``build_per_draw_chain`` returns: a tuple of length
+    ``S``, each element a 1-tuple of one ``SpanOperator``. Within one
+    chain *element* every draw's operator has the same kernel length
+    (data degeneracy of the same primitive family), so the per-draw
+    values stack cleanly. Different chain elements may have different
+    kernel lengths; the caller applies them in sequence.
+    """
+    if not chain:
+        return ()
+    chain_length = len(chain[0])
+    stacked = []
+    for chain_idx in range(chain_length):
+        kernels = np.stack([chain[s][chain_idx].value[0] for s in range(S)])
+        stacked.append(kernels)
+    return tuple(stacked)
+
+
+def _evaluate_chain_at_root_zero_per_draw(
+    root_mass: float,
+    kernels: Tuple[np.ndarray, ...],
+    days: int,
+    max_tau: int,
+    S: int,
+) -> np.ndarray:
+    """Vectorised cumulative arrival for a one-cohort, root-day-0 chain.
+
+    Single-cohort row-batched degeneracy of ``evaluate_span_readout``:
+    each chain element's batched kernel ``(S, kernel_length)`` advances
+    the ``(S, days)`` ledger via the same strided convolve the scalar
+    ``_apply_kernel`` runs, broadcasting the per-draw kernel scalar
+    against the cohort-singleton row axis. Returns ``(S, max_tau + 1)``
+    cumulative arrival values picked at ``τ ∈ [0, max_tau]``.
+    """
+    ledger = np.zeros((S, days), dtype=float)
+    ledger[:, 0] = root_mass
+    for kernel in kernels:
+        kernel_length = kernel.shape[1]
+        new_ledger = np.zeros_like(ledger)
+        for offset in range(kernel_length):
+            new_ledger[:, offset:] += (
+                ledger[:, : days - offset] * kernel[:, offset : offset + 1]
+            )
+        ledger = new_ledger
+    return np.cumsum(ledger, axis=1)[:, : max_tau + 1]
 
 
 def evaluate_model_rate_draws(
@@ -763,26 +1000,29 @@ def evaluate_model_rate_draws(
     carrier_chain = build_per_draw_chain(
         carrier, S=S, days=horizon_len, edge_id="strict-span-carrier",
     )
-    rate_draws = np.zeros((S, horizon_len), dtype=float)
-    for s in range(S):
-        numerator = evaluate_with_operators(
-            root_mass=_MODEL_CURVE_ROOT_MASS,
-            operators=carrier_chain[s] + subject_chain[s],
-            days=horizon_len,
-            max_tau=horizon,
-        ).value_by_cohort_tau[0]
-        denominator = evaluate_with_operators(
-            root_mass=_MODEL_CURVE_ROOT_MASS,
-            operators=carrier_chain[s],
-            days=horizon_len,
-            max_tau=horizon,
-        ).value_by_cohort_tau[0]
-        rate_draws[s, :] = np.divide(
-            numerator, denominator,
-            out=np.zeros_like(numerator),
-            where=denominator > 0.0,
-        )
-    return rate_draws
+    carrier_kernels = _stack_per_draw_chain_kernels(carrier_chain, S, horizon_len)
+    subject_kernels = _stack_per_draw_chain_kernels(subject_chain, S, horizon_len)
+
+    root_mass = float(_MODEL_CURVE_ROOT_MASS.root_counts[0])
+    numerator = _evaluate_chain_at_root_zero_per_draw(
+        root_mass=root_mass,
+        kernels=carrier_kernels + subject_kernels,
+        days=horizon_len,
+        max_tau=horizon,
+        S=S,
+    )
+    denominator = _evaluate_chain_at_root_zero_per_draw(
+        root_mass=root_mass,
+        kernels=carrier_kernels,
+        days=horizon_len,
+        max_tau=horizon,
+        S=S,
+    )
+    return np.divide(
+        numerator, denominator,
+        out=np.zeros_like(numerator),
+        where=denominator > 0.0,
+    )
 
 
 def evaluate_request_cdf_draws(
@@ -812,16 +1052,16 @@ def evaluate_request_cdf_draws(
         carrier, S=S, days=horizon_len,
         edge_id="strict-span-request-carrier", reach_draws=unit_p,
     )
-    cdf_draws = np.zeros((S, horizon_len), dtype=float)
-    for s in range(S):
-        surface = evaluate_with_operators(
-            root_mass=_REQUEST_ROOT_MASS,
-            operators=carrier_chain[s] + subject_chain[s],
-            days=horizon_len,
-            max_tau=horizon,
-        )
-        cdf_draws[s, :] = surface.value_by_cohort_tau[0]
-    return cdf_draws
+    carrier_kernels = _stack_per_draw_chain_kernels(carrier_chain, S, horizon_len)
+    subject_kernels = _stack_per_draw_chain_kernels(subject_chain, S, horizon_len)
+
+    return _evaluate_chain_at_root_zero_per_draw(
+        root_mass=float(_REQUEST_ROOT_MASS.root_counts[0]),
+        kernels=carrier_kernels + subject_kernels,
+        days=horizon_len,
+        max_tau=horizon,
+        S=S,
+    )
 
 
 # ─── Engine readout helpers (Phase 6 §5 / proposal §5) ────────────────
@@ -837,25 +1077,7 @@ def read_node_mass_draws(
     per-draw cumulative of `read_node_mass_draws(end_node)` divided by
     the per-draw asymptotic reach.
     """
-    return span.node_density_draws[node_id]
-
-
-def read_node_support_draws(
-    span: ComposedPrimitiveSpan, node_id: str,
-) -> np.ndarray:
-    """Per-(draw, τ) support density at the named node (value-weighted
-    support stream of Phase 6 §4.8: ``cumulative_support /
-    cumulative_value`` is the coverage projection)."""
-    return span.node_support_draws[node_id]
-
-
-def read_node_exposure_draws(
-    span: ComposedPrimitiveSpan, node_id: str,
-) -> np.ndarray:
-    """Per-(draw, τ) exposure density at the named node (Phase 6 §4.8
-    exposure stream — preserves the covered-zero / absent distinction at
-    cumulative-zero cells where the value-weighted ratio is undefined)."""
-    return span.node_exposure_draws[node_id]
+    return span.node_density(node_id)
 
 
 def read_edge_contribution_draws(
@@ -863,435 +1085,1335 @@ def read_edge_contribution_draws(
 ) -> np.ndarray:
     """Per-(draw, τ) value contribution flowing through the named
     concrete edge. Coincident sibling edges have distinct entries."""
-    return span.edge_contribution_draws[edge_key]
-
-
-def read_edge_support_contribution_draws(
-    span: ComposedPrimitiveSpan, edge_key: str,
-) -> np.ndarray:
-    """Per-(draw, τ) support contribution through the named concrete edge."""
-    return span.edge_support_contribution_draws[edge_key]
-
-
-def read_edge_exposure_contribution_draws(
-    span: ComposedPrimitiveSpan, edge_key: str,
-) -> np.ndarray:
-    """Per-(draw, τ) exposure contribution through the named concrete edge."""
-    return span.edge_exposure_contribution_draws[edge_key]
-
-
-def project_coverage_draws(
-    value_draws: np.ndarray, support_draws: np.ndarray,
-) -> np.ndarray:
-    """Per-(draw, τ) coverage as Phase 6 §4.8's ratio:
-
-        coverage(s, τ) = cumulative_support(s, τ) / cumulative_value(s, τ)
-
-    The 0/0 cell — wavefront has not reached τ in this draw — emits 0
-    per the Phase 6 0/0 policy. Anywhere cumulative value is strictly
-    positive the division is unguarded.
-    """
-    cumulative_value = np.cumsum(value_draws, axis=-1)
-    cumulative_support = np.cumsum(support_draws, axis=-1)
-    return np.divide(
-        cumulative_support, cumulative_value,
-        out=np.zeros_like(cumulative_value),
-        where=cumulative_value > 0.0,
-    )
-
-
-def project_cumulative_exposure_draws(
-    exposure_draws: np.ndarray,
-) -> np.ndarray:
-    """Per-(draw, τ) cumulative exposure. Positive whenever the
-    wavefront has reached any observed cell in this draw — even if the
-    value-weighted support stream is zero (the covered-zero case)."""
-    return np.cumsum(exposure_draws, axis=-1)
+    return span.edge_contribution(edge_key)
 
 
 @dataclass(frozen=True)
 class SelectedCohortRowProjection:
-    """Atom 2.3 output — per-request row reducer surfaces.
+    """Per-request row reducer surfaces.
 
-    The single reducer reads from BOTH operator families and routes row
-    fields to the appropriate operator (Phase 6 §4.9 + §5.6):
+    Per FC proposal §9.7 the projection exposes four explicit surfaces:
 
-    - Model surfaces (``rate_draws_model``, ``x_draws_model``,
-      ``y_draws_model``) come from the conditioned operator on its
-      value stream — these drive the row's ``midpoint``, ``fan_*``,
-      ``forecast_x``, ``forecast_y``.
-    - Coverage / exposure / frontier come from the conditioned
-      operator's masked streams (§4.8); read per-anchor at both
-      terminals (``X`` for ``coverage_x``, ``Z`` for ``coverage_y``).
-      The empirical kernel's value collapses the support/value ratio
-      to 1 (§4.9), so coverage MUST come from the parametric kernel.
-    - Strict per-anchor evidence (``evidence_x_strict_by_anchor_tau``,
-      ``evidence_y_strict_by_anchor_tau``) comes from the empirical
-      operator's value stream. These are the unadjusted cumulatives.
-    - Row-level strict / adjusted / rate fields are derived per
-      Phase 6 §5.6: admissibility filter ``exposure_y_A(τ) > 0`` per
-      (anchor, τ), then sum across admissible anchors. Adjusted
-      applies the IPW divide by per-anchor coverage at the matching
-      terminal (carrier coverage_x for the x stream, chain coverage_y
-      for the y stream). Rate fields are y/x ratios with the 0/0
-      row-contract guard.
+    - **Strict empirical** (``evidence_x_strict``, ``evidence_y_strict``,
+      ``rate_strict``) — Σ_applicable strict empirical cumulatives on
+      the selected clock; supplies E mode and the evidence layer in
+      E+F mode.
+    - **Conditioned model** (``f_x_draws``, ``f_y_draws``,
+      ``f_rate_draws``) — unspliced full-root, query-conditioned model
+      surface under the epistemic basis. F mode renders this surface.
+    - **Frontier-conditioned (FC)** (``ef_x_draws``, ``ef_y_draws``,
+      ``ef_rate_draws``) — prefix-pinned to strict evidence through
+      each Cohort's ``tau_observed`` then continued from the frontier
+      ledger via the predictive residual operator. Atom 6 will remap
+      the public E+F forecast-layer chart fields to read this surface.
+    - **FC future residuals** (``ef_forecast_x``, ``ef_forecast_y``) —
+      direct future-only deltas (``ef_x - strict_x``, ``ef_y - strict_y``)
+      emitted by the frontier continuation, not subtracted post-hoc.
 
-    Per-anchor surfaces are ``Mapping[anchor_day, ndarray(T,)]`` —
-    averaged across draws. Row-level surfaces are ``ndarray(T,)``.
-    The aggregate model surfaces retain the draw axis so the row
-    builder can quantile them for fan widths.
+    Legacy spliced surfaces (``rate_draws_spliced``, ``x_draws_spliced``,
+    ``y_draws_spliced``) remain during the Atom 5→6 transition. They
+    are the conditioned-model value stream with each Cohort's observed
+    prefix spliced in through its ``tau_observed``. Atom 6 retires the
+    spliced surface in favour of ``ef_*``; until then ``midpoint`` /
+    ``fan_*`` / ``forecast_*`` continue to read ``*_spliced``. The
+    spliced fields are NOT "the model surface" — that name is reserved
+    for ``f_*``.
+
+    DP-derived coverage and adjusted evidence outputs are intentionally
+    absent. ``applicability_row`` is a simple Cohort applicability
+    scalar for display alpha.
     """
-    rate_draws_model: np.ndarray         # (S, T) — y_model / x_model
-    x_draws_model: np.ndarray            # (S, T) — cumulative
-    y_draws_model: np.ndarray            # (S, T) — cumulative
-    coverage_x_by_anchor_tau: Mapping[Any, np.ndarray]   # (T,) per anchor
-    coverage_y_by_anchor_tau: Mapping[Any, np.ndarray]
-    exposure_x_by_anchor_tau: Mapping[Any, np.ndarray]
-    exposure_y_by_anchor_tau: Mapping[Any, np.ndarray]
-    frontier_by_anchor: Mapping[Any, int]                # max τ where exp_y > 0
+    rate_draws_spliced: np.ndarray       # (S, T) — spliced; y_spliced / x_spliced
+    x_draws_spliced: np.ndarray          # (S, T) — spliced; cumulative
+    y_draws_spliced: np.ndarray          # (S, T) — spliced; cumulative
+    f_rate_draws: np.ndarray             # (S, T) — unspliced; f_y / f_x
+    f_x_draws: np.ndarray                # (S, T) — unspliced; cumulative
+    f_y_draws: np.ndarray                # (S, T) — unspliced; cumulative
+    applicability_row: np.ndarray         # (T,) — applicable cohorts / selected cohorts
+    applicable_cohort_count: np.ndarray   # (T,)
     evidence_x_strict_by_anchor_tau: Mapping[Any, np.ndarray]   # (T,)
     evidence_y_strict_by_anchor_tau: Mapping[Any, np.ndarray]
-    evidence_x_adjusted_numerator_by_anchor_tau: Mapping[Any, np.ndarray]
-    evidence_y_adjusted_numerator_by_anchor_tau: Mapping[Any, np.ndarray]
-    # Row-level fields per Phase 6 §5.6 — admissibility-filtered sums
-    # across anchors. ``rate_*`` fields divide y by x with the
-    # 0/0 row-contract guard. ``*_adjusted`` fields apply the IPW
-    # divide; the §5.6 contract claim is unbiasedness under MCAR
-    # (UNDER REVIEW — interaction with §4.9 forward-fill).
-    evidence_x_strict: np.ndarray        # (T,) — Σ_admissible strict_x_A
-    evidence_y_strict: np.ndarray        # (T,) — Σ_admissible strict_y_A
-    rate_strict: np.ndarray              # (T,) — evidence_y_strict / evidence_x_strict
-    evidence_x_adjusted: np.ndarray      # (T,) — Σ_admissible strict_x_A / coverage_x_A
-    evidence_y_adjusted: np.ndarray      # (T,) — Σ_admissible strict_y_A / coverage_y_A
-    rate_adjusted: np.ndarray            # (T,) — evidence_y_adjusted / evidence_x_adjusted
+    evidence_x_strict: np.ndarray         # (T,) — Σ_applicable strict_x_A
+    evidence_y_strict: np.ndarray         # (T,) — Σ_applicable strict_y_A
+    rate_strict: np.ndarray               # (T,) — evidence_y_strict / evidence_x_strict
+    # Frontier-conditioned (FC) surface — required, no default. Built
+    # by the FC continuation pass per FC proposal §5.4 / §9.6:
+    # fixed empirical prefix through each Cohort's frontier f_c plus
+    # predictive continuation from the frontier ledger. Pre-Atom-6 the
+    # public forecast-layer chart fields still read `*_spliced`; Atom 6
+    # remaps them to read `ef_*`.
+    ef_x_draws: np.ndarray               # (S, T) — cumulative, summed across cohorts
+    ef_y_draws: np.ndarray               # (S, T)
+    ef_rate_draws: np.ndarray            # (S, T) — ef_y / ef_x with NaN on 0/0
+    ef_forecast_x: np.ndarray            # (S, T) — future residual: ef_x - strict_x
+    ef_forecast_y: np.ndarray            # (S, T) — future residual: ef_y - strict_y
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
-def _convolve_seed_with_terminal_density(
-    seed: np.ndarray,
-    terminal_density: np.ndarray,
-    T: int,
-) -> np.ndarray:
-    """Per-draw convolution of a seed ``(S, T)`` at X with the per-draw
-    terminal density ``(S, T)`` at the chain end (Z). Returns the
-    per-(draw, τ) value at Z given the seed at X.
+def _summarise_empirical_span(span: ComposedPrimitiveSpan) -> Mapping[str, Any]:
+    primitives = []
+    for ce, primitive in span.empirical_edge_primitives:
+        source_days = sorted(primitive.value_kernel_draws_by_source_day.keys())
+        saturation = np.asarray(primitive.saturation_per_draw, dtype=float)
+        raw_by_day: Dict[str, Dict[str, float]] = {}
+        for point in primitive.resolution.raw_evidence_set.points:
+            day = str(point.candidate.coordinate.observed_date)[:10]
+            bucket = raw_by_day.setdefault(day, {'n': 0.0, 'k': 0.0, 'rows': 0.0})
+            bucket['n'] += float(point.n)
+            bucket['k'] += float(point.k)
+            bucket['rows'] += 1.0
+        bound_by_day: Dict[str, Dict[str, float]] = {}
+        for row in primitive.resolution.weighted_view.rows:
+            day = str(row.observed_date)[:10]
+            bucket = bound_by_day.setdefault(day, {
+                'n_weighted': 0.0,
+                'k_weighted': 0.0,
+                'rows': 0.0,
+            })
+            bucket['n_weighted'] += float(row.n_weighted)
+            bucket['k_weighted'] += float(row.k_weighted)
+            bucket['rows'] += 1.0
+        raw_days = sorted(raw_by_day)
+        bound_days = sorted(bound_by_day)
+        zero_clock_weight_days = sorted(set(raw_days) - set(bound_days))
 
-    The semantic: at draw ``s``, the seed array ``m[s, :]`` is the
-    per-day arrival density at X (mass × per-day-shape), and the
-    terminal density ``g_Z[s, :]`` is the per-day density at Z given
-    a unit δ(0) at X. The mass at Z at age τ post-anchor is the
-    discrete convolution ``Σ_d m[s, d] × g_Z[s, τ - d]``.
+        def _rate_bucket(bucket: Mapping[str, float], n_key: str, k_key: str):
+            n = float(bucket.get(n_key, 0.0))
+            k = float(bucket.get(k_key, 0.0))
+            return {
+                **dict(bucket),
+                'rate': (k / n) if n > 0.0 else None,
+            }
 
-    No defensive padding — both inputs are expected to be (S, T) on
-    the same horizon.
+        primitives.append({
+            'edge_key': ce.edge_key,
+            'from_node': ce.from_id,
+            'to_node': ce.to_id,
+            'source_day_count': len(source_days),
+            'first_source_day': source_days[0] if source_days else None,
+            'last_source_day': source_days[-1] if source_days else None,
+            'weighted_row_count': len(primitive.resolution.weighted_view.rows),
+            'zero_clock_weight_row_count': (
+                primitive.resolution.diagnostics.zero_clock_weight_row_count
+            ),
+            'raw_candidate_date_count': len(raw_days),
+            'first_raw_candidate_date': raw_days[0] if raw_days else None,
+            'last_raw_candidate_date': raw_days[-1] if raw_days else None,
+            'bound_date_count': len(bound_days),
+            'first_bound_date': bound_days[0] if bound_days else None,
+            'last_bound_date': bound_days[-1] if bound_days else None,
+            'zero_clock_weight_date_count': len(zero_clock_weight_days),
+            'first_zero_clock_weight_date': (
+                zero_clock_weight_days[0] if zero_clock_weight_days else None
+            ),
+            'last_zero_clock_weight_date': (
+                zero_clock_weight_days[-1] if zero_clock_weight_days else None
+            ),
+            'raw_by_day_sample': {
+                day: _rate_bucket(raw_by_day[day], 'n', 'k')
+                for day in (raw_days[:5] + raw_days[-5:])
+            },
+            'bound_by_day_sample': {
+                day: _rate_bucket(bound_by_day[day], 'n_weighted', 'k_weighted')
+                for day in (bound_days[:5] + bound_days[-5:])
+            },
+            'zero_clock_weight_days_sample': (
+                zero_clock_weight_days[:10] + zero_clock_weight_days[-10:]
+            ),
+            'saturation_mean': (
+                float(np.mean(saturation)) if saturation.size else None
+            ),
+            'saturation_min': (
+                float(np.min(saturation)) if saturation.size else None
+            ),
+            'saturation_max': (
+                float(np.max(saturation)) if saturation.size else None
+            ),
+        })
+    return {
+        'x_node_id': span.x_node_id,
+        'end_node_id': span.end_node_id,
+        'evidence_readout_binding': span.evidence_readout_binding.mode,
+        'primitive_count': len(span.empirical_edge_primitives),
+        'primitives': primitives,
+    }
+
+
+def _summarise_density_trace(trace: Any) -> Mapping[str, Any]:
+    def _surface_summary(surface: np.ndarray) -> Mapping[str, Any]:
+        arr = np.asarray(surface, dtype=float)
+        cumulative = np.cumsum(arr, axis=1) if arr.size else arr
+        final = cumulative[:, -1] if cumulative.size else np.asarray([], dtype=float)
+        active_columns = (
+            np.flatnonzero(np.any(np.abs(arr) > 0.0, axis=0)).astype(int).tolist()
+            if arr.ndim == 2 else []
+        )
+        return {
+            'shape': list(arr.shape),
+            'active_column_count': len(active_columns),
+            'first_active_column': active_columns[0] if active_columns else None,
+            'last_active_column': active_columns[-1] if active_columns else None,
+            'final_cumulative_mean': float(np.mean(final)) if final.size else 0.0,
+            'final_cumulative_min': float(np.min(final)) if final.size else 0.0,
+            'final_cumulative_max': float(np.max(final)) if final.size else 0.0,
+        }
+
+    return {
+        'nodes': {
+            str(node): _surface_summary(trace.node_density(node))
+            for node in trace.node_density_by_node_bucket
+        },
+        'edges': {
+            str(edge): _surface_summary(trace.edge_contribution(edge))
+            for edge in trace.edge_contribution_by_edge_source
+        },
+    }
+
+
+# ─── Frontier occupancy (FC proposal §5.2 / §9.3) ─────────────────────
+
+
+@dataclass(frozen=True)
+class FrontierOccupancyLedger:
+    """Per-cohort frontier-occupancy state derived from a source-aware DP trace.
+
+    Built per role (carrier or subject) at each selected Cohort's
+    observation frontier ``f_c``. The terminal node for the role is
+    EXCLUDED from unresolved occupancy: terminal mass already lives in
+    the fixed terminal prefix and would otherwise be double-counted.
+
+    Surfaces:
+
+    - ``occupancy_by_node_bucket[node][source_bucket][basis_int]`` —
+      ``(cohort, draw)`` per-cohort per-draw unresolved mass at
+      ``node`` from arrival bucket ``source_bucket`` carrying basis
+      ``basis_int`` at that Cohort's frontier ``f_c``. Computed as
+      ``arrivals[U, u] − departures[U, u, ≤ f_c]`` straight from the
+      empirical trace and stored under the bucket's single basis key
+      (perimeter contract — mixed-basis frontier buckets raise). No
+      per-provenance apportionment: same (role, node, bucket, basis)
+      merges. Basis lives as the inner dict key because it's a
+      kernel-dispatch property (POINT_AT_ENDPOINT vs
+      BUCKET_DISTRIBUTED select different conditioned kernels), so
+      the continuation DP can iterate per basis and fire one kernel
+      call per basis branch at each source bucket. Empty buckets and
+      off-path nodes are absent from the mapping.
+    - ``terminal_arrivals_cumulative`` — ``(cohort, draw, T)`` per-draw
+      cumulative arrivals at the role's terminal node by each row age.
+      Drives the fixed terminal prefix for ``τ <= f_c`` and seeds the
+      future-X-arrival ledger when the carrier role's continuation hands
+      off to ordinary predictive subject kernels.
+    - ``terminal_at_f`` — ``(cohort, draw)`` value of the terminal
+      cumulative at each Cohort's own frontier ``f_c``.
+    - ``root_total`` — ``(cohort, draw)`` per-cohort per-draw root mass
+      injected at the topology's seed bucket. Used by the conservation
+      check; equals ``N_anchor`` per Cohort in the typical request shape.
+
+    Conservation: ``terminal_at_f[c, s] + Σ occupancy[c, s] == root_total[c, s]``
+    holds algebraically by construction (arrivals − departures + terminal
+    = seed). The contract is exercised by unit tests, not asserted at
+    runtime.
+
+    Per-Cohort frontiers are independent: every helper here uses the
+    Cohort's own ``f_c``, never a group-level ``tau_solid_max``.
     """
-    S = seed.shape[0]
-    result = np.zeros((S, T), dtype=np.float64)
-    for s in range(S):
-        result[s, :] = np.convolve(seed[s, :], terminal_density[s, :])[:T]
-    return result
+    occupancy_by_node_bucket: Mapping[
+        str, Mapping[int, Mapping[int, np.ndarray]]
+    ]
+    terminal_arrivals_cumulative: np.ndarray
+    terminal_at_f: np.ndarray
+    root_total: np.ndarray
+    terminal_node_id: str
+    cohort_count: int
+    draw_count: int
+    horizon_len: int
+
+    @property
+    def is_empty_occupancy(self) -> bool:
+        """True when no non-terminal node carries unresolved mass.
+
+        Holds for an identity span where the topology root equals the
+        terminal — every grain of mass arrives at the terminal at the
+        seed bucket and there is no in-transit residue to continue.
+        """
+        return not self.occupancy_by_node_bucket
+
+
+def _on_path_outgoing(
+    topology: SpanTopology, node: str
+) -> Tuple[ConcreteEdge, ...]:
+    """Concrete edges leaving ``node`` whose destinations are on-path.
+
+    Mirrors ``SpanTopology.incoming_concrete_edges`` but for the
+    outgoing direction. The DP only fires on-path outgoing edges, so
+    departures via on-path outgoing edges are exactly the mass that
+    leaves ``node`` through the DP.
+    """
+    return tuple(
+        ce for ce in topology.concrete_edges
+        if ce.from_id == node and ce.to_id in topology.on_path
+    )
+
+
+def _cumulative_at_frontier(
+    cum_cdT: np.ndarray, f_by_cohort_arr: np.ndarray,
+) -> np.ndarray:
+    """Per-cohort cumulative-through-frontier with safe ``f_c = -1`` handling.
+
+    Inputs:
+      - ``cum_cdT``: ``(C, D, T)`` cumulative along the τ axis.
+      - ``f_by_cohort_arr``: ``(C,)`` int64 frontier indices in
+        ``[-1, T-1]``. The value ``-1`` is the off-the-left-edge
+        sentinel for cohorts with no observations: algebraically the
+        cumulative-through-frontier is zero (empty closed sum), but a
+        naive ``np.take_along_axis(cum_cdT, -1, axis=-1)`` follows
+        Python negative-indexing and returns ``cum_cdT[..., T-1]``
+        instead — the full τ-tail mass, not zero. The pad-leading-zero
+        idiom prepends a zero column and looks up ``f_c + 1``, mapping
+        ``-1 → padded[0] = 0`` and ``k ≥ 0 → padded[k+1] = cum[k]``
+        uniformly. No mode branch, no ``np.where`` on the sentinel.
+
+    Returned shape is ``(C, D, 1)`` — squeeze the trailing axis at the
+    call site if a 2-D result is wanted.
+    """
+    C = cum_cdT.shape[0]
+    D = cum_cdT.shape[1]
+    pad = np.zeros((C, D, 1), dtype=cum_cdT.dtype)
+    padded = np.concatenate([pad, cum_cdT], axis=-1)  # (C, D, T+1)
+    shifted = (f_by_cohort_arr + 1)[:, None, None]    # (C, 1, 1) ∈ [0, T]
+    return np.take_along_axis(padded, shifted, axis=-1)
+
+
+def build_frontier_occupancy(
+    *,
+    trace: SpanDPTrace,
+    topology: SpanTopology,
+    terminal_node_id: str,
+    frontier_by_cohort: Sequence[int],
+    cohort_count: int,
+    draw_count: int,
+) -> FrontierOccupancyLedger:
+    """Build a frontier-occupancy ledger from a source-aware DP trace.
+
+    Per FC plan §9.3 the helper consumes **only** the empirical trace.
+    For each on-path non-terminal node ``U`` and each arrival bucket
+    ``u`` populated in the trace, occupancy at Cohort frontier ``f_c`` is
+
+        occupancy[U][u][c, s] =
+            arrivals[U, u, c, s] − Σ_{e on-path outgoing from U}
+                                   Σ_{τ ≤ f_c} edge_contribution[e][u][c, s, τ]
+
+    Arrivals come from ``trace.node_density_by_node_bucket[U][u]``
+    (sum-over-provenance per (node, bucket)); departures from
+    ``trace.edge_contribution_by_edge_source[e][u]`` summed over the
+    trace's own per-edge per-source-bucket smear up to each cohort's
+    own frontier. This is the spec equation literally — no per-
+    provenance apportionment, no proportional allocation, no model
+    kernel: §9.3 is explicit that frontier occupancy is empirical
+    state.
+
+    Buckets with ``u > f_c`` contribute zero occupancy at that Cohort
+    by construction — the trace places no mass at any downstream
+    column before ``u``, so the departure cumulative is zero and the
+    bucket-visibility factor ``(u ≤ f_c)`` further zeros the result so
+    "arrived after the frontier" mass does not leak into occupancy.
+
+    Per-(node, bucket) basis is read from the trace's
+    ``node_basis_by_node_bucket`` map. The continuation DP fires one
+    kernel per (node, bucket); buckets that received mass from multiple
+    upstream bases (a rare regime — basis at a bucket is normally
+    determined by the incoming edge's deposit convention) are a
+    perimeter violation and raise ``ValueError``.
+
+    The terminal node is excluded — its mass is carried by the fixed
+    terminal prefix instead. Per-Cohort frontiers are independent; per
+    §5.2 the helper never uses a group-level cap.
+    """
+    S_total = int(cohort_count) * int(draw_count)
+    T = int(trace.horizon_len)
+    # ``f_c = -1`` is the off-the-left-edge sentinel for empty-frames
+    # cohorts. Never used as a ``take_along_axis`` index directly —
+    # ``_cumulative_at_frontier`` applies the ``+1`` shift internally.
+    # Comparison sites (``u <= f_c``, ``col_idx <= f_c``) handle ``-1``
+    # correctly under Python ``<=``.
+    f_by_cohort_arr = np.asarray(frontier_by_cohort, dtype=np.int64)
+
+    nonterminal_nodes = topology.on_path - {terminal_node_id}
+    occupancy_by_node_bucket: Dict[
+        str, Dict[int, Dict[int, np.ndarray]]
+    ] = {}
+
+    # Trace contract (Atom 3): ``node_density_by_node_bucket`` and
+    # ``node_basis_by_node_bucket`` are pre-allocated for every node
+    # in ``topo.on_path`` — nodes with no arrivals carry an empty
+    # inner mapping, but the outer key is present. Direct indexing
+    # here is the engine's enforcement of that contract: a missing
+    # on-path node, or a basis-map that does not mirror the density
+    # map at every bucket, surfaces as ``KeyError`` immediately.
+    for U in nonterminal_nodes:
+        outgoing_edges = _on_path_outgoing(topology, U)
+        node_density_by_bucket = trace.node_density_by_node_bucket[U]
+        node_basis_by_bucket = trace.node_basis_by_node_bucket[U]
+        node_occ: Dict[int, Dict[int, np.ndarray]] = {}
+        for bucket, arrivals_flat in node_density_by_bucket.items():
+            u = int(bucket)
+            arrivals_cd = np.asarray(
+                arrivals_flat, dtype=np.float64,
+            ).reshape(cohort_count, draw_count)
+
+            # Empirical departures from (U, u) by each Cohort's
+            # frontier ``f_c``, summed over on-path outgoing edges.
+            # ``edge_contribution_by_edge_source[e][u]`` is the
+            # trace's per-(draw, τ) smear of mass leaving ``U`` via
+            # ``e`` from source bucket ``u``. The cumulative
+            # ``Σ_{τ ≤ f_c}`` of that smear is the empirical
+            # departures to-date through that edge. Sum across all
+            # on-path outgoing edges to get total departures.
+            total_dep_cd = np.zeros(
+                (cohort_count, draw_count), dtype=np.float64,
+            )
+            for ce in outgoing_edges:
+                edge_src_map = trace.edge_contribution_by_edge_source[ce.edge_key]
+                if u not in edge_src_map:
+                    # Edge carries no flow from this bucket → adds
+                    # zero. Iteration with an absent key adds the
+                    # additive identity, no defensive fallback
+                    # invoked.
+                    continue
+                edge_smear = np.asarray(
+                    edge_src_map[u], dtype=np.float64,
+                ).reshape(cohort_count, draw_count, T)
+                cum_dep_cdT = np.cumsum(edge_smear, axis=-1)
+                total_dep_cd = total_dep_cd + _cumulative_at_frontier(
+                    cum_dep_cdT, f_by_cohort_arr,
+                ).squeeze(-1)
+
+            # Bucket-visibility gate. Mass at ``(U, u)`` is only
+            # "visible" at frontier ``f_c`` for cohorts whose
+            # frontier is at or after ``u`` — at earlier frontiers
+            # the cohort has not yet reached the row age where this
+            # bucket's arrivals show up, so occupancy must be zero.
+            # Multiplicative gate, no branch.
+            bucket_visible_c = (u <= f_by_cohort_arr).astype(np.float64)
+            unresolved_cd = (
+                (arrivals_cd - total_dep_cd) * bucket_visible_c[:, None]
+            )
+
+            # Single basis per (node, bucket) at the frontier —
+            # perimeter contract enforced by the trace's
+            # construction. The trace's per-prov basis map at this
+            # bucket must contain exactly one distinct basis;
+            # mixed-basis frontier buckets indicate an upstream
+            # construction error.
+            bucket_basis_map = node_basis_by_bucket[bucket]
+            distinct_bases = {int(b) for b in bucket_basis_map.values()}
+            if len(distinct_bases) > 1:
+                raise ValueError(
+                    f"mixed BucketSourceBasis at frontier "
+                    f"({U}, bucket={u}): {distinct_bases} — frontier "
+                    f"occupancy requires a single basis per (node, "
+                    f"bucket); upstream trace violates the perimeter "
+                    f"contract.",
+                )
+            the_basis = next(iter(distinct_bases))
+            node_occ[u] = {the_basis: unresolved_cd}
+        occupancy_by_node_bucket[U] = node_occ
+
+    # Terminal cumulative arrivals — the fixed prefix the FC
+    # continuation rides on.
+    terminal_density_cdT = trace.node_density(terminal_node_id).reshape(
+        cohort_count, draw_count, T
+    )
+    terminal_arrivals_cumulative = np.cumsum(terminal_density_cdT, axis=-1)
+
+    # Per-cohort terminal cumulative at f_c via vectorised indexing —
+    # no per-cohort Python loop. ``_cumulative_at_frontier`` handles
+    # the ``f_c = -1`` sentinel (off-the-left-edge → 0).
+    terminal_at_f = _cumulative_at_frontier(
+        terminal_arrivals_cumulative, f_by_cohort_arr,
+    ).squeeze(-1)
+
+    # Root total per (cohort, draw): the mass injected at the
+    # topology's root, summed over arrival buckets. Direct indexing
+    # on the root node — the topology root is always on-path, so the
+    # trace contract guarantees the entry exists. Empty inner maps
+    # sum to the zero accumulator by the additive identity of an
+    # empty for-loop.
+    root_arrivals = trace.node_density_by_node_bucket[topology.x_node_id]
+    root_total_flat = np.zeros(S_total, dtype=np.float64)
+    for bucket_mass in root_arrivals.values():
+        root_total_flat = root_total_flat + np.asarray(
+            bucket_mass, dtype=np.float64,
+        )
+    root_total = root_total_flat.reshape(cohort_count, draw_count)
+
+    return FrontierOccupancyLedger(
+        occupancy_by_node_bucket=occupancy_by_node_bucket,
+        terminal_arrivals_cumulative=terminal_arrivals_cumulative,
+        terminal_at_f=terminal_at_f,
+        root_total=root_total,
+        terminal_node_id=terminal_node_id,
+        cohort_count=int(cohort_count),
+        draw_count=int(draw_count),
+        horizon_len=T,
+    )
+
+
+def _build_kernel_toeplitz(K: np.ndarray, T: int) -> np.ndarray:
+    """Lower-triangular Toeplitz matrix from a per-draw kernel.
+
+    Given ``K`` of shape ``(D, T)`` returns a tensor ``T_mat`` of
+    shape ``(D, T, T)`` with ``T_mat[d, v, u] = K[d, v - u]`` for
+    ``v >= u`` and zero elsewhere. The batched DP convolution
+    ``out[c, d, v] = sum_u M[c, d, u] × K[d, v - u]`` then reduces
+    to a single ``einsum('cdu,dvu->cdv', M, T_mat)`` — one BLAS-
+    backed matmul per (edge, basis) instead of a per-source-bucket
+    Python loop.
+    """
+    v_idx = np.arange(T)
+    u_idx = np.arange(T)
+    offset = v_idx[:, None] - u_idx[None, :]  # (T, T)
+    valid = offset >= 0
+    # ``K[:, np.clip(offset, 0, T-1)]`` gathers along the kernel
+    # axis; the ``np.where`` zeros the upper-triangular wrap-around.
+    return np.where(
+        valid[None, :, :],
+        K[:, np.clip(offset, 0, T - 1)],
+        0.0,
+    )
+
+
+def _make_predictive_kernel_provider(
+    span: ComposedPrimitiveSpan,
+    *,
+    horizon: int,
+    cdf_renorm_tolerance: float = ComposeOptions.cdf_renorm_tolerance,
+) -> Any:
+    """Return a per-edge predictive kernel provider for the FC continuation DP.
+
+    Builds the conditioned endpoint / bucket kernel maps at the span's
+    native ``max_tau`` and exposes them sliced to the caller's
+    ``horizon`` so the returned kernels have shape ``(draw_count,
+    horizon - source_index)`` — matching the FC continuation DP's
+    expected signature when the analyse-level horizon is smaller than
+    the span's native max_tau.
+
+    Returns ``(kernel, out_basis)`` tuples uniformly so consumers do
+    not need a contract-shape ``isinstance`` branch. ``out_basis`` is
+    derived from the edge's latency metadata exactly as the Atom-3 DP
+    derives the default — non-latent edges propagate as
+    ``POINT_AT_ENDPOINT`` (Dirac landing), latent edges smear as
+    ``BUCKET_DISTRIBUTED``. The basis lives on the edge data, never
+    on a runtime conditional.
+    """
+    S = int(span.draw_count)
+    T_span = int(span.max_tau) + 1
+    T_outer = int(horizon)
+    endpoint_kernels, bucket_kernels = _conditioned_kernel_maps(
+        edge_primitives=span.conditioned_edge_primitives,
+        S=S,
+        T=T_span,
+        cdf_renorm_tolerance=cdf_renorm_tolerance,
+    )
+    # Basis → per-edge-key kernel map. Dict lookup replaces a basis
+    # if/else dispatch; an unknown basis raises naturally as KeyError.
+    kernels_by_basis: Mapping[BucketSourceBasis, Mapping[str, np.ndarray]] = {
+        BucketSourceBasis.BUCKET_DISTRIBUTED: bucket_kernels,
+        BucketSourceBasis.POINT_AT_ENDPOINT: endpoint_kernels,
+    }
+    # Per-edge output basis lookup, materialised once from the edge
+    # metadata so the provider's hot path is a pure dict get with no
+    # per-call edge_data introspection. ``p`` and ``p.latency`` are
+    # required by the parameterised-edge perimeter contract — these
+    # spans went through ``compose_primitive_span`` which only admits
+    # parameterised edges. Missing ``p`` or ``p.latency`` is a
+    # perimeter violation, surfaced via direct indexing.
+    # ``latency_parameter`` itself is intentionally read with
+    # ``.get(...)``: per the production graph schema convention
+    # (see ``model_resolver.py:325`` and ``timing_span.py:766``),
+    # absent ``latency_parameter`` means LATENT (BUCKET_DISTRIBUTED).
+    # Only an explicit ``False`` flips the edge to POINT_AT_ENDPOINT.
+    # This is the documented schema semantic, not a defensive default.
+    out_basis_by_edge: Dict[str, BucketSourceBasis] = {}
+    for ce, _primitive in span.conditioned_edge_primitives:
+        latency = ce.edge_data['p']['latency']
+        if latency.get('latency_parameter') is False:
+            out_basis_by_edge[ce.edge_key] = BucketSourceBasis.POINT_AT_ENDPOINT
+        else:
+            out_basis_by_edge[ce.edge_key] = BucketSourceBasis.BUCKET_DISTRIBUTED
+
+    def provider(
+        ce: ConcreteEdge,
+        source_index: int,
+        source_basis: BucketSourceBasis,
+    ) -> Tuple[np.ndarray, BucketSourceBasis]:
+        # Cohort-invariant kernel: shape ``(D, T_outer - source_index)``.
+        # The DP broadcasts against ``bucket_mass_3d[:, :, None]`` of
+        # shape ``(C, D, 1)`` so the cohort axis materialises at
+        # multiplication without any per-cohort kernel call.
+        kernel = kernels_by_basis[source_basis][ce.edge_key][
+            :, : T_outer - int(source_index)
+        ]
+        return kernel, out_basis_by_edge[ce.edge_key]
+
+    # Batched code path: one matmul per (edge, basis) instead of per
+    # (source bucket). Cached per (edge_key, basis_int) so the
+    # Toeplitz construction runs once per shadow surface assembly.
+    toeplitz_cache: Dict[Tuple[str, int], np.ndarray] = {}
+
+    def batched_op(
+        ce: ConcreteEdge,
+        source_basis: BucketSourceBasis,
+        source_mass_3d: np.ndarray,
+    ) -> Tuple[np.ndarray, BucketSourceBasis]:
+        """Apply the edge's kernel to a full per-(node, basis) source
+        mass tensor ``(C, D, T)`` in one BLAS-backed contraction.
+
+        Returns the destination contribution ``(C, D, T)`` and the
+        edge's output basis. The DP detects this method on the
+        provider and uses it in place of the per-source-bucket loop.
+        """
+        cache_key = (ce.edge_key, int(source_basis))
+        T_mat = toeplitz_cache.get(cache_key)
+        if T_mat is None:
+            K = kernels_by_basis[source_basis][ce.edge_key][:, :T_outer]
+            T_mat = _build_kernel_toeplitz(K, T_outer)
+            toeplitz_cache[cache_key] = T_mat
+        # ``M`` shape (C, D, T), ``T_mat`` shape (D, T, T) → out (C, D, T).
+        out = np.einsum('cdu,dvu->cdv', source_mass_3d, T_mat, optimize=True)
+        return out, out_basis_by_edge[ce.edge_key]
+
+    provider.batched_op = batched_op  # type: ignore[attr-defined]
+    return provider
+
+
+def _project_frontier_shadow_surfaces(
+    *,
+    composed_carrier_predictive: ComposedPrimitiveSpan,
+    composed_subject_predictive: ComposedPrimitiveSpan,
+    emp_x_trace: SpanDPTrace,
+    emp_y_trace: SpanDPTrace,
+    cohort_count: int,
+    draw_count: int,
+    horizon: int,
+    tau_observed_by_anchor: Sequence[int],
+    population_seed: np.ndarray,
+) -> Mapping[str, np.ndarray]:
+    """Build the shadow FC surfaces (ef_x_draws, ef_y_draws, ef_rate_draws,
+    ef_forecast_x, ef_forecast_y) via the §5.4 / §9.6 continuation pass.
+
+    FC is a predictive-basis surface: the spans passed in MUST be the
+    predictive-basis CONDITIONED spans (``composed_*_predictive`` —
+    built by ``resolve_request_spans`` from the predictive-basis
+    conditioned primitives, NOT the prior-only
+    ``unconditioned_overlays['predictive']`` pair which carries
+    ``status=PRIOR_ONLY`` and no evidence). Passing epistemic spans
+    here produces an algebraically incorrect FC surface — it would
+    mix the f_* model surface's epistemic moment family into a
+    forecast role that demands κ-inflated predictive dispersion;
+    passing unconditioned-predictive spans drops the bound evidence
+    and projects from the prior.
+
+    Steps:
+
+    1. Derive per-cohort frontier-occupancy ledgers ``L_carrier_f`` and
+       ``L_subject_f`` from the empirical traces alone (§9.3). The
+       occupancy helper consumes no model kernel — survivor is
+       ``arrivals − empirical departures`` straight from the trace.
+    2. Form the FC carrier seed by adding the future-of-frontier slice
+       of the selected-cohort root mass to the empirical carrier
+       occupancy at the carrier root. The mask ``u > f_c`` makes the
+       injection branchless: empty-frames cohorts with ``f_c = -1``
+       receive the whole root seed at ``u = 0`` (``0 > -1``), while
+       observed cohorts with ``f_c ≥ 0`` receive nothing at ``u = 0``
+       (already accounted for by the empirical prefix). This is the
+       algebraic representation of "the selected cohort exists at the
+       carrier root on its anchor day" — a fact the empirical trace
+       only encodes when an observation captures it, so it must be
+       injected explicitly for cohorts without observations.
+    3. Wrap the predictive model kernels for carrier and subject with
+       node-level residual operators (§9.5). The residual algebra
+       degenerates correctly at ``u > f_c`` (``H = 0``, survivor = 1,
+       post-mask passes through), so the same DP machinery handles
+       both physical frontier residuals and post-frontier root-seed
+       mass with no branching.
+    4. Run the FC continuation DP three times (§9.6):
+       - carrier seed × carrier-residual → future X arrivals;
+       - subject ledger × subject-residual → future Y from frontier
+         survivors;
+       - future X arrivals × ORDINARY subject kernels → future Y from
+         Pop C (NOT residual — Pop C members are fresh at X on
+         arrival, subject clock starts at zero).
+    5. Aggregate per-cohort fixed empirical prefix (τ ≤ f_c) + future
+       continuation (τ > f_c), sum across cohorts, divide.
+    """
+    carrier_topology = composed_carrier_predictive.topology
+    subject_topology = composed_subject_predictive.topology
+
+    T = int(horizon) + 1
+    S_total = int(cohort_count) * int(draw_count)
+    carrier_terminal = composed_carrier_predictive.end_node_id
+    subject_terminal = composed_subject_predictive.end_node_id
+    subject_root = subject_topology.x_node_id
+
+    # Per §5.2 each Cohort uses its own ``f_c`` = ``tau_observed``.
+    f_by_cohort_arr = np.asarray(tau_observed_by_anchor, dtype=np.int64)
+
+    # Occupancy ledgers are derived from the empirical traces ONLY —
+    # the predictive kernels are not involved here (§9.3). The
+    # predictive kernels DO feed the residual provider (§9.5) and the
+    # Pop-C handoff DP below, where they continue unresolved
+    # frontier mass into the future.
+    carrier_frontier = build_frontier_occupancy(
+        trace=emp_x_trace,
+        topology=carrier_topology,
+        terminal_node_id=carrier_terminal,
+        frontier_by_cohort=f_by_cohort_arr,
+        cohort_count=cohort_count,
+        draw_count=draw_count,
+    )
+    subject_frontier = build_frontier_occupancy(
+        trace=emp_y_trace,
+        topology=subject_topology,
+        terminal_node_id=subject_terminal,
+        frontier_by_cohort=f_by_cohort_arr,
+        cohort_count=cohort_count,
+        draw_count=draw_count,
+    )
+
+    # Predictive base kernels for the residual provider (§9.5) and
+    # the Pop-C handoff DP. Built once and reused.
+    carrier_base = _make_predictive_kernel_provider(
+        composed_carrier_predictive, horizon=T,
+    )
+    subject_base = _make_predictive_kernel_provider(
+        composed_subject_predictive, horizon=T,
+    )
+
+    def _occupancy_to_dp_seed(
+        ledger: FrontierOccupancyLedger,
+    ) -> Mapping[str, Mapping[int, Mapping[int, np.ndarray]]]:
+        """Reshape per-(cohort, draw) occupancy entries to the flat
+        ``(C * D,)`` row layout the DP consumes. Shape is preserved:
+        ``[node][bucket][basis] -> flat mass``.
+        """
+        return {
+            node: {
+                bucket: {
+                    int(basis): occ.reshape(S_total).copy()
+                    for basis, occ in basis_map.items()
+                }
+                for bucket, basis_map in bucket_map.items()
+            }
+            for node, bucket_map in ledger.occupancy_by_node_bucket.items()
+        }
+
+    # Three continuation passes (§9.6), uniform shape:
+    #   carrier-residual:   L_carrier_f × residual carrier kernels  → future X arrivals
+    #   subject-residual:   L_subject_f × residual subject kernels  → future Y from frontier
+    #   future-X handoff:   future X arrivals × ORDINARY subject kernels → Pop-C future Y
+    # The Pop-C handoff is NOT residual: Pop-C members arrive fresh at
+    # X after the frontier, with subject clocks starting at zero (§5.4).
+    carrier_residual = make_frontier_residual_kernel_provider(
+        topology=carrier_topology,
+        base_kernel_provider=carrier_base,
+        frontier_by_cohort=f_by_cohort_arr,
+        cohort_count=cohort_count,
+        draw_count=draw_count,
+        horizon=T,
+    )
+    subject_residual = make_frontier_residual_kernel_provider(
+        topology=subject_topology,
+        base_kernel_provider=subject_base,
+        frontier_by_cohort=f_by_cohort_arr,
+        cohort_count=cohort_count,
+        draw_count=draw_count,
+        horizon=T,
+    )
+    carrier_mass = _occupancy_to_dp_seed(carrier_frontier)
+    subject_mass = _occupancy_to_dp_seed(subject_frontier)
+
+    # Future-of-frontier population-mass injection at the carrier root
+    # (§9.4 — branchless empty-cohort algebraic degeneracy). Mass source
+    # is ``population_seed`` (= ``N_pop`` at τ=0 per cohort): for empty-
+    # frames cohorts the synthetic unit prior enters here, while their
+    # empirical-trace seed remains zero so strict evidence is unaffected.
+    # Mask is ``u > f_c``: for ``f_c = -1`` every bucket survives (full
+    # population seed enters at ``u = 0``); for ``f_c ≥ 0`` the seed
+    # bucket at ``u = 0`` is masked out (empirical prefix already
+    # accounts for the cohort's evidence-side arrival). Basis is
+    # BUCKET_DISTRIBUTED — matches the empirical root-deposit convention.
+    carrier_root = carrier_topology.x_node_id
+    population_seed_cdT = np.asarray(
+        population_seed, dtype=np.float64,
+    ).reshape(cohort_count, draw_count, T)
+    col_idx_T = np.arange(T)
+    post_frontier_mask_cT = col_idx_T[None, :] > f_by_cohort_arr[:, None]
+    future_population_seed_cdT = (
+        population_seed_cdT * post_frontier_mask_cT[:, None, :]
+    )
+    bucket_distributed_int = int(BucketSourceBasis.BUCKET_DISTRIBUTED)
+    carrier_root_buckets = carrier_mass.setdefault(carrier_root, {})  # type: ignore[attr-defined]
+    for bucket_u in range(T):
+        bucket_mass_flat = future_population_seed_cdT[
+            :, :, bucket_u,
+        ].reshape(S_total)
+        if not np.any(bucket_mass_flat):
+            continue
+        basis_map = carrier_root_buckets.setdefault(bucket_u, {})
+        existing = basis_map.get(bucket_distributed_int)
+        basis_map[bucket_distributed_int] = (
+            bucket_mass_flat if existing is None else existing + bucket_mass_flat
+        )
+    # TOEPLITZ_APPLY policy: carrier_residual and subject_residual
+    # providers (from `make_frontier_residual_kernel_provider`) expose
+    # `.batched_op` — operator-apply via per-(edge, basis) Toeplitz
+    # contraction. This is the production-perf path Atom 4b landed;
+    # declaring it explicitly here lets the canonical DP core dispatch
+    # without any capability inspection inside the loop.
+    carrier_continuation = run_dp_from_node_source_ledgers(
+        topology=carrier_topology,
+        initial_ledger_mass=carrier_mass,
+        kernel_provider=carrier_residual,
+        cohort_count=cohort_count,
+        draw_count=draw_count,
+        horizon=horizon,
+        execution_policy=DPExecutionPolicy.TOEPLITZ_APPLY,
+    )
+    subject_continuation = run_dp_from_node_source_ledgers(
+        topology=subject_topology,
+        initial_ledger_mass=subject_mass,
+        kernel_provider=subject_residual,
+        cohort_count=cohort_count,
+        draw_count=draw_count,
+        horizon=horizon,
+        execution_policy=DPExecutionPolicy.TOEPLITZ_APPLY,
+    )
+
+    future_x_at_terminal = carrier_continuation.node_density(carrier_terminal)
+    # Pop-C ledger: every column of the carrier continuation's terminal
+    # density is a potential future-X arrival bucket. Future-X arrivals
+    # land at the subject root carrying ``POINT_AT_ENDPOINT`` basis
+    # (the exact-column arrival convention) so the next hop's kernel
+    # dispatch fires with ordinary predictive subject kernels (§5.4 —
+    # Pop-C members arrive fresh at X, subject clock starts at zero).
+    point_basis_int = int(BucketSourceBasis.POINT_AT_ENDPOINT)
+    pop_c_mass: Dict[str, Dict[int, Dict[int, np.ndarray]]] = {
+        subject_root: {
+            int(b): {
+                point_basis_int: future_x_at_terminal[:, int(b)].copy(),
+            }
+            for b in range(future_x_at_terminal.shape[1])
+        }
+    }
+    # TOEPLITZ_APPLY policy: `subject_base` from
+    # `_make_predictive_kernel_provider` exposes `.batched_op` for the
+    # ordinary (non-residual) predictive kernel — Pop-C members are
+    # fresh at X with subject clock starting at zero, so the
+    # production handoff uses operator-apply on the future-X arrival
+    # ledger.
+    pop_c_continuation = run_dp_from_node_source_ledgers(
+        topology=subject_topology,
+        initial_ledger_mass=pop_c_mass,
+        kernel_provider=subject_base,
+        cohort_count=cohort_count,
+        draw_count=draw_count,
+        horizon=horizon,
+        execution_policy=DPExecutionPolicy.TOEPLITZ_APPLY,
+    )
+
+    future_x_cdT = future_x_at_terminal.reshape(cohort_count, draw_count, T)
+    future_y_frontier_cdT = subject_continuation.node_density(
+        subject_terminal,
+    ).reshape(cohort_count, draw_count, T)
+    future_y_pop_c_cdT = pop_c_continuation.node_density(
+        subject_terminal,
+    ).reshape(cohort_count, draw_count, T)
+
+    # ── Vectorised pre/post-frontier assembly ─────────────────────
+    # Per §5.4: ef_x[c, s, τ] = strict_x_cum[c, s, τ]                 for τ ≤ f_c
+    #         = strict_x_cum[c, s, f_c] + future_x_cum_post[c, s, τ]  for τ > f_c
+    # where future_x_cum_post[c, s, τ] = Σ_{u=f_c+1}^{τ} future_x[c, s, u]
+    # = cumsum(future_x)[c, s, τ] − cumsum(future_x)[c, s, f_c].
+    strict_x_cum_cdT = carrier_frontier.terminal_arrivals_cumulative
+    strict_y_cum_cdT = subject_frontier.terminal_arrivals_cumulative
+
+    col_idx = np.arange(T)
+    pre_mask = col_idx[None, :] <= f_by_cohort_arr[:, None]  # (cohort, T)
+    pre_mask_cdT = pre_mask[:, None, :]                       # (cohort, 1, T)
+
+    # Cumulative-at-frontier lookups via the shared helper. The helper
+    # implements the pad-leading-zero / ``f_c + 1`` shift so the
+    # off-the-left-edge sentinel (``f_c = -1`` for empty-frames cohorts)
+    # maps to 0 rather than to the τ-tail of the cumulative — the
+    # boundary condition the §1.1 risk-control premise depends on for
+    # FC to degenerate to the model curve in zero-evidence mode (see
+    # AP58, I-46, ``_cumulative_at_frontier`` docstring).
+    strict_x_at_f = _cumulative_at_frontier(strict_x_cum_cdT, f_by_cohort_arr)
+    strict_y_at_f = _cumulative_at_frontier(strict_y_cum_cdT, f_by_cohort_arr)
+
+    future_x_cum = np.cumsum(future_x_cdT, axis=-1)
+    future_y_frontier_cum = np.cumsum(future_y_frontier_cdT, axis=-1)
+    future_y_pop_c_cum = np.cumsum(future_y_pop_c_cdT, axis=-1)
+    future_x_cum_at_f = _cumulative_at_frontier(
+        future_x_cum, f_by_cohort_arr,
+    )
+    future_y_frontier_cum_at_f = _cumulative_at_frontier(
+        future_y_frontier_cum, f_by_cohort_arr,
+    )
+    future_y_pop_c_cum_at_f = _cumulative_at_frontier(
+        future_y_pop_c_cum, f_by_cohort_arr,
+    )
+
+    # Future continuation per cohort × draw × τ — the FC residual past
+    # each cohort's own frontier f_c. Zero for τ ≤ f_c by construction
+    # (post_mask), non-zero for τ > f_c, sourced directly from the
+    # continuation DP cumulants (NOT by subtracting a later evidence
+    # curve, which would conflate the cohort's fixed frontier prefix
+    # with strict-evidence increments that continue past tau_observed).
+    post_mask_cdT = ~pre_mask_cdT
+    future_x_cont_cdT = np.where(
+        post_mask_cdT, future_x_cum - future_x_cum_at_f, 0.0,
+    )
+    future_y_cont_cdT = np.where(
+        post_mask_cdT,
+        (future_y_frontier_cum - future_y_frontier_cum_at_f)
+        + (future_y_pop_c_cum - future_y_pop_c_cum_at_f),
+        0.0,
+    )
+
+    # Total ef surface = fixed frontier prefix (strict evidence up to
+    # f_c, then frozen at strict_*_at_f) + future continuation. Both
+    # components sum across cohorts naturally; no cross-cohort
+    # subtraction needed.
+    strict_carried_x_cdT = np.where(
+        pre_mask_cdT, strict_x_cum_cdT, strict_x_at_f,
+    )
+    strict_carried_y_cdT = np.where(
+        pre_mask_cdT, strict_y_cum_cdT, strict_y_at_f,
+    )
+    ef_x_cdT = strict_carried_x_cdT + future_x_cont_cdT
+    ef_y_cdT = strict_carried_y_cdT + future_y_cont_cdT
+
+    ef_x_draws = ef_x_cdT.sum(axis=0)
+    ef_y_draws = ef_y_cdT.sum(axis=0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ef_rate_draws = ef_y_draws / ef_x_draws  # 0/0 → NaN visibly
+
+    # FC future residual: sum the per-cohort future continuation across
+    # cohorts. Each cohort contributes zero for τ ≤ f_c and its DP
+    # cumulant for τ > f_c. This is the algebraic future-only piece
+    # carried out of the continuation DP from the per-cohort frontier
+    # boundary, not a difference against a moving strict-evidence curve.
+    ef_forecast_x = future_x_cont_cdT.sum(axis=0)
+    ef_forecast_y = future_y_cont_cdT.sum(axis=0)
+
+    return {
+        'ef_x_draws': ef_x_draws,
+        'ef_y_draws': ef_y_draws,
+        'ef_rate_draws': ef_rate_draws,
+        'ef_forecast_x': ef_forecast_x,
+        'ef_forecast_y': ef_forecast_y,
+    }
+
+
+def _origin_day_for_anchor(anchor_day: Any, span: ComposedPrimitiveSpan) -> date:
+    """Calendar origin for source-day-indexed selected-cohort ledgers."""
+    try:
+        if hasattr(anchor_day, 'isoformat'):
+            return date.fromisoformat(str(anchor_day.isoformat())[:10])
+        return date.fromisoformat(str(anchor_day)[:10])
+    except (TypeError, ValueError):
+        source_days = [
+            date.fromisoformat(str(day)[:10])
+            for _ce, primitive in span.empirical_edge_primitives
+            for day in primitive.value_kernel_draws_by_source_day
+        ]
+        return min(source_days) if source_days else date(1970, 1, 1)
+
+
+# AP58 / engine-discipline violation — commented out 2026-05-19.
+# See rationale at the call site inside ``project_selected_cohort_rows``.
+# def _span_terminal_is_instant(span: ComposedPrimitiveSpan) -> bool:
+#     terminal_density = span.node_density_draws[span.end_node_id]
+#     return bool(np.all(np.abs(terminal_density[:, 1:]) <= 1e-12))
+#
+#
+# def _subject_root_n_seed_flat(
+#     *,
+#     composed_subject: ComposedPrimitiveSpan,
+#     selected_cohorts: Sequence[Mapping[str, Any]],
+#     S: int,
+#     T: int,
+# ) -> np.ndarray:
+#     n_by_source_day: Dict[str, float] = {}
+#     for ce, primitive in composed_subject.empirical_edge_primitives:
+#         if ce.from_id != composed_subject.x_node_id:
+#             continue
+#         for row in primitive.resolution.weighted_view.rows:
+#             observed_date = str(row.observed_date)[:10]
+#             n_by_source_day[observed_date] = max(
+#                 n_by_source_day.get(observed_date, 0.0),
+#                 float(row.n),
+#             )
+#
+#     seed = np.zeros((len(selected_cohorts) * S, T), dtype=np.float64)
+#     for cohort_idx, cohort in enumerate(selected_cohorts):
+#         anchor_day = str(cohort['anchor_day'])[:10]
+#         seed[cohort_idx * S:(cohort_idx + 1) * S, 0] = (
+#             n_by_source_day.get(anchor_day, 0.0)
+#         )
+#     return seed
 
 
 def project_selected_cohort_rows(
     *,
     composed_carrier: ComposedPrimitiveSpan,
     composed_subject: ComposedPrimitiveSpan,
+    composed_carrier_predictive: ComposedPrimitiveSpan,
+    composed_subject_predictive: ComposedPrimitiveSpan,
     composed_empirical_carrier: ComposedPrimitiveSpan,
     composed_empirical_subject: ComposedPrimitiveSpan,
     selected_cohorts: Sequence[Mapping[str, Any]],
     horizon: int,
 ) -> SelectedCohortRowProjection:
-    """The single selected-cohort row reducer.
+    """The selected-cohort row reducer.
 
-    Top-to-bottom, no branches, two operator passes (Phase 6 §5.6):
+    The model path reads conditioned value kernels. The observed path
+    reads empirical value kernels, preserving strict ``k/n`` evidence on
+    the selected clock. Coverage is deliberately reduced to simple
+    Cohort applicability; adjusted evidence is not part of this reducer.
 
-      1. For each cohort, build per-anchor seeds at X using
-         ``seed_subject_from_carrier`` against the conditioned carrier
-         (model seed) and the empirical carrier (evidence seed).
-      2. At X (carrier terminal): the seed IS the X-mass surface —
-         per-anchor coverage / exposure are read here against the
-         conditioned operator's masked streams.
-      3. At Z (chain terminal): convolve each seed with the matching
-         operator's subject-terminal density. The conditioned-side
-         result drives ``y_draws_model``; the empirical-side result
-         drives ``evidence_y_strict_by_anchor_tau``.
-      4. Aggregate model surfaces across cohorts (sum), then cumsum
-         to produce cumulative ``x_draws_model`` / ``y_draws_model``;
-         ``rate_draws_model = y / x`` with the standard 0/0 → 0 guard
-         the spine carries elsewhere.
-      5. Frontier per anchor = ``max τ`` where ``exposure_y_A[τ] > 0``.
-
-    Mode-blind by construction: the function never reads
-    ``population_root``, ``denominator_node``, ``is_window``, or any
-    mode flag. Identity vs active produces different numerics solely
-    because the carrier spans differ (zero-edge identity vs active
-    composition). Re-introducing an ``if mode == ...`` branch here is
-    AP58 and the cutover exists to remove it.
+    The FC shadow surface (Atom 4) reads ``composed_*_predictive`` —
+    the predictive-basis CONDITIONED composed spans that
+    ``resolve_request_spans`` builds alongside the epistemic
+    ``composed_carrier`` / ``composed_subject`` pair (same bound
+    evidence, ``dispersion_basis='predictive'``). The runtime's
+    ``unconditioned_overlays['predictive']`` pair carries no admitted
+    evidence (status PRIOR_ONLY) and is NOT a substitute. The
+    epistemic-basis spans continue to drive the f_* model surface;
+    they are NOT a substitute either — passing them on the FC path
+    mixes the wrong moment family.
     """
     S = int(composed_carrier.draw_count)
     T = int(horizon) + 1
+    evidence_readout_binding = composed_subject.evidence_readout_binding
 
-    # Subject-side per-(draw, age) terminal densities at Z. Same shape
-    # for both operator families — that's the load-bearing parity
-    # contract from Atom 2.2.
-    subject_z_value = composed_subject.node_density_draws[
-        composed_subject.end_node_id
+    cohort_count = len(selected_cohorts)
+    anchor_days = [cohort['anchor_day'] for cohort in selected_cohorts]
+    origin_days = [
+        _origin_day_for_anchor(anchor_day, composed_empirical_subject)
+        for anchor_day in anchor_days
     ]
-    subject_z_support = composed_subject.node_support_draws[
-        composed_subject.end_node_id
+    # Two distinct seed surfaces — branchless engine, semantics carried
+    # by data values (see ``_build_selected_cohort_inputs`` docstring):
+    #
+    #   empirical_seed_flat (= N_anchor at τ=0) feeds the EMPIRICAL
+    #     carrier trace. Honours the ``emp_x = N_anchor`` test contract
+    #     (``test_strict_evidence_x_window_mode_equals_cohort_size``).
+    #     Zero for empty-frames cohorts so strict-evidence row fields
+    #     publish ``None`` rather than the synthetic unit prior.
+    #
+    #   population_seed_flat (= N_pop at τ=0) feeds the CONDITIONED
+    #     MODEL trace AND the FC future-root injection
+    #     (``_project_frontier_shadow_surfaces``). Carries the empty-
+    #     frames unit prior so ``f_*`` and ``ef_*`` surfaces produce the
+    #     model curve for cohorts without observed evidence.
+    #
+    # For observed cohorts ``N_anchor = N_pop = n_root`` so the two
+    # seeds are numerically identical and behaviour is unchanged.
+    empirical_seed_flat = np.zeros((cohort_count * S, T), dtype=np.float64)
+    population_seed_flat = np.zeros((cohort_count * S, T), dtype=np.float64)
+    tau_max_by_anchor: list[int] = []
+    tau_observed_by_anchor: list[int] = []
+    for cohort_idx, cohort in enumerate(selected_cohorts):
+        # Engine contract: every selected cohort dict carries explicit
+        # ``N_anchor``, ``N_pop``, ``tau_max``, ``tau_observed``
+        # (perimeter construction is the caller's responsibility — see
+        # ``_build_selected_cohort_inputs`` in ``cohort_forecast_v3``).
+        # No defaults, clamps, fallbacks, or range checks: malformed
+        # inputs surface naturally — a missing key raises ``KeyError``
+        # on the dict access; a negative or oversized ``tau_observed``
+        # surfaces wherever the downstream algebra first depends on
+        # the invariant (e.g. ``np.take_along_axis`` on the frontier
+        # index, or the ``prefix_len`` slice in the survivor sum).
+        empirical_seed_flat[cohort_idx * S:(cohort_idx + 1) * S, 0] = float(
+            cohort['N_anchor'],
+        )
+        population_seed_flat[cohort_idx * S:(cohort_idx + 1) * S, 0] = float(
+            cohort['N_pop'],
+        )
+        tau_max_by_anchor.append(int(cohort['tau_max']))
+        tau_observed_by_anchor.append(int(cohort['tau_observed']))
+
+    x_value_trace = evaluate_conditioned_span_from_seed_flat_origins(
+        composed_carrier,
+        root_seed=population_seed_flat,
+        cohort_count=cohort_count,
+        origin_days=origin_days,
+        evidence_readout_binding=evidence_readout_binding,
+    )
+    x_value_flat = x_value_trace.node_density(composed_carrier.end_node_id)
+    # Conditioned carrier → subject handoff: thread per-bucket per-
+    # provenance state forward so mixed basis at the carrier terminal
+    # survives into the subject DP seed. Mirrors the empirical
+    # handoff below — same seam shape on both sides so a frontier-state
+    # continuation (Atom 4) reads the same provenance surface whether
+    # it lives on the conditioned model branch or the empirical
+    # branch.
+    x_value_provenance_mass = x_value_trace.node_mass_by_provenance[
+        composed_carrier.end_node_id
     ]
-    subject_z_exposure = composed_subject.node_exposure_draws[
-        composed_subject.end_node_id
+    x_value_provenance_basis = x_value_trace.node_basis_by_node_bucket[
+        composed_carrier.end_node_id
     ]
-    empirical_subject_z_value = composed_empirical_subject.node_density_draws[
-        composed_empirical_subject.end_node_id
+    y_value_trace = evaluate_conditioned_span_from_seed_flat_origins_with_provenance(
+        composed_subject,
+        S_flat=x_value_flat.shape[0],
+        T=x_value_flat.shape[1],
+        cohort_count=cohort_count,
+        origin_days=origin_days,
+        evidence_readout_binding=evidence_readout_binding,
+        root_provenance_mass=x_value_provenance_mass,
+        root_provenance_basis=x_value_provenance_basis,
+    )
+    y_value_flat = y_value_trace.node_density(composed_subject.end_node_id)
+    emp_x_trace = evaluate_empirical_span_from_seed_flat_origins(
+        composed_empirical_carrier,
+        root_seed=empirical_seed_flat,
+        origin_days=origin_days,
+        evidence_readout_binding=evidence_readout_binding,
+        root_basis=np.full(
+            T,
+            int(BucketSourceBasis.BUCKET_DISTRIBUTED),
+            dtype=np.int8,
+        ),
+    )
+    emp_x_value_flat = emp_x_trace.node_density(
+        composed_empirical_carrier.end_node_id,
+    )
+    # Carrier → subject handoff: thread per-provenance state forward so
+    # mixed basis at the carrier terminal survives into the subject DP
+    # seed. The subject's root node IS the carrier's end node by
+    # construction; each provenance there carries its own basis and
+    # the subject's first hop fires once per source provenance with
+    # the correct basis instead of collapsing to a single per-column
+    # selection.
+    emp_x_provenance_mass = emp_x_trace.node_mass_by_provenance[
+        composed_empirical_carrier.end_node_id
     ]
-
-    x_value_aggregated = np.zeros((S, T), dtype=np.float64)
-    y_value_aggregated = np.zeros((S, T), dtype=np.float64)
-
-    coverage_x_by_anchor_tau: Dict[Any, np.ndarray] = {}
-    coverage_y_by_anchor_tau: Dict[Any, np.ndarray] = {}
-    exposure_x_by_anchor_tau: Dict[Any, np.ndarray] = {}
-    exposure_y_by_anchor_tau: Dict[Any, np.ndarray] = {}
-    frontier_by_anchor: Dict[Any, int] = {}
-    evidence_x_strict_by_anchor_tau: Dict[Any, np.ndarray] = {}
-    evidence_y_strict_by_anchor_tau: Dict[Any, np.ndarray] = {}
-    evidence_x_adjusted_numerator_by_anchor_tau: Dict[Any, np.ndarray] = {}
-    evidence_y_adjusted_numerator_by_anchor_tau: Dict[Any, np.ndarray] = {}
-
-    empirical_subject_z_adjusted = composed_empirical_subject.node_exposure_draws[
-        composed_empirical_subject.end_node_id
+    emp_x_provenance_basis = emp_x_trace.node_basis_by_node_bucket[
+        composed_empirical_carrier.end_node_id
     ]
-
-    for cohort in selected_cohorts:
-        N_c = float(cohort['N_anchor'])
-        anchor_day = cohort['anchor_day']
-
-        # The row's τ axis is anchor-relative: τ=0 IS the cohort's
-        # anchor day. Per-anchor seeds therefore use ``anchor_days=[0]``
-        # so the carrier's per-day shape is placed at the start of the
-        # τ grid. ``N_anchor`` is the cohort count; ``seed_subject_from_carrier``
-        # scales the carrier's value/support/exposure streams by N_c.
-        model_value_seed, model_support_seed, model_exposure_seed = (
-            seed_subject_from_carrier(
-                carrier=composed_carrier,
-                x_node_id=composed_carrier.end_node_id,
-                anchor_days=[0],
-                anchor_counts=[N_c],
-                days=T,
-            )
-        )
-        emp_value_seed, _, emp_adjusted_seed = seed_subject_from_carrier(
-            carrier=composed_empirical_carrier,
-            x_node_id=composed_empirical_carrier.end_node_id,
-            anchor_days=[0],
-            anchor_counts=[N_c],
-            days=T,
-        )
-
-        # At X (carrier terminal): the seed IS the per-(draw, τ) X-mass.
-        x_value_c = model_value_seed
-        x_support_c = model_support_seed
-        x_exposure_c = model_exposure_seed
-
-        # At Z (chain terminal): convolve the seed with the subject's
-        # per-(draw, age) terminal density. The conditioned subject
-        # carries the parametric Δcdf-shape × p; the empirical subject
-        # carries Δ(k/n).
-        y_value_c = _convolve_seed_with_terminal_density(
-            model_value_seed, subject_z_value, T,
-        )
-        y_support_c = _convolve_seed_with_terminal_density(
-            model_support_seed, subject_z_support, T,
-        )
-        y_exposure_c = _convolve_seed_with_terminal_density(
-            model_exposure_seed, subject_z_exposure, T,
-        )
-        # Empirical: value stream only per §4.9.
-        emp_y_value_c = _convolve_seed_with_terminal_density(
-            emp_value_seed, empirical_subject_z_value, T,
-        )
-        emp_y_adjusted_c = _convolve_seed_with_terminal_density(
-            emp_adjusted_seed, empirical_subject_z_adjusted, T,
-        )
-
-        # Model-side aggregation across cohorts (per-(draw, τ) sum).
-        # Cumsum once at the end for the row's cumulative semantic.
-        x_value_aggregated += x_value_c
-        y_value_aggregated += y_value_c
-
-        # Per-anchor coverage_x[τ], coverage_y[τ] from the §4.8 ratio
-        # cumulative_support / cumulative_value, averaged across draws.
-        x_cov = project_coverage_draws(x_value_c, x_support_c)
-        y_cov = project_coverage_draws(y_value_c, y_support_c)
-        coverage_x_by_anchor_tau[anchor_day] = x_cov.mean(axis=0)
-        coverage_y_by_anchor_tau[anchor_day] = y_cov.mean(axis=0)
-
-        # Per-anchor exposure cumulatives, draw-mean.
-        x_exp = project_cumulative_exposure_draws(x_exposure_c)
-        y_exp = project_cumulative_exposure_draws(y_exposure_c)
-        exposure_x_by_anchor_tau[anchor_day] = x_exp.mean(axis=0)
-        exposure_y_by_anchor_tau[anchor_day] = y_exp.mean(axis=0)
-
-        # Frontier per anchor = max τ where draw-mean exposure_y > 0.
-        # Reads from the chain-terminal exposure (Phase 6 §5.6). The
-        # ``-1`` sentinel concat seeds the "no admissible τ" case as a
-        # data degeneracy of the same `[-1]` lookup — no empty-array
-        # branch.
-        exp_y_mean = exposure_y_by_anchor_tau[anchor_day]
-        positive_indices_with_sentinel = np.concatenate(
-            ([-1], np.flatnonzero(exp_y_mean > 0.0))
-        )
-        frontier_by_anchor[anchor_day] = int(positive_indices_with_sentinel[-1])
-
-        # Per-anchor strict evidence = cumsum of empirical value stream,
-        # draw-mean. The empirical operator's saturation is per-edge
-        # k_emp/n_emp, propagated through the chain — for single-hop
-        # window with identity carrier this collapses to raw observed k.
-        evidence_x_strict_by_anchor_tau[anchor_day] = (
-            np.cumsum(emp_value_seed, axis=-1).mean(axis=0)
-        )
-        evidence_y_strict_by_anchor_tau[anchor_day] = (
-            np.cumsum(emp_y_value_c, axis=-1).mean(axis=0)
-        )
-        evidence_x_adjusted_numerator_by_anchor_tau[anchor_day] = (
-            np.cumsum(emp_adjusted_seed, axis=-1).mean(axis=0)
-        )
-        evidence_y_adjusted_numerator_by_anchor_tau[anchor_day] = (
-            np.cumsum(emp_y_adjusted_c, axis=-1).mean(axis=0)
-        )
-
-    x_draws_model = np.cumsum(x_value_aggregated, axis=-1)
-    y_draws_model = np.cumsum(y_value_aggregated, axis=-1)
-    # 0/0 at small τ where carrier mass has not yet arrived emits 0.0
-    # — same convention the spine's ``evaluate_model_rate_draws`` uses.
-    rate_draws_model = np.divide(
-        y_draws_model, x_draws_model,
-        out=np.zeros_like(y_draws_model),
-        where=x_draws_model > 0.0,
+    # AP58 / engine-discipline violation — commented out 2026-05-19.
+    # This branch silently rewrote ``emp_x_value_flat`` with the
+    # subject's first-edge ``max(n_observed_on_anchor_day)`` whenever
+    # the empirical carrier's terminal was instant (identity carrier,
+    # non-latent active carrier, deterministic shift=0). It is:
+    #   - an ``if mode == …`` branch around three structurally distinct
+    #     cases (CF_ENGINE_DISCIPLINE);
+    #   - silent ``.get(anchor_day, 0.0)`` fallback inside the engine
+    #     (CF_ENGINE_DISCIPLINE I-47);
+    #   - violates the documented test contract ``emp_x = N_anchor``
+    #     (`test_strict_evidence_x_window_mode_equals_cohort_size`,
+    #     `test_phase6_w1` where N=100, n=25, expected y_sat = N × k/n
+    #     = 40 not k = 10).
+    # The empirical-carrier propagation immediately above already
+    # produces the correct surface for every degeneracy: identity
+    # passes ``N_anchor δ(0)`` through; non-latent / deterministic
+    # active carriers produce ``N_anchor × ∏ rates at column 0``. The
+    # ``saturation = Σ k_observed`` invariant is the perimeter's job
+    # (``_build_selected_cohort_inputs`` sources N_anchor from
+    # ``_root_window_carrier_n_by_anchor_day``), not the reducer's.
+    # if _span_terminal_is_instant(composed_empirical_carrier):
+    #     emp_x_value_flat = _subject_root_n_seed_flat(
+    #         composed_subject=composed_empirical_subject,
+    #         selected_cohorts=selected_cohorts,
+    #         S=S,
+    #         T=T,
+    #     )
+    emp_y_trace = evaluate_empirical_span_from_seed_flat_origins_with_provenance(
+        composed_empirical_subject,
+        S_flat=emp_x_value_flat.shape[0],
+        T=emp_x_value_flat.shape[1],
+        origin_days=origin_days,
+        evidence_readout_binding=evidence_readout_binding,
+        root_provenance_mass=emp_x_provenance_mass,
+        root_provenance_basis=emp_x_provenance_basis,
+    )
+    emp_y_value_flat = emp_y_trace.node_density(
+        composed_empirical_subject.end_node_id,
     )
 
-    # ─── Row-level derivation per Phase 6 §5.6 ────────────────────────
-    #
-    # Admissibility filter per §5.6: cohort A is admissible at τ iff
-    # ``exposure_y_A[τ] > 0`` (the chain-terminal cumulative exposure
-    # is positive — observation reached the wavefront). The same
-    # predicate gates both strict and adjusted aggregation.
-    #
-    # Strict row-level: ``Σ_admissible per-anchor strict``.
-    # Adjusted row-level: ``Σ_admissible per-anchor strict / coverage``
-    # with per-terminal coverage — ``coverage_x_A`` for the x stream
-    # (carrier-terminal IPW factor) and ``coverage_y_A`` for the y
-    # stream (chain-terminal IPW factor) per §5.6.
-    # Rate fields are the y/x ratios with the standard 0/0 row-contract
-    # guard; the cumsum/divide composes cleanly across the two streams.
+    x_value_by_anchor = x_value_flat.reshape(cohort_count, S, T)
+    y_value_by_anchor = y_value_flat.reshape(cohort_count, S, T)
+    emp_x_value_by_anchor = emp_x_value_flat.reshape(cohort_count, S, T)
+    emp_y_value_by_anchor = emp_y_value_flat.reshape(cohort_count, S, T)
+
+    x_model_by_anchor = np.cumsum(x_value_by_anchor, axis=-1)
+    y_model_by_anchor = np.cumsum(y_value_by_anchor, axis=-1)
+
+    # Snapshot the unspliced conditioned model surface (F mode) before
+    # the per-Cohort strict-prefix splice that produces the spliced E+F
+    # surfaces. F mode answers "what does the conditioned model predict
+    # for this selected Cohort set, end-to-end" — without inheriting
+    # each Cohort's observed prefix.
+    f_x_draws = x_model_by_anchor.sum(axis=0)
+    f_y_draws = y_model_by_anchor.sum(axis=0)
+    f_rate_draws = np.divide(
+        f_y_draws, f_x_draws,
+        out=np.zeros_like(f_y_draws),
+        where=f_x_draws > 0.0,
+    )
+
+    evidence_x_strict_by_anchor_tau: Dict[Any, np.ndarray] = {}
+    evidence_y_strict_by_anchor_tau: Dict[Any, np.ndarray] = {}
     evidence_x_strict = np.zeros(T, dtype=np.float64)
     evidence_y_strict = np.zeros(T, dtype=np.float64)
-    evidence_x_adjusted = np.zeros(T, dtype=np.float64)
-    evidence_y_adjusted = np.zeros(T, dtype=np.float64)
+    applicable = np.zeros((cohort_count, T), dtype=np.float64)
 
-    for anchor_day in evidence_y_strict_by_anchor_tau:
-        strict_x_a = evidence_x_strict_by_anchor_tau[anchor_day]
-        strict_y_a = evidence_y_strict_by_anchor_tau[anchor_day]
-        coverage_x_a = coverage_x_by_anchor_tau[anchor_day]
-        coverage_y_a = coverage_y_by_anchor_tau[anchor_day]
-        adjusted_x_numer_a = evidence_x_adjusted_numerator_by_anchor_tau[
-            anchor_day
-        ]
-        adjusted_y_numer_a = evidence_y_adjusted_numerator_by_anchor_tau[
-            anchor_day
-        ]
-        admissible = (exposure_y_by_anchor_tau[anchor_day] > 0.0)
-        evidence_x_strict += strict_x_a * admissible
-        evidence_y_strict += strict_y_a * admissible
-        evidence_x_adjusted += np.divide(
-            adjusted_x_numer_a, coverage_x_a,
-            out=np.zeros_like(adjusted_x_numer_a),
-            where=admissible,
-        )
-        evidence_y_adjusted += np.divide(
-            adjusted_y_numer_a, coverage_y_a,
-            out=np.zeros_like(adjusted_y_numer_a),
-            where=admissible,
-        )
+    for cohort_idx, anchor_day in enumerate(anchor_days):
+        strict_x_a = np.cumsum(
+            emp_x_value_by_anchor[cohort_idx], axis=-1,
+        ).mean(axis=0)
+        strict_y_a = np.cumsum(
+            emp_y_value_by_anchor[cohort_idx], axis=-1,
+        ).mean(axis=0)
+        evidence_x_strict_by_anchor_tau[anchor_day] = strict_x_a
+        evidence_y_strict_by_anchor_tau[anchor_day] = strict_y_a
+
+        # Two separate horizons drive two separate signals:
+        #
+        #   `applicable` (coverage): the cohort is "applicable" at τ
+        #   if τ ≤ tau_observed (last fresh observation). Fades
+        #   through epoch B as cohorts age past their last retrieval.
+        #
+        #   evidence τ-clamp: the empirical chain propagation surface
+        #   is valid out to tau_max (data extent). Past tau_max the
+        #   cohort contributes its frozen value, preserving evidence
+        #   monotonicity ("stuff that has converted has converted")
+        #   without erasing real data past a possibly-short
+        #   tau_observed. Restores the legacy
+        #   `SelectedAClockEvidence.aggregate_by_tau` semantic
+        #   (`_cell_at_or_before(τ)`) before the spine cutover.
+        last_tau_max = min(tau_max_by_anchor[cohort_idx], T - 1)
+        last_tau_obs = min(tau_observed_by_anchor[cohort_idx], T - 1)
+        x_model_by_anchor[cohort_idx, :, :last_tau_obs + 1] = strict_x_a[
+            :last_tau_obs + 1
+        ][None, :]
+        y_model_by_anchor[cohort_idx, :, :last_tau_obs + 1] = strict_y_a[
+            :last_tau_obs + 1
+        ][None, :]
+        applicable[cohort_idx, :last_tau_obs + 1] = 1.0
+        tau_indices = np.arange(T)
+        clamped = np.minimum(tau_indices, last_tau_max)
+        evidence_x_strict += strict_x_a[clamped]
+        evidence_y_strict += strict_y_a[clamped]
+
+    x_draws_spliced = x_model_by_anchor.sum(axis=0)
+    y_draws_spliced = y_model_by_anchor.sum(axis=0)
+    rate_draws_spliced = np.divide(
+        y_draws_spliced, x_draws_spliced,
+        out=np.zeros_like(y_draws_spliced),
+        where=x_draws_spliced > 0.0,
+    )
+
+    applicable_cohort_count = applicable.sum(axis=0)
+    applicability_row = (
+        applicable_cohort_count / float(cohort_count)
+        if cohort_count > 0 else np.zeros(T, dtype=np.float64)
+    )
 
     rate_strict = np.divide(
         evidence_y_strict, evidence_x_strict,
         out=np.zeros_like(evidence_y_strict),
         where=evidence_x_strict > 0.0,
     )
-    rate_adjusted = np.divide(
-        evidence_y_adjusted, evidence_x_adjusted,
-        out=np.zeros_like(evidence_y_adjusted),
-        where=evidence_x_adjusted > 0.0,
+
+    # ─── FC SURFACE (shadow, FC plan Atom 4) ───────────────────────
+    # The shadow ef_* surfaces are produced via the FC continuation
+    # pass: per-Cohort frontier-occupancy ledgers (§9.3) propagated
+    # through residual predictive operators (§9.5) under the
+    # source-ledger DP (§9.6), with future-X arrivals fed into
+    # ordinary subject kernels (§5.4 Pop-C handoff). Atom 4 is
+    # diagnostic-only — production chart fields continue to read
+    # `rate_draws_spliced` and `f_*`. Atom 6 remaps the public forecast
+    # layer to `ef_*` once shadow deltas are reviewed.
+    #
+    shadow = _project_frontier_shadow_surfaces(
+        composed_carrier_predictive=composed_carrier_predictive,
+        composed_subject_predictive=composed_subject_predictive,
+        emp_x_trace=emp_x_trace,
+        emp_y_trace=emp_y_trace,
+        cohort_count=cohort_count,
+        draw_count=S,
+        horizon=int(horizon),
+        tau_observed_by_anchor=tau_observed_by_anchor,
+        population_seed=population_seed_flat,
     )
 
+    # Shadow-delta diagnostic vs the current spliced E+F rate surface
+    # (rate_draws_spliced). The spliced surface is the conditioned-
+    # model curve with each Cohort's observed prefix spliced through
+    # its frontier; the FC surface is the frontier-conditioned
+    # continuation from the empirical ledger. They are expected to be
+    # close in shape per FC plan §1.1 risk-control premise, but
+    # algebraically distinct. Reporting the delta sets up Atom 4
+    # acceptance: large unexplained shape deltas block.
+    ef_rate = shadow['ef_rate_draws']
+    rate_delta = ef_rate - rate_draws_spliced
+    abs_delta = np.abs(rate_delta)
+    shadow_delta_summary = {
+        'finite_cell_count': int(np.sum(np.isfinite(rate_delta))),
+        'rate_delta_max_abs': float(np.nanmax(abs_delta)),
+        'rate_delta_mean_abs': float(np.nanmean(abs_delta)),
+        'rate_delta_per_tau_mean_abs': [
+            float(np.nanmean(abs_delta[:, t]))
+            for t in range(abs_delta.shape[1])
+        ],
+        'ef_x_total_at_final_tau_mean': float(
+            np.mean(shadow['ef_x_draws'][:, -1])
+        ),
+        'spliced_x_total_at_final_tau_mean': float(
+            np.mean(x_draws_spliced[:, -1])
+        ),
+    }
+
     return SelectedCohortRowProjection(
-        rate_draws_model=rate_draws_model,
-        x_draws_model=x_draws_model,
-        y_draws_model=y_draws_model,
-        coverage_x_by_anchor_tau=coverage_x_by_anchor_tau,
-        coverage_y_by_anchor_tau=coverage_y_by_anchor_tau,
-        exposure_x_by_anchor_tau=exposure_x_by_anchor_tau,
-        exposure_y_by_anchor_tau=exposure_y_by_anchor_tau,
-        frontier_by_anchor=frontier_by_anchor,
+        rate_draws_spliced=rate_draws_spliced,
+        x_draws_spliced=x_draws_spliced,
+        y_draws_spliced=y_draws_spliced,
+        f_rate_draws=f_rate_draws,
+        f_x_draws=f_x_draws,
+        f_y_draws=f_y_draws,
+        applicability_row=applicability_row,
+        applicable_cohort_count=applicable_cohort_count,
         evidence_x_strict_by_anchor_tau=evidence_x_strict_by_anchor_tau,
         evidence_y_strict_by_anchor_tau=evidence_y_strict_by_anchor_tau,
-        evidence_x_adjusted_numerator_by_anchor_tau=(
-            evidence_x_adjusted_numerator_by_anchor_tau
-        ),
-        evidence_y_adjusted_numerator_by_anchor_tau=(
-            evidence_y_adjusted_numerator_by_anchor_tau
-        ),
         evidence_x_strict=evidence_x_strict,
         evidence_y_strict=evidence_y_strict,
         rate_strict=rate_strict,
-        evidence_x_adjusted=evidence_x_adjusted,
-        evidence_y_adjusted=evidence_y_adjusted,
-        rate_adjusted=rate_adjusted,
+        ef_x_draws=shadow['ef_x_draws'],
+        ef_y_draws=shadow['ef_y_draws'],
+        ef_rate_draws=shadow['ef_rate_draws'],
+        ef_forecast_x=shadow['ef_forecast_x'],
+        ef_forecast_y=shadow['ef_forecast_y'],
+        diagnostics={
+            'cohort_count': cohort_count,
+            'horizon': int(horizon),
+            'anchor_days_first': str(anchor_days[0]) if anchor_days else None,
+            'anchor_days_last': str(anchor_days[-1]) if anchor_days else None,
+            'evidence_readout_binding': evidence_readout_binding.mode,
+            'empirical_carrier': _summarise_empirical_span(
+                composed_empirical_carrier,
+            ),
+            'empirical_subject': _summarise_empirical_span(
+                composed_empirical_subject,
+            ),
+            'empirical_x_trace': _summarise_density_trace(emp_x_trace),
+            'empirical_y_trace': _summarise_density_trace(emp_y_trace),
+            'fc_shadow_delta': shadow_delta_summary,
+        },
     )
 
 
-def seed_subject_from_carrier(
-    *,
-    carrier: ComposedPrimitiveSpan,
-    x_node_id: str,
-    anchor_days: Sequence[int],
-    anchor_counts: Sequence[float],
-    days: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Active-cohort handoff: carrier output at X becomes the subject's
-    root seed.
-
-    For each anchor day `c` with observed cohort count `N_c`, the
-    carrier's per-(draw, day-since-A) arrival density at X is shifted by
-    `c` and scaled by `N_c`. Contributions from multiple anchors are
-    summed into the (draw, source-day-at-X) seed surface. Returns the
-    three seed streams (value, support, exposure) the subject readout
-    consumes alongside the per-(draw, day_at_X) surface as ``(S, days)``
-    arrays.
-
-    Anchor days outside ``[0, days)`` are out of horizon and silently
-    contribute zero. This is a perimeter horizon check on caller input,
-    not a case fork inside the algebra.
-    """
-    S = carrier.draw_count
-    g_value = carrier.node_density_draws[x_node_id]
-    g_support = carrier.node_support_draws[x_node_id]
-    g_exposure = carrier.node_exposure_draws[x_node_id]
-    T_carrier = g_value.shape[1]
-    value_seed = np.zeros((S, days), dtype=np.float64)
-    support_seed = np.zeros((S, days), dtype=np.float64)
-    exposure_seed = np.zeros((S, days), dtype=np.float64)
-    for c_raw, n_raw in zip(anchor_days, anchor_counts):
-        c = int(c_raw)
-        if c < 0 or c >= days:
-            continue
-        n_c = float(n_raw)
-        src_end = min(T_carrier, days - c)
-        if src_end <= 0:
-            continue
-        value_seed[:, c:c + src_end] += n_c * g_value[:, :src_end]
-        support_seed[:, c:c + src_end] += n_c * g_support[:, :src_end]
-        exposure_seed[:, c:c + src_end] += n_c * g_exposure[:, :src_end]
-    return value_seed, support_seed, exposure_seed

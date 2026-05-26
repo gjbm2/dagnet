@@ -14,8 +14,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from runner.forecasting_settings import (
     ForecastingSettings,
+    current_settings,
     settings_from_dict,
     compute_settings_signature,
+    use_request_settings,
 )
 
 
@@ -117,6 +119,143 @@ class TestForecastingSettingsDefaults:
 
     def test_bayes_target_accept(self):
         assert ForecastingSettings().bayes_target_accept == 0.90
+
+    # ── Forecast Monte Carlo sampling ──
+    def test_mc_draws(self):
+        assert ForecastingSettings().mc_draws == 1000.0
+
+
+class TestRequestSettingsContext:
+    """The contextvar binding threads request settings into engine call sites."""
+
+    def test_default_when_unbound(self):
+        # Outside any use_request_settings block the reader returns defaults.
+        s = current_settings()
+        assert s.mc_draws == 1000.0
+
+    def test_bound_value_visible(self):
+        with use_request_settings(ForecastingSettings(mc_draws=500.0)):
+            assert current_settings().mc_draws == 500.0
+
+    def test_unbinds_on_exit(self):
+        with use_request_settings(ForecastingSettings(mc_draws=4242.0)):
+            assert current_settings().mc_draws == 4242.0
+        assert current_settings().mc_draws == 1000.0
+
+    def test_round_trip_from_dict(self):
+        # The API handler path: dict → settings → context → engine read.
+        s = settings_from_dict({'mc_draws': 750.0})
+        with use_request_settings(s):
+            assert current_settings().mc_draws == 750.0
+
+    def test_primitive_current_mc_draws_honours_context(self):
+        # The engine seam: primitives.current_mc_draws reads the bound value.
+        from runner.primitives import current_mc_draws
+        with use_request_settings(ForecastingSettings(mc_draws=333.0)):
+            assert current_mc_draws() == 333
+
+    def test_conditioning_options_default_factory_honours_context(self):
+        # The dataclass default factory reads the bound value at construct time.
+        from runner.primitive_conditioning import ConditioningPolicyOptions
+        with use_request_settings(ForecastingSettings(mc_draws=128.0)):
+            opts = ConditioningPolicyOptions()
+            assert opts.draw_count == 128
+
+
+class TestCFKernelHonoursMcDraws:
+    """Seam test: the CF math must honour ``mc_draws`` bound via
+    ``use_request_settings`` when the caller does not pass ``num_draws``.
+
+    The production call style — ``handle_conditioned_forecast`` binding
+    settings then invoking the CF kernel without threading ``num_draws``
+    through every signature — relies on every consumer defaulting
+    ``num_draws`` to ``current_mc_draws()``. The primitive-level test
+    above only proves the reader returns the bound value; this proves
+    the kernel actually consumes it (i.e. the bound value shapes the
+    arrays the engine produces).
+
+    ``compute_forecast_trajectory`` is the chosen probe: same seam
+    pattern as the other live CF consumers (forecast_runtime,
+    funnel_engine, build_node_arrival_cache, confidence_bands) and
+    directly testable with synthetic resolved-params / cohort fixtures
+    (no graph, no DB, no daemon). A regression in any of those sites
+    would be caught by an equivalent test; this one stands in for the
+    family.
+    """
+
+    def _make_resolved(self):
+        from runner.model_resolver import ResolvedModelParams, ResolvedLatency
+
+        lat = ResolvedLatency(
+            mu=3.0, sigma=0.6, onset_delta_days=0.0, t95=12.0,
+            mu_sd=0.0, sigma_sd=0.0,
+            onset_sd=0.0, onset_mu_corr=0.0,
+        )
+        return ResolvedModelParams(
+            p_mean=0.4, p_sd=0.05,
+            alpha=12, beta=18,
+            edge_latency=lat,
+            path_latency=None,
+            source='analytic',
+        )
+
+    def _make_cohorts(self, max_tau=20):
+        from runner.forecast_state import CohortEvidence
+
+        return [CohortEvidence(
+            obs_x=[100.0] * (max_tau + 1),
+            obs_y=[0.0] * (max_tau + 1),
+            x_frozen=100.0, y_frozen=0.0,
+            frontier_age=0, a_pop=100.0,
+        )]
+
+    def test_trajectory_draws_count_follows_bound_setting(self):
+        from runner.forecast_state import compute_forecast_trajectory
+
+        resolved = self._make_resolved()
+        cohorts = self._make_cohorts(max_tau=20)
+
+        with use_request_settings(ForecastingSettings(mc_draws=250.0)):
+            result = compute_forecast_trajectory(
+                resolved=resolved, cohorts=cohorts, max_tau=20,
+            )
+
+        assert result.rate_draws.shape == (250, 21)
+        assert result.model_rate_draws.shape == (250, 21)
+
+    def test_trajectory_draws_count_varies_with_bound_setting(self):
+        # A second distinct value distinguishes "the setting is honoured"
+        # from "the kernel coincidentally hit the dataclass default".
+        from runner.forecast_state import compute_forecast_trajectory
+
+        resolved = self._make_resolved()
+        cohorts = self._make_cohorts(max_tau=20)
+
+        with use_request_settings(ForecastingSettings(mc_draws=750.0)):
+            result = compute_forecast_trajectory(
+                resolved=resolved, cohorts=cohorts, max_tau=20,
+            )
+
+        assert result.rate_draws.shape == (750, 21)
+        assert result.model_rate_draws.shape == (750, 21)
+
+    def test_explicit_num_draws_overrides_bound_setting(self):
+        # Locally-passed num_draws wins — preserves the override seam
+        # used by tests and any caller that genuinely needs a non-request
+        # count. Documents the contract: the bound setting is the default,
+        # not a forced override.
+        from runner.forecast_state import compute_forecast_trajectory
+
+        resolved = self._make_resolved()
+        cohorts = self._make_cohorts(max_tau=20)
+
+        with use_request_settings(ForecastingSettings(mc_draws=750.0)):
+            result = compute_forecast_trajectory(
+                resolved=resolved, cohorts=cohorts, max_tau=20,
+                num_draws=100,
+            )
+
+        assert result.rate_draws.shape == (100, 21)
 
 
 class TestSettingsFromDict:

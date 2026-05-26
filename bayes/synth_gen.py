@@ -1276,14 +1276,34 @@ def derive_truth_from_graph(graph_snapshot: dict, topology) -> dict:
                     mu = 1.0
                     sigma = 0.5
 
+        latency_parameter = _truth_edge_latency_enabled(lat)
         truth["edges"][et.param_id] = {
             "p": float(p_val),
             "onset": float(onset),
             "mu": float(mu),
-            "sigma": float(max(sigma, 0.01)),
+            "sigma": float(sigma if not latency_parameter else max(sigma, 0.01)),
+            "latency_parameter": bool(latency_parameter),
         }
 
     return truth
+
+
+def _truth_edge_latency_enabled(edge_truth: dict[str, Any] | None) -> bool:
+    """Return the semantic latency flag for a synth truth edge.
+
+    `latency_parameter` is the authority when present. Older truth files
+    predate the field, so retain the historical inference as a migration
+    fallback. Do not infer latency from sigma alone: non-latency is a
+    point-mass semantic, not a fast lognormal.
+    """
+    if not isinstance(edge_truth, dict):
+        return False
+    if "latency_parameter" in edge_truth:
+        return bool(edge_truth.get("latency_parameter"))
+    return bool(
+        float(edge_truth.get("onset", 0.0) or 0.0) > 0.01
+        or float(edge_truth.get("mu", 0.0) or 0.0) > 0.01
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1505,6 +1525,7 @@ def simulate_graph(
         drift_offset: float,
         base_sigma: float = 0.0,
         base_onset: float = 0.0,
+        latency_parameter: bool = True,
     ) -> tuple[float, float, float, float]:
         """Compute per-user effective p, mu, sigma, onset from context assignments.
 
@@ -1554,6 +1575,8 @@ def simulate_graph(
 
         # Apply context effects, clamp to valid ranges
         p_ctx = min(max(p_drifted * p_mult, 1e-6), 1.0 - 1e-6)
+        if not latency_parameter:
+            return p_ctx, 0.0, 0.0, 0.0
         mu_user = base_mu + mu_offset
         sigma_user = max(base_sigma * sigma_mult, 0.01)
         onset_user = max(base_onset + onset_offset, 0.0)
@@ -1701,6 +1724,7 @@ def simulate_graph(
                     day_drift[eid],
                     base_sigma=ep.get("sigma", 0.0),
                     base_onset=ep.get("onset", 0.0),
+                    latency_parameter=_truth_edge_latency_enabled(ep),
                 )
                 user_mus[eid] = mu_user + day_mu_offsets.get(eid, 0.0)
                 user_sigmas[eid] = sigma_user
@@ -2073,6 +2097,8 @@ def _traverse(
 
 def _edge_latency_t95(params: dict[str, Any]) -> float:
     """Approximate 95th percentile for the configured synthetic latency DGP."""
+    if not _truth_edge_latency_enabled(params):
+        return 0.0
     onset = float(params.get("onset", 0.0) or 0.0)
     shape = str(params.get("latency_shape") or params.get("latency_distribution") or "lognormal")
     if shape == "uniform":
@@ -2121,6 +2147,8 @@ def _draw_edge_latency(
     modelling approximation is lognormal but the generated observations are
     stepped, uniform, or capped.
     """
+    if not _truth_edge_latency_enabled(params):
+        return 0.0
     shape = str(params.get("latency_shape") or params.get("latency_distribution") or "lognormal")
     if shape == "uniform":
         low = float(params.get("latency_low", params.get("low", 0.0)) or 0.0)
@@ -3896,9 +3924,7 @@ def write_parameter_files(
             "n_query_overridden": False,
             "values": [window_entry, cohort_entry] + alt_cohort_entries + context_entries,
             "latency": {
-                "latency_parameter": bool(
-                    t.get("onset", 0) > 0.01 or t.get("mu", 0) > 0.01
-                ),
+                "latency_parameter": _truth_edge_latency_enabled(t),
                 "anchor_node_id": uuid_to_id.get(
                     topology.anchor_node_id, topology.anchor_node_id
                 ),
@@ -4107,11 +4133,11 @@ def update_graph_edge_metadata(
 
         # Structural latency block — only fields that exist before the
         # stats pass runs. Clear any stale analytical params from prior runs.
-        # Only set latency_parameter=true if the truth config has non-trivial
-        # latency for this edge (onset > 0 or mu > 0.01). Edges without
-        # latency compile as simple Binomials — much cheaper to sample.
+        # `latency_parameter` is semantic: non-latency edges are point
+        # masses, not fast lognormals. Older truth files infer the flag
+        # from onset/mu only as a migration fallback.
         edge_truth = _resolve_truth_edge(truth, et.param_id)
-        has_latency = (edge_truth.get("onset", 0) > 0.01 or edge_truth.get("mu", 0) > 0.01)
+        has_latency = _truth_edge_latency_enabled(edge_truth)
         p["latency"] = {
             "latency_parameter": has_latency,
         }

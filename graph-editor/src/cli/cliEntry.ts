@@ -17,8 +17,11 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import { setDiagnostic } from './logger';
+
+const requireCJS = createRequire(import.meta.url);
 
 /**
  * Load key=value pairs from a dotenv file into process.env.
@@ -64,6 +67,31 @@ export function initCLI(): void {
   // Polyfill import.meta.env for Node (Vite provides this in browser).
   if (typeof (import.meta as any).env === 'undefined') {
     (import.meta as any).env = { DEV: false };
+  }
+
+  // Extend Node's default fetch timeouts. Node 22's built-in fetch
+  // (undici) defaults headersTimeout and bodyTimeout to 5 minutes; CF
+  // cohort requests against deep graphs can exceed that and surface as
+  // "fetch failed" before the BE finishes. Override the global dispatcher
+  // so CLI fetches wait long enough for any BE compute that's actively
+  // progressing. This is a CLI-level operational ceiling — the per-call
+  // AbortControllers some FE services attach (e.g. conditionedForecast)
+  // remain authoritative for those callers.
+  //
+  // The browser-side fetch path (Vite) is unaffected: Vite uses the
+  // browser's native fetch, not undici. This override applies only when
+  // Node is the runtime — i.e. the CLI / daemon.
+  try {
+    const { setGlobalDispatcher, Agent } = requireCJS('undici');
+    const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+    setGlobalDispatcher(new Agent({
+      headersTimeout: FIFTEEN_MINUTES_MS,
+      bodyTimeout: FIFTEEN_MINUTES_MS,
+    }));
+  } catch {
+    // undici not available in this runtime — fall through silently.
+    // Production CLI runs on Node 22 which bundles undici; this branch
+    // is only hit in unusual environments and must not abort init.
   }
 
   // Auto-load Amplitude credentials from repo-root .env.amplitude.local.

@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from datetime import date, timedelta
+from datetime import date
 
 import numpy as np
 import pytest
@@ -35,9 +35,12 @@ from runner.empirical_evidence_operator import (
     EmpiricalEvidencePrimitive,
     build_empirical_evidence_primitive,
     compose_empirical_span,
+    evaluate_empirical_span_from_seed,
+    evaluate_empirical_span_from_seed_flat_origins,
 )
 from runner.prefix_arrival import NodeArrivalProvenance, NodeArrivalWeights
-from runner.primitives import PrimitiveScope, TransitionIdentity
+from runner.primitives import PrimitiveScope, TimingFamily, TransitionIdentity
+from runner.subject_span_composer import EvidenceReadoutBinding
 
 
 # ─── Fixtures ──────────────────────────────────────────────────────────
@@ -174,7 +177,6 @@ def test_empirical_primitive_single_source_day_recovers_observed_curve():
     )
 
     assert primitive.value_kernel_draws.shape == (4, 20)
-    assert primitive.observation_mask_draws.shape == (4, 20)
     assert primitive.saturation_per_draw.shape == (4,)
 
     # All draws share the same kernel under the deterministic
@@ -184,47 +186,37 @@ def test_empirical_primitive_single_source_day_recovers_observed_curve():
         primitive.value_kernel_draws[0], primitive.value_kernel_draws[1],
     )
 
-    # Cumulative kernel = cumulative observed k/n at each τ, with
-    # forward-fill at absent ages. arrival_weight = 1.0 means
-    # n_weighted = n; k_weighted/n_weighted = k/n. Latest at age 16 is
-    # k=8 → cumulative rate = 0.8 at τ ≥ 16.
+    # Cumulative kernel = observed k/n passed through bucket-K midpoint
+    # placement. Latest at age 16 is k=8, so saturation stays 0.8.
     cumulative_rate = np.cumsum(primitive.value_kernel_draws[0])
     assert cumulative_rate[0] == pytest.approx(0.0)
-    assert cumulative_rate[4] == pytest.approx(0.0, abs=1e-12)  # τ < 5, no row yet
+    assert cumulative_rate[4] == pytest.approx(0.1)  # bucket-K midpoint of the τ=5 jump
     assert cumulative_rate[5] == pytest.approx(0.2)  # k=2 / n=10
-    assert cumulative_rate[9] == pytest.approx(0.2)  # forward-filled
+    assert cumulative_rate[9] == pytest.approx(0.35)
     assert cumulative_rate[10] == pytest.approx(0.5)  # k=5
-    assert cumulative_rate[15] == pytest.approx(0.5)  # forward-filled
+    assert cumulative_rate[15] == pytest.approx(0.65)
     assert cumulative_rate[16] == pytest.approx(0.8)  # k=8
     assert cumulative_rate[19] == pytest.approx(0.8)
     assert primitive.saturation_per_draw[0] == pytest.approx(0.8)
 
-    # Mask is 1 exactly at observed ages (0, 5, 10, 16).
-    mask_row = primitive.observation_mask_draws[0]
-    expected_mask = np.zeros(20, dtype=np.float64)
-    for age in (0, 5, 10, 16):
-        expected_mask[age] = 1.0
-    np.testing.assert_array_equal(mask_row, expected_mask)
 
-
-def test_empirical_primitive_value_kernel_zero_at_absent_cells():
-    """§4.9: the empirical value kernel is already zero at absent
-    cells, so value × mask = value identically. The support stream
-    (value × mask) equals the value stream."""
+def test_empirical_primitive_non_latent_rows_land_at_age_zero():
+    """Structurally non-latent empirical edges must not turn snapshot
+    retrieval lag into conversion lag. The latest observed rate is
+    present from tau=0."""
     transition = TransitionIdentity(
         source_node='U', destination_node='V', edge_id='e-uv',
     )
     scope = _scope()
-    arrival = _arrival_weights({'2026-03-15': 1.0})
-
+    arrival = _arrival_weights({'2026-03-15': 1.0}, draw_count=3)
     candidates = [
         _candidate(
             from_id='U', to_id='V', observed_date='2026-03-15',
-            retrieved_at='2026-03-18', n=20, k=3,  # age 3
+            retrieved_at='2026-03-20', n=10, k=2,
         ),
         _candidate(
             from_id='U', to_id='V', observed_date='2026-03-15',
-            retrieved_at='2026-03-22', n=20, k=7,  # age 7
+            retrieved_at='2026-03-25', n=10, k=7,
         ),
     ]
 
@@ -234,20 +226,53 @@ def test_empirical_primitive_value_kernel_zero_at_absent_cells():
         arrival_weights=arrival,
         evidence_scope=_evidence_scope('U', 'V', scope),
         candidates=candidates,
-        draw_count=2,
-        horizon_len=15,
+        draw_count=3,
+        horizon_len=12,
+        timing_family=TimingFamily.NON_LATENT,
     )
 
-    np.testing.assert_array_equal(
-        primitive.support_kernel_draws,
-        primitive.value_kernel_draws,
+    cumulative_rate = np.cumsum(primitive.value_kernel_draws[0])
+    assert cumulative_rate[0] == pytest.approx(0.7)
+    assert cumulative_rate[4] == pytest.approx(0.7)
+    assert cumulative_rate[-1] == pytest.approx(0.7)
+    assert primitive.saturation_per_draw[0] == pytest.approx(0.7)
+
+
+def test_empirical_primitive_latent_rows_preserve_retrieval_age():
+    """The non-latent collapse must not erase latency evidence. Latent
+    empirical rows still use retrieved_at - observed_date as the row age."""
+    transition = TransitionIdentity(
+        source_node='U', destination_node='V', edge_id='e-uv',
     )
+    scope = _scope()
+    arrival = _arrival_weights({'2026-03-15': 1.0}, draw_count=3)
+    candidates = [
+        _candidate(
+            from_id='U', to_id='V', observed_date='2026-03-15',
+            retrieved_at='2026-03-20', n=10, k=7,
+        ),
+    ]
+
+    primitive = build_empirical_evidence_primitive(
+        transition=transition,
+        primitive_scope=scope,
+        arrival_weights=arrival,
+        evidence_scope=_evidence_scope('U', 'V', scope),
+        candidates=candidates,
+        draw_count=3,
+        horizon_len=12,
+        timing_family=TimingFamily.LATENT,
+    )
+
+    cumulative_rate = np.cumsum(primitive.value_kernel_draws[0])
+    assert cumulative_rate[0] == pytest.approx(0.0)
+    assert cumulative_rate[4] == pytest.approx(0.35)
+    assert cumulative_rate[5] == pytest.approx(0.7)
+    assert cumulative_rate[-1] == pytest.approx(0.7)
 
 
 def test_empirical_primitive_empty_candidates_yields_zero_kernel():
-    """No admitted rows → zero kernel, zero saturation, zero mask.
-    Mirrors the conditioned operator's PRIOR_ONLY mask-is-all-zeros
-    contract (Atom 2.1)."""
+    """No admitted rows → zero kernel and zero saturation."""
     transition = TransitionIdentity(
         source_node='U', destination_node='V', edge_id='e-uv',
     )
@@ -266,9 +291,6 @@ def test_empirical_primitive_empty_candidates_yields_zero_kernel():
 
     np.testing.assert_array_equal(
         primitive.value_kernel_draws, np.zeros((3, 10)),
-    )
-    np.testing.assert_array_equal(
-        primitive.observation_mask_draws, np.zeros((3, 10)),
     )
     np.testing.assert_array_equal(
         primitive.saturation_per_draw, np.zeros(3),
@@ -324,7 +346,7 @@ def test_empirical_primitive_multiple_source_days_pool_n_and_k():
 
 def test_compose_empirical_span_identity_returns_delta_at_root():
     """x_node_id == end_node_id is the algebraic identity of the
-    operator-chain monoid: δ(0) at the root in all three streams,
+    operator-chain monoid: δ(0) at the root,
     reach=1, terminal cumulative=1. Matches the conditioned composer's
     identity behaviour for AP58 / I-45 (identity is data, not a route).
     """
@@ -355,13 +377,7 @@ def test_compose_empirical_span_identity_returns_delta_at_root():
     expected_delta = np.zeros((4, 10))
     expected_delta[:, 0] = 1.0
     np.testing.assert_array_equal(
-        span.node_density_draws['X'], expected_delta,
-    )
-    np.testing.assert_array_equal(
-        span.node_support_draws['X'], expected_delta,
-    )
-    np.testing.assert_array_equal(
-        span.node_exposure_draws['X'], expected_delta,
+        span.node_density('X'), expected_delta,
     )
 
     np.testing.assert_array_equal(
@@ -430,7 +446,7 @@ def test_compose_empirical_span_single_hop_saturation_matches_observed_rate():
     # (renormalised by reach in the composer). Within the horizon the
     # observation appears at age 7 (2026-03-15 → 2026-03-22), so the
     # cumulative is 1.0 at τ ≥ 7 after the reach-normalisation.
-    terminal_cumulative = np.cumsum(span.node_density_draws['V'][0])
+    terminal_cumulative = np.cumsum(span.node_density('V')[0])
     assert terminal_cumulative[-1] == pytest.approx(0.4)
 
 
@@ -517,7 +533,7 @@ def test_compose_empirical_span_two_hop_saturation_equals_product_of_rates():
     # Terminal node's cumulative density at the horizon's tail equals
     # exactly the chain reach (no renormalisation applied here — it's
     # the raw mass that traversed both edges).
-    terminal_cumulative = np.cumsum(span.node_density_draws['W'][0])
+    terminal_cumulative = np.cumsum(span.node_density('W')[0])
     assert terminal_cumulative[-1] == pytest.approx(expected_reach)
 
 
@@ -601,9 +617,9 @@ def test_compose_empirical_span_preserves_downstream_source_day_rates():
         horizon_len=10,
     )
 
-    terminal_cumulative = np.cumsum(span.node_density_draws['W'][0])
-    assert terminal_cumulative[-1] == pytest.approx(0.9)
-    np.testing.assert_allclose(span.span_p_draws, 0.9)
+    terminal_cumulative = np.cumsum(span.node_density('W')[0])
+    assert terminal_cumulative[-1] == pytest.approx(0.5)
+    np.testing.assert_allclose(span.span_p_draws, 0.5)
 
 
 # ─── Composition error surfaces ──────────────────────────────────────
@@ -700,3 +716,251 @@ def test_empirical_saturation_independent_of_parametric_model():
     # All draws share this — no draw-by-draw posterior variability,
     # by design (the empirical kernel reads rows, not draws).
     np.testing.assert_allclose(primitive.saturation_per_draw, 0.3)
+
+
+# ─── Flat-origins evaluator: empty + multi-cohort parity ──────────────
+
+
+def _build_single_edge_empirical_span(
+    *,
+    n: int = 10,
+    k: int = 3,
+    draw_count: int = 2,
+    horizon_len: int = 20,
+):
+    """Build a one-edge ``ComposedPrimitiveSpan`` reusable across the
+    flat-origins regression tests below.
+    """
+    transition = TransitionIdentity(
+        source_node='U', destination_node='V', edge_id='e-uv',
+    )
+    scope = _scope()
+    arrival = _arrival_weights(
+        {'2026-03-15': 1.0}, draw_count=draw_count,
+    )
+    candidates = [
+        _candidate(
+            from_id='U', to_id='V', observed_date='2026-03-15',
+            retrieved_at='2026-03-22', n=n, k=k,
+        ),
+    ]
+    primitive = build_empirical_evidence_primitive(
+        transition=transition,
+        primitive_scope=scope,
+        arrival_weights=arrival,
+        evidence_scope=_evidence_scope('U', 'V', scope),
+        candidates=candidates,
+        draw_count=draw_count,
+        horizon_len=horizon_len,
+    )
+    graph = {
+        'nodes': [{'id': 'U'}, {'id': 'V'}],
+        'edges': [{'edge_id': 'e-uv', 'from': 'U', 'to': 'V'}],
+    }
+
+    def _lookup(from_id, to_id, edge_data):
+        if (from_id, to_id) == ('U', 'V'):
+            return primitive
+        return None
+
+    return compose_empirical_span(
+        graph=graph,
+        x_node_id='U',
+        end_node_id='V',
+        edge_to_empirical_primitive_lookup=_lookup,
+        draw_count=draw_count,
+        horizon_len=horizon_len,
+    )
+
+
+def test_evaluate_empirical_span_flat_origins_empty_cohorts_returns_zero():
+    """The selected-cohort row reducer asks the flat-origins evaluator
+    to push zero cohorts through the chain when the request's window
+    admits none (e.g. ``window(-1d:)`` on a fixture with no admissible
+    root-window evidence). The evaluator must handle that as the
+    natural empty-sum degenerate — empty row axis in, empty row axis
+    out — not divide by zero deriving the per-cohort draw count.
+
+    Pre-fix this raised ``ZeroDivisionError`` at
+    ``S = S_flat // cohort_count`` for ``cohort_count == 0``.
+    """
+    span = _build_single_edge_empirical_span(
+        draw_count=2, horizon_len=12,
+    )
+    root_seed = np.zeros((0, 12), dtype=np.float64)
+
+    trace = evaluate_empirical_span_from_seed_flat_origins(
+        span,
+        root_seed=root_seed,
+        origin_days=[],
+        evidence_readout_binding=EvidenceReadoutBinding.window(),
+    )
+
+    # Every on-path node carries a zero-row density at the flat
+    # (cohort × draw, T) axis; no edge contribution is recorded
+    # because no source-day mass enters the DP.
+    assert trace.node_density('U').shape == (0, 12)
+    assert trace.node_density('V').shape == (0, 12)
+
+
+def test_evaluate_empirical_span_flat_origins_matches_per_cohort_evaluation():
+    """Per-cohort and flat-origins evaluation must agree row-for-row.
+
+    The flat-origins evaluator runs one DP across cohort × draw axes
+    by broadcasting per-edge kernels along the cohort axis — selected
+    cohorts are independent until the final ΣY/ΣX reduction, so
+    flattening must equal running the single-cohort evaluator on each
+    origin day separately and stacking the per-(draw, τ) results.
+
+    Independent regression for the broadcast/no-tile rewrite: if
+    broadcasting introduced a shape mismatch or a stride error, the
+    flat result would diverge from the per-cohort stack.
+    """
+    draw_count = 3
+    horizon_len = 15
+    span = _build_single_edge_empirical_span(
+        draw_count=draw_count, horizon_len=horizon_len,
+    )
+
+    # Two distinct origin days driving the source-day clock so the
+    # window binding's lookup actually depends on the cohort axis.
+    origin_days = [date(2026, 3, 15), date(2026, 3, 16)]
+    binding = EvidenceReadoutBinding.window()
+
+    # Per-cohort seed: 1.0 at τ=0 for each draw, zero elsewhere.
+    per_cohort_seed = np.zeros((draw_count, horizon_len), dtype=np.float64)
+    per_cohort_seed[:, 0] = 1.0
+
+    per_cohort_traces = [
+        evaluate_empirical_span_from_seed(
+            span,
+            root_seed=per_cohort_seed,
+            origin_day=origin_day,
+            evidence_readout_binding=binding,
+        )
+        for origin_day in origin_days
+    ]
+    expected_terminal = np.concatenate(
+        [t.node_density('V') for t in per_cohort_traces], axis=0,
+    )
+
+    flat_seed = np.tile(per_cohort_seed, (len(origin_days), 1))
+    flat_trace = evaluate_empirical_span_from_seed_flat_origins(
+        span,
+        root_seed=flat_seed,
+        origin_days=origin_days,
+        evidence_readout_binding=binding,
+    )
+
+    np.testing.assert_allclose(
+        flat_trace.node_density('V'),
+        expected_terminal,
+        rtol=1e-12, atol=1e-12,
+    )
+
+
+# ─── Source-bucket ledger contract (Atom 3) ───────────────────────────
+
+
+def test_empirical_compose_collapsed_helpers_equal_source_bucket_sums():
+    """For an empirical multi-hop composition, the collapsed
+    ``node_density`` / ``edge_contribution`` helpers must equal the
+    sum-over-buckets of the canonical bucketed entries. The empirical
+    composer flows through the same shared DP and must honour the same
+    source-bucket-aware ledger contract.
+    """
+    scope = _scope()
+    arrival_u = _arrival_weights({'2026-03-15': 1.0})
+    arrival_v = _arrival_weights({'2026-03-15': 1.0})
+
+    e_uv = build_empirical_evidence_primitive(
+        transition=TransitionIdentity(
+            source_node='U', destination_node='V', edge_id='e-uv',
+        ),
+        primitive_scope=scope,
+        arrival_weights=arrival_u,
+        evidence_scope=_evidence_scope('U', 'V', scope),
+        candidates=[
+            _candidate(
+                from_id='U', to_id='V',
+                observed_date='2026-03-15', retrieved_at='2026-03-18',
+                n=10, k=6,
+            ),
+        ],
+        draw_count=2,
+        horizon_len=30,
+    )
+    e_vw = build_empirical_evidence_primitive(
+        transition=TransitionIdentity(
+            source_node='V', destination_node='W', edge_id='e-vw',
+        ),
+        primitive_scope=scope,
+        arrival_weights=arrival_v,
+        evidence_scope=_evidence_scope('V', 'W', scope),
+        candidates=[
+            _candidate(
+                from_id='V', to_id='W',
+                observed_date='2026-03-15', retrieved_at='2026-03-20',
+                n=20, k=10,
+            ),
+        ],
+        draw_count=2,
+        horizon_len=30,
+    )
+
+    graph = {
+        'nodes': [{'id': 'U'}, {'id': 'V'}, {'id': 'W'}],
+        'edges': [
+            {'edge_id': 'e-uv', 'from': 'U', 'to': 'V'},
+            {'edge_id': 'e-vw', 'from': 'V', 'to': 'W'},
+        ],
+    }
+    primitives_by_edge = {('U', 'V'): e_uv, ('V', 'W'): e_vw}
+
+    span = compose_empirical_span(
+        graph=graph,
+        x_node_id='U',
+        end_node_id='W',
+        edge_to_empirical_primitive_lookup=(
+            lambda from_id, to_id, edge_data: primitives_by_edge.get((from_id, to_id))
+        ),
+        draw_count=2,
+        horizon_len=30,
+    )
+
+    S = span.draw_count
+    T = span.max_tau + 1
+    for node, buckets in span.node_density_by_node_bucket.items():
+        expected = np.zeros((S, T), dtype=np.float64)
+        for arrival_col, col_mass in buckets.items():
+            expected[:, int(arrival_col)] += col_mass
+        np.testing.assert_allclose(
+            span.node_density(node), expected, atol=1e-12,
+        )
+    for edge_key, source_buckets in span.edge_contribution_by_edge_source.items():
+        expected = np.zeros((S, T), dtype=np.float64)
+        for smear in source_buckets.values():
+            expected += smear
+        np.testing.assert_allclose(
+            span.edge_contribution(edge_key), expected, atol=1e-12,
+        )
+
+
+def test_empirical_identity_span_carries_root_at_bucket_zero():
+    """Empirical identity span (``x == end``) follows the same
+    bucket-0-at-root contract as the conditioned composer.
+    """
+    graph = {'nodes': [{'id': 'X'}], 'edges': []}
+    span = compose_empirical_span(
+        graph=graph,
+        x_node_id='X',
+        end_node_id='X',
+        edge_to_empirical_primitive_lookup=lambda *_args, **_kw: None,
+        draw_count=4,
+        horizon_len=10,
+    )
+    assert set(span.node_density_by_node_bucket['X'].keys()) == {0}
+    np.testing.assert_array_equal(
+        span.node_density_by_node_bucket['X'][0], np.ones(4),
+    )
+    assert dict(span.edge_contribution_by_edge_source) == {}

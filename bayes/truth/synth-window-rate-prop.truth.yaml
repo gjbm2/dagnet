@@ -40,6 +40,7 @@ edges:
     onset: 0.0
     mu: 1.609
     sigma: 0.05
+    latency_parameter: true
     latency_shape: stepped
     latency_steps:
       - day: 5.0
@@ -51,6 +52,7 @@ edges:
     onset: 0.0
     mu: 0.693
     sigma: 0.05
+    latency_parameter: true
     latency_shape: stepped
     latency_steps:
       - day: 2.0

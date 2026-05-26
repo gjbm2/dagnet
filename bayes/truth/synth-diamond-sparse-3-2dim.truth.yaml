@@ -146,6 +146,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.5
+    latency_parameter: true
   synth-diamond-sparse-3-2dim-gate-to-path-a:
     from: gate
     to: path-a
@@ -153,6 +154,7 @@ edges:
     onset: 2.0
     mu: 2.3
     sigma: 0.5
+    latency_parameter: true
   synth-diamond-sparse-3-2dim-gate-to-path-b:
     from: gate
     to: path-b
@@ -160,6 +162,7 @@ edges:
     onset: 3.0
     mu: 2.5
     sigma: 0.6
+    latency_parameter: true
   synth-diamond-sparse-3-2dim-path-a-to-join:
     from: path-a
     to: join
@@ -167,6 +170,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.4
+    latency_parameter: true
   synth-diamond-sparse-3-2dim-path-b-to-join:
     from: path-b
     to: join
@@ -174,6 +178,7 @@ edges:
     onset: 2.0
     mu: 2.2
     sigma: 0.5
+    latency_parameter: true
   synth-diamond-sparse-3-2dim-join-to-outcome:
     from: join
     to: outcome
@@ -181,6 +186,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.5
+    latency_parameter: true
 nodes:
   anchor:
     start: true

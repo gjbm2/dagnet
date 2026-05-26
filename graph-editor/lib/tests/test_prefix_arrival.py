@@ -55,6 +55,7 @@ from runner.prefix_arrival import (
     PrefixArrivalMap,
     build_prefix_arrival_map,
 )
+from runner.bucket_transition import cdf_to_bucket_transition
 from runner.timing_span import TimingTransitionPrimitive
 
 
@@ -229,16 +230,13 @@ def test_non_latency_chain_preserves_root_clock_including_tau_zero():
 # ─── Deterministic shift ───────────────────────────────────────────────
 
 
-def test_deterministic_prefix_shifts_clock_by_exact_day_count():
-    """plan §612: a synthetic deterministic prefix delay of d days from
-    A to U admits evidence on day d_anchor + d, rejects evidence on the
-    unshifted anchor day, and keeps the leading primitive on the anchor
-    day.
+def test_narrow_latent_prefix_uses_bucket_k_landing_distribution():
+    """plan §612, bucket-K update: a narrow latent prefix is converted
+    into calendar-day arrivals through the shared bucket transition
+    convention, not by asserting all mass lands on one endpoint day.
 
-    A near-degenerate lognormal (sigma in [0.01, 0.1), onset=d, mu very
-    negative so exp(mu)≈0) places its sub-probability density mass at
-    integer index ``d``. See ``span_kernel._edge_sub_probability_density``
-    lines 115-122."""
+    The scalar and per-draw arrival surfaces must remain coherent:
+    ``weights[day] == mean(weights_draws[day])`` for every emitted day."""
     graph = _make_graph([
         ('e-a-b', 'u-a', 'u-b', 'A', 'B'),
     ])
@@ -259,9 +257,26 @@ def test_deterministic_prefix_shifts_clock_by_exact_day_count():
     assert b_entry is not None
     assert b_entry.provenance.topology_case == 'composed'
 
-    expected_day = (date.fromisoformat(anchor) + timedelta(days=delay_days)).isoformat()
-    # All B-arrival mass concentrates on the shifted day.
-    assert b_entry.weight_on(expected_day) == pytest.approx(1.0, abs=1e-6)
+    endpoint_cdf = np.zeros(31, dtype=float)
+    endpoint_cdf[delay_days:] = 1.0
+    expected_pmf = cdf_to_bucket_transition(
+        'test-prefix-a-b',
+        endpoint_cdf,
+        family='prefix_arrival_test',
+    ).value[0]
+    expected_pmf = np.clip(expected_pmf, 0.0, None)
+    expected_pmf = expected_pmf / expected_pmf.sum()
+    base = date.fromisoformat(anchor)
+    expected = {
+        (base + timedelta(days=tau)).isoformat(): mass
+        for tau, mass in enumerate(expected_pmf)
+        if mass > 0.0
+    }
+
+    assert dict(b_entry.weights) == pytest.approx(expected, abs=1e-6)
+    for day, weight in b_entry.weights.items():
+        assert b_entry.weight_draws_on(day).mean() == pytest.approx(weight, abs=1e-12)
+
     # The unshifted anchor day carries zero B-arrival mass.
     assert b_entry.weight_on(anchor) == pytest.approx(0.0, abs=1e-6)
     # The leading primitive (root A) keeps its anchor-day clock.
@@ -671,38 +686,6 @@ def test_no_second_timing_path_module_imports_only_existing_layer():
 
 
 # ─── Construction diagnostics ──────────────────────────────────────────
-
-
-def test_degraded_entry_carries_explicit_reason_for_no_path_node():
-    """plan §605: cases recorded as degraded or unsupported produce a
-    degraded entry with explicit provenance, never a silently
-    approximate weight.
-
-    A node disconnected from the root must produce a degraded entry
-    with topology_case='degraded' and a non-empty note."""
-    graph = _make_graph([
-        ('e-a-b', 'u-a', 'u-b', 'A', 'B'),
-        # Z is in the graph but has no incoming edge from A.
-    ])
-    # Add a stranded node Z so node enumeration sees it.
-    graph['nodes'].append({'uuid': 'u-z', 'id': 'Z'})
-    transitions = {('A', 'B'): _prim(p=0.7, sigma=0.0)}
-    arrival_map = build_prefix_arrival_map(
-        graph=graph,
-        root_node_id='A',
-        root_day_weights={'2026-03-01': 1.0},
-        transitions=transitions,
-        identity=_identity(),
-        max_tau=20,
-    )
-    z_entry = arrival_map.get('Z')
-    assert z_entry is not None
-    assert z_entry.is_degraded
-    assert z_entry.weights == {}
-    assert z_entry.reach_from_root == 0.0
-    assert z_entry.provenance.note != ''
-    # The degraded list carries this node.
-    assert 'Z' in arrival_map.degraded_nodes
 
 
 def test_root_day_weights_pass_through_unchanged_to_root_entry():

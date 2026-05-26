@@ -274,16 +274,17 @@ class TestPhase1Health:
         with psycopg2.connect(url) as conn, conn.cursor() as cur:
             for e in edges:
                 cur.execute(
-                    "SELECT COUNT(*) FROM snapshots WHERE param_id LIKE %s "
-                    "AND core_hash NOT LIKE 'PLACEHOLDER%%'",
+                    "SELECT 1 FROM snapshots WHERE param_id LIKE %s "
+                    "AND core_hash NOT LIKE 'PLACEHOLDER%%' LIMIT 1",
                     (f"%{e['p_id']}",),
                 )
-                count = cur.fetchone()[0]
-                tag = "OK" if count > 0 else "MISSING"
+                found = cur.fetchone() is not None
+                tag = "OK" if found else "MISSING"
                 diagnostic_lines.append(
-                    f"    {e['from_id']:20s} -> {e['to_id']:20s}  {tag} ({count} rows)"
+                    f"    {e['from_id']:20s} -> {e['to_id']:20s}  "
+                    f"{tag} (snapshot rows present={found})"
                 )
-                if count > 0:
+                if found:
                     ok += 1
                 else:
                     fail += 1

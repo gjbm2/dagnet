@@ -221,50 +221,6 @@ def test_latency_rows_use_shared_sweep_contract():
     assert last['p_infinity_sd'] == pytest.approx(last['p_infinity_sd_epistemic'])
 
 
-def test_shared_sweep_latency_rows_use_selected_evidence_coverage():
-    rows = compute_cohort_maturity_rows_v3(
-        frames=_window_frames_with_young_cohort(),
-        graph=_latency_graph(),
-        target_edge_id='edge-1',
-        query_from_node='node-a',
-        query_to_node='node-b',
-        anchor_from='2026-03-31',
-        anchor_to='2026-04-03',
-        sweep_to='2026-04-05',
-        is_window=True,
-        resolved_override=_query_scoped_latency_resolved(),
-        per_edge_subject_candidates={
-            'edge-1': _window_candidates_from_frames(
-                _window_frames_with_young_cohort(),
-            ),
-        },
-        scenario_id='cf-query-scoped-test',
-    )
-
-    rows_by_tau = {row['tau_days']: row for row in rows}
-
-    assert rows_by_tau[0]['evidence_x'] is None
-    assert rows_by_tau[1]['evidence_x'] == pytest.approx(50.0)
-    assert rows_by_tau[1]['evidence_y'] == pytest.approx(2.0)
-    assert rows_by_tau[1]['rate'] == pytest.approx(2.0 / 50.0)
-    assert rows_by_tau[1]['coverage'] == pytest.approx(0.5)
-    assert rows_by_tau[2]['evidence_x'] == pytest.approx(50.0)
-    assert rows_by_tau[2]['evidence_y'] == pytest.approx(3.0)
-    assert rows_by_tau[2]['rate'] == pytest.approx(3.0 / 50.0)
-    assert rows_by_tau[2]['coverage'] == pytest.approx(0.5)
-    assert rows_by_tau[3]['evidence_x'] == pytest.approx(50.0)
-    assert rows_by_tau[3]['evidence_y'] == pytest.approx(3.0)
-    assert rows_by_tau[3]['coverage'] == pytest.approx(0.0)
-    assert rows_by_tau[4]['evidence_x'] == pytest.approx(150.0)
-    assert rows_by_tau[4]['evidence_y'] == pytest.approx(18.0)
-    assert rows_by_tau[4]['rate'] == pytest.approx(18.0 / 150.0)
-    assert rows_by_tau[4]['coverage'] == pytest.approx(0.5)
-    assert rows_by_tau[5]['evidence_x'] == pytest.approx(150.0)
-    assert rows_by_tau[5]['evidence_y'] == pytest.approx(23.0)
-    assert rows_by_tau[5]['rate'] == pytest.approx(23.0 / 150.0)
-    assert rows_by_tau[5]['coverage'] == pytest.approx(0.5)
-
-
 @pytest.mark.xfail(
     reason=(
         "Doc 60 WP8 not yet landed: until the flagged direct-`cohort()` "

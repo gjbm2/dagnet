@@ -3,7 +3,7 @@
 **Status**: Active reference, 12-May-26
 **Scope**: the four `ΣY / ΣX` reducers that coexist in `graph-editor/lib/runner/` — the canonical mass-first selected-cohort reducer plus three "hold-out" analytic engines that haven't yet been migrated onto it. Plus the legacy trajectory engine and its two surviving callers.
 
-This doc exists because an agent landing in `funnel_engine.py` or `daily_conversions_derivation.py` sees ad-hoc `or 0.0` cascades and case-fork schema handling that look like bugs but are actually a known architectural debt — the analytic engines predate the primitive substrate and run in parallel with it. The audit (`docs/current/cf-defensive-coding-audit.md` F-1) names this as a unification opportunity. See [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) for the defensive-code findings these engines accumulate.
+This doc exists because an agent landing in `funnel_engine.py` or `daily_conversions_derivation.py` sees ad-hoc `or 0.0` cascades and case-fork schema handling that look like bugs but are actually a known architectural debt — the analytic engines predate the primitive substrate and run in parallel with it. The audit ([`cf-defensive-coding-audit.md`](../project-generalise/cf-defensive-coding-audit.md) F-1) names this as a unification opportunity. See [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) for the defensive-code findings these engines accumulate.
 
 ---
 
@@ -147,7 +147,7 @@ The longer-term plan is one mass-first reducer with four input adapters. The sho
 
 ## Cross-references
 
-- [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) — full audit findings (H-2, H-3, M-7, M-8, L-3) concentrated in these engines.
+- [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) — full audit findings (H-2, H-3, M-7, M-8, L-3) concentrated in these engines.
 - [CF_ROW_PIPELINE.md](CF_ROW_PIPELINE.md) — the canonical mass-first reducer in detail.
 - [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) — the substrate they should be migrating onto.
 - [KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58 — the structural pattern (forking by case instead of degenerating one path) behind the parallel implementations.

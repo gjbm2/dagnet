@@ -1711,6 +1711,7 @@ export class GraphComputeClient {
     candidateRegimesByEdge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>,
     displaySettings?: Record<string, unknown>,
     meceDimensions?: string[],
+    forecastingSettings?: Record<string, unknown>,
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
     const testFixture = this.getUrlSearchParams().get('test_fixture');
@@ -1783,7 +1784,10 @@ export class GraphComputeClient {
       ...(testFixture ? { test_fixture: testFixture, ...tfOverrides } : {}),
       ...(diagnosticsRequested ? { _diagnostics: true } : {}),
       ...(bypassCache ? { no_cache: true } : {}),
-      forecasting_settings: buildForecastingSettings(),
+      forecasting_settings: {
+        ...buildForecastingSettings(),
+        ...(forecastingSettings || {}),
+      },
     };
 
     const response = await fetch(this.buildAnalyzeUrl(bypassCache), {
@@ -1927,6 +1931,7 @@ export class GraphComputeClient {
     analysisType?: string,
     displaySettings?: Record<string, unknown>,
     meceDimensions?: string[],
+    forecastingSettings?: Record<string, unknown>,
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
 
@@ -2007,7 +2012,10 @@ export class GraphComputeClient {
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(multiTestFixture ? { test_fixture: multiTestFixture, ...multiTfOverrides } : {}),
       ...(bypassCache ? { no_cache: true } : {}),
-      forecasting_settings: buildForecastingSettings(),
+      forecasting_settings: {
+        ...buildForecastingSettings(),
+        ...(forecastingSettings || {}),
+      },
     };
 
     // DEV/forensics: make the exact compute boundary payload easy to copy without
@@ -2120,6 +2128,7 @@ export class GraphComputeClient {
     }>;
     analyticsDsl?: string;
     displaySettings?: Record<string, unknown>;
+    forecastingSettings?: Record<string, unknown>;
   }): Promise<AnalysisResponse> {
     const diagnosticsRequested = !!(globalThis as any).__dagnetDiagnostics;
 
@@ -2147,6 +2156,10 @@ export class GraphComputeClient {
         ...(s.analytics_dsl ? { analytics_dsl: s.analytics_dsl } : {}),
       })),
       ...(args.displaySettings ? { display_settings: args.displaySettings } : {}),
+      forecasting_settings: {
+        ...buildForecastingSettings(),
+        ...(args.forecastingSettings || {}),
+      },
       ...(diagnosticsRequested ? { _diagnostics: true } : {}),
     };
 

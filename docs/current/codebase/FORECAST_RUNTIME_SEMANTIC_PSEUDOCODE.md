@@ -445,8 +445,6 @@ for each tau:
       contributing_cohorts.append(C)
       sum_x += latest_cell.x_at_query_x
       sum_y += latest_cell.y_at_subject_end
-      sum_carrier_coverage += min(1, latest_cell.carrier_coverage)
-      sum_subject_coverage += min(1, latest_cell.subject_coverage)
 
   if contributing_cohorts is empty:
     aggregate_by_tau[tau] = absent
@@ -454,16 +452,14 @@ for each tau:
     evidence_x = numeric sum_x
     evidence_y = numeric sum_y
     rate = evidence_y / evidence_x if evidence_x > 0 else undefined
-    evidence_x_coverage = sum_carrier_coverage / |admissible_selected_cohorts|
-    evidence_y_coverage = sum_subject_coverage / |admissible_selected_cohorts|
-    coverage = min(evidence_x_coverage, evidence_y_coverage)
+    coverage = |contributing_cohorts| / |admissible_selected_cohorts|
 ```
 
 Invariants:
 
 - "Covered with zero mass" is numeric zero, not absence.
 - `rate = None` when `evidence_x == 0` because `0 / 0` is undefined; `evidence_y == 0` with positive `evidence_x` is a real zero rate.
-- Coverage describes evidence support; evidence values describe what was observed. They share an absent/present gate but are not the same signal.
+- Coverage is a simple Cohort applicability display scalar; evidence values describe what was observed.
 - The aggregate is a projection of the selected prefix. It must not repair upstream non-monotonicity by sorting, clipping, cumulative-max, or smoothing.
 - The same prefix object must feed A.9 frontier state; otherwise the epoch A/B seam can gap even if both sides use the same latency weights.
 
@@ -595,8 +591,6 @@ for each row tau:
     row.evidence_x = aggregate.evidence_x
     row.evidence_y = aggregate.evidence_y
     row.rate = aggregate.rate
-    row.evidence_x_coverage = aggregate.evidence_x_coverage
-    row.evidence_y_coverage = aggregate.evidence_y_coverage
     row.coverage = aggregate.coverage
   else:
     row.evidence_* = absent

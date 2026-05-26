@@ -504,7 +504,7 @@ Deliverables:
 - Update `CF_ROW_PIPELINE.md` to describe the promoted strict span readout as the row/model/evidence readout architecture.
 - Update `FORECAST_RUNTIME_ARCHITECTURE.md` to describe the stable span plan/compiler/evaluator boundary.
 - Update `CF_PRIMITIVE_SUBSTRATE.md` to describe how primitive-bound model and evidence surfaces become span operators.
-- Update `CF_DEFENSIVE_FINDINGS.md` to retire or narrow findings that are genuinely fixed.
+- Update `cf-defensive-findings.md` to retire or narrow findings that are genuinely fixed.
 - Archive or clearly mark superseded candidate docs under `docs/current/project-generalise/` so they cannot be mistaken for maintained implementation.
 - Run the final focused span suite and the full outside-in oracle gate.
 

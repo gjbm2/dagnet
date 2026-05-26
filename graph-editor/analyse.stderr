@@ -1,0 +1,15 @@
+[cli] Loading graph 'synth-window-rate-prop' from /home/reg/dev/dagnet/nous-conversion...
+[cli] Loaded: 438 events, 10 contexts, 351 parameters
+[cli] Graph has 4 nodes, 4 edges
+[cli] Workspace: nous-conversion/feature/bayes-test-graph
+[cli] Query DSL: from(wrp-a).to(wrp-c).window(1-Mar-26:14-Mar-26).asat(10-Apr-26)
+[cli] Preparing scenario 'Scenario 1' (from(wrp-a).to(wrp-c).window(1-Mar-26:14-Mar-26).asat(10-Apr-26), mode: from-file) — materialisation deferred to prepareAnalysisComputeInputs
+[cli] 1 scenario(s) prepared
+[diag] needsSnapshots=true workspace=true
+[diag] ── Regime inventory: 2 edges ──
+[diag]   e6cb99fa-b8c: hash=Q1hMxk88ZvN_yoW- mode=window eq=0 ctx=[]
+[diag]   e6cb99fa-b8c: hash=gp5usb2sixkTlBI_ mode=cohort eq=0 ctx=[]
+[diag]   e3e197dc-98b: hash=oAoD7OcJ0VhJg3hk mode=window eq=0 ctx=[]
+[diag]   e3e197dc-98b: hash=kaTGUNbLFXi2dz7t mode=cohort eq=0 ctx=[]
+[cli] Analysis prepared (type: cohort_maturity, scenarios: 1)
+[cli] Analysis complete (type: cohort_maturity)

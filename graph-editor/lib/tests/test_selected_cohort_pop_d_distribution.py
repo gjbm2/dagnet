@@ -773,19 +773,12 @@ def test_runtime_built_selected_a_clock_evidence_composes_role_spans():
     # even though X amplitude flows through the carrier-only formula.
     assert aggregate[2]["sum_x"] == pytest.approx(12.0)
 
-    # Y_prefix at τ=2 under multi-hop chain composition: first subject
-    # edge (X→C) row at u=03-02 retr=03-03 produces cumulative-at-C of
-    # 12 × 7/30 = 2.8 mass at calendar day 03-03 (anchor+τ=2). The
-    # second subject edge (C→Y) row, however, is at observed_date=03-02
-    # — a date for which prior-layer mass-at-C is zero (the first
-    # edge attributes its mass to the retrieval day 03-03, not 03-02).
-    # This is a fixture/composition alignment artefact: in real
-    # workloads the second edge's source-day distribution should align
-    # with the first edge's destination-day distribution. The test
-    # documents the propagation behaviour rather than asserting a
-    # semantically meaningful Y value here. See A.5 test list for
-    # focused multi-hop chain tests with aligned source-days.
-    assert aggregate[2]["sum_y"] == pytest.approx(0.0)
+    # Y_prefix at τ=2 now composes through the full subject role span.
+    # The downstream C→Y row supplies a local age-kernel; it is not
+    # discarded merely because this hand-built fixture's generated C-day
+    # does not exactly equal the row's observed calendar day.
+    assert aggregate[2]["sum_y"] == pytest.approx(1.4)
+    assert 0.0 < aggregate[2]["sum_y"] < aggregate[2]["sum_x"]
 
     cell = selected.cells_by_anchor_day["2026-03-01"][2]
     assert cell.provenance["denominator_edge_ids"] == ["a-to-b", "b-to-x"]
@@ -1006,23 +999,51 @@ def test_frame_evidence_keeps_paired_x_y_when_x_provider_is_present():
     assert cohort.obs_y[2] == pytest.approx(2.0)
 
 
-def test_active_rows_emit_a_clock_evidence_separately_from_projection():
-    """Active rows must show actual A-clock evidence, not blank/model fields."""
+def test_active_rows_report_selected_a_clock_evidence_as_forensic_only():
+    """Row evidence is owned by the empirical spine, not SelectedAClockEvidence."""
     from runner.cohort_forecast_v3 import (
         SelectedAClockEvidence,
         _project_runtime_rows,
     )
-
-    runtime = _active_rows_runtime(
-        subject_cdf=[0.0, 0.10, 0.30, 0.60, 0.85, 0.95],
-        carrier_cdf=[0.0, 0.20, 0.50, 0.80, 1.00, 1.00],
+    tests_dir = os.path.dirname(__file__)
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    from test_model_span_spine_selected_cohort import (  # noqa: PLC0415
+        _build_window_mode_spans,
+        _candidate,
     )
-    cohort = _single_active_cohort(frontier_age=0)
-    cohort.obs_x = [0.0]
-    cohort.obs_y = [0.0]
-    cohort.x_frozen = 0.0
-    cohort.y_frozen = 0.0
-    cohort.a_pop = 100.0
+
+    carrier, subject, empirical_carrier, empirical_subject = _build_window_mode_spans(
+        candidates_xy=(
+            _candidate(
+                from_id="X",
+                to_id="Y",
+                observed_date="2026-03-01",
+                retrieved_at="2026-03-03",
+                n=50,
+                k=5,
+            ),
+        ),
+    )
+    runtime = SimpleNamespace(
+        population_root="X",
+        denominator_node="X",
+        subject_end="Y",
+        public_moments=SimpleNamespace(
+            p_mean=0.4,
+            p_sd=0.05,
+            p_sd_epistemic=0.03,
+        ),
+        unconditioned_overlays={},
+        composed_carrier=carrier,
+        composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
+        composed_empirical_carrier=empirical_carrier,
+        composed_empirical_subject=empirical_subject,
+    )
+    cohort = _single_active_cohort(frontier_age=2)
+    cohort.a_pop = 50.0
     selected = SelectedAClockEvidence.from_frames(
         anchor_from='2026-03-01',
         anchor_to='2026-03-01',
@@ -1045,26 +1066,36 @@ def test_active_rows_emit_a_clock_evidence_separately_from_projection():
     rows = _project_runtime_rows(
         runtime=runtime,
         engine_cohorts=[cohort],
-        cohort_list=[{'anchor_day': '2026-03-01'}],
+        cohort_list=[{'anchor_day': 0}],
         cohort_eval_ages=[2],
-        cohort_weights=[100.0],
+        cohort_weights=[50.0],
         max_tau=5,
         tau_solid_max=0,
         tau_future_max=5,
         sweep_to='2026-03-06',
         band_level=0.90,
+        n_by_anchor={'0': 50.0},
         selected_a_clock_evidence=selected,
+        emit_diagnostics=True,
     )
 
     by_tau = {int(r['tau_days']): r for r in rows}
     assert by_tau[2]['evidence_x'] == pytest.approx(50.0)
-    assert by_tau[2]['evidence_y'] == pytest.approx(5.0)
-    assert by_tau[2]['rate'] == pytest.approx(0.10)
+    assert by_tau[2]['evidence_y'] == pytest.approx(0.0)
+    assert by_tau[2]['rate'] == pytest.approx(0.0)
     assert by_tau[2]['projected_rate'] is not None
-    assert cohort.frontier_age == 0
-    assert cohort.x_frozen == pytest.approx(0.0)
-    assert by_tau[2]['midpoint'] == pytest.approx(0.10)
-    assert by_tau[2]['projected_rate'] == pytest.approx(by_tau[2]['rate'])
+    assert rows[0]['_row_evidence_source']['note'] == (
+        'Production row evidence fields are emitted from the empirical '
+        'spine selected_projection, not from SelectedAClockEvidence.'
+    )
+    forensic = rows[0]['_forensic_selected_a_clock_evidence']
+    assert forensic['forensic_only'] is True
+    assert forensic['row_evidence_owner'] is False
+    assert any(
+        cell['x_at_query_x'] == pytest.approx(50.0)
+        and cell['y_at_subject_end'] == pytest.approx(5.0)
+        for cell in forensic['cells']
+    )
 
 
 def test_active_a_clock_evidence_reads_only_coherent_selected_frames():
@@ -1354,7 +1385,7 @@ def test_per_source_day_forward_fill_preserves_monotonicity_under_sparse():
         _RateAttributedSubjectPrefix,
         _SelectedSourceDayMass,
         _SubjectChainEvidenceBuckets,
-        _build_rate_attributed_subject_prefix,
+        _build_evidence_local_rate_attributed_subject_prefix,
     )
 
     # Mass at X for the cohort: equal mass per source day.
@@ -1391,7 +1422,7 @@ def test_per_source_day_forward_fill_preserves_monotonicity_under_sparse():
         topology_edges=(("node-x", "node-end", "x-to-end"),),
     )
 
-    prefix = _build_rate_attributed_subject_prefix(
+    prefix = _build_evidence_local_rate_attributed_subject_prefix(
         buckets=buckets,
         selected_source_day_mass=mass,
         anchor_days=["2026-03-01"],

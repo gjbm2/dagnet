@@ -75,6 +75,8 @@ import result_cache  # noqa: E402
 from .model_resolver import ResolvedLatency, ResolvedModelParams
 from .primitive_evidence import PrimitiveEvidenceResolution
 from .primitives import (
+    DEFAULT_DRAW_COUNT,
+    current_mc_draws,
     CompatibilityBlendProvenance,
     ConditionedTransitionPrimitive,
     ConditioningStatus,
@@ -116,6 +118,7 @@ def _primitive_cache_key(
     scenario_seed: int,
     options: 'ConditioningPolicyOptions',
     prior_source: Optional[str],
+    dispersion_basis: str,
 ) -> str:
     """Cache key for ``condition_primitive``.
 
@@ -178,6 +181,7 @@ def _primitive_cache_key(
         scope=resolution.primitive_scope,
         draw_count=options.draw_count,
         scenario_seed=scenario_seed,
+        basis=dispersion_basis,
     )
     return result_cache.make_key(
         'condition_primitive',
@@ -194,6 +198,7 @@ def _primitive_cache_key(
         timing_cdf_max_tau=options.timing_cdf_max_tau,
         prior_source=prior_source,
         resolved_source=resolved_model.source,
+        dispersion_basis=dispersion_basis,
     )
 
 
@@ -207,8 +212,11 @@ class ConditioningPolicyOptions:
     ``draw_count`` is the request-scope ``S`` from plan §587. Two
     consumers presenting the same ``DrawFamilyKey`` under the same scope
     MUST present the same ``draw_count`` to receive coherent draws.
+    The default factory reads ``forecasting_settings.mc_draws`` from the
+    request context bound by the API handler; outside a request the
+    contextvar's dataclass default applies.
     """
-    draw_count: int = 2000
+    draw_count: int = field(default_factory=current_mc_draws)
     timing_cdf_max_tau: int = 90
 
 
@@ -217,15 +225,39 @@ def condition_primitive(
     resolution: PrimitiveEvidenceResolution,
     resolved_model: ResolvedModelParams,
     scenario_seed: int,
-    options: ConditioningPolicyOptions = ConditioningPolicyOptions(),
+    options: Optional[ConditioningPolicyOptions] = None,
     prior_source: Optional[str] = None,
+    dispersion_basis: str = 'epistemic',
 ) -> ConditionedTransitionPrimitive:
+    """Condition one primitive on bound evidence.
+
+    ``dispersion_basis`` selects the prior moment family used for the
+    conjugate update / IS proposal and the timing-particle dispersion,
+    per the frontier-conditioned chart-surface proposal §9.4:
+
+      - ``'epistemic'`` (default): ``(alpha, beta)`` and ``mu_sd`` —
+        the conditioned model surface F mode renders. Existing default
+        for every current caller; mathematics unchanged.
+      - ``'predictive'``: ``(alpha_pred, beta_pred)`` (falling back to
+        epistemic when absent) and ``mu_sd_pred or mu_sd`` — the basis
+        the frontier-conditioned (FC) surface will consume. Reserved
+        until the FC surfaces land in later atoms; no row field reads
+        from this basis yet.
+
+    Basis is part of the cache identity (``_primitive_cache_key``) and
+    of ``DrawFamilyKey.canonical_string`` so basis-labelled primitives
+    with the same transition + evidence scope but different posterior
+    surfaces cannot share a cache entry or an RNG stream.
+    """
+    if options is None:
+        options = ConditioningPolicyOptions()
     cache_key = _primitive_cache_key(
         resolution=resolution,
         resolved_model=resolved_model,
         scenario_seed=scenario_seed,
         options=options,
         prior_source=prior_source,
+        dispersion_basis=dispersion_basis,
     )
     hit, cached = _primitive_cache.get(cache_key)
     if hit:
@@ -237,6 +269,7 @@ def condition_primitive(
         scenario_seed=scenario_seed,
         options=options,
         prior_source=prior_source,
+        dispersion_basis=dispersion_basis,
     )
     _primitive_cache.put(cache_key, primitive)
     return primitive
@@ -249,6 +282,7 @@ def _condition_primitive_uncached(
     scenario_seed: int,
     options: ConditioningPolicyOptions,
     prior_source: Optional[str],
+    dispersion_basis: str,
 ) -> ConditionedTransitionPrimitive:
     """Build a `ConditionedTransitionPrimitive` from a Stage 2 resolution.
 
@@ -270,9 +304,8 @@ def _condition_primitive_uncached(
         posterior equals the prior. Draws are sampled from the prior
         via the keyed-RNG seam. ``effective_evidence_totals = (0,0)``;
         ``equality_explicit=True`` (trivial equality).
-      - ``DEGRADED``: arrival weights were degraded so every raw row
-        was rejected as off-clock; the binder produced a zero-row
-        weighted view. Draws are sampled from the prior via the same
+      - ``DEGRADED``: arrival weights were degraded so every row carries
+        zero clock weight. Draws are sampled from the prior via the same
         keyed-RNG seam used by PRIOR_ONLY; status is provenance only.
 
     The function never returns ``STRUCTURALLY_DETERMINISTIC`` — that
@@ -288,10 +321,56 @@ def _condition_primitive_uncached(
         scope=primitive_scope,
         draw_count=options.draw_count,
         scenario_seed=scenario_seed,
+        basis=dispersion_basis,
     )
 
-    prior_alpha = max(float(resolved_model.alpha), 0.0)
-    prior_beta = max(float(resolved_model.beta), 0.0)
+    # Basis selects the prior moment family for the conjugate update
+    # and the IS proposal (proposal §9.4). Epistemic uses (alpha, beta)
+    # with epistemic timing dispersion; predictive uses (alpha_pred,
+    # beta_pred) with mu_sd_pred (falling back to mu_sd when absent).
+    # The proposal-vs-prior pair selection inside the evaluator stays
+    # the same shape — under predictive basis the proposal equals the
+    # prior so the importance ratio degenerates to a likelihood-only
+    # reweighting; under epistemic basis the predictive moments still
+    # supply the wider IS proposal envelope.
+    raw_alpha = float(resolved_model.alpha)
+    raw_beta = float(resolved_model.beta)
+    raw_alpha_pred = (
+        float(resolved_model.alpha_pred)
+        if resolved_model.alpha_pred is not None
+        else None
+    )
+    raw_beta_pred = (
+        float(resolved_model.beta_pred)
+        if resolved_model.beta_pred is not None
+        else None
+    )
+    if dispersion_basis == 'predictive':
+        prior_alpha_raw = (
+            raw_alpha_pred if raw_alpha_pred and raw_alpha_pred > 0 else raw_alpha
+        )
+        prior_beta_raw = (
+            raw_beta_pred if raw_beta_pred and raw_beta_pred > 0 else raw_beta
+        )
+        prior_alpha_pred_for_proposal: Optional[float] = None
+        prior_beta_pred_for_proposal: Optional[float] = None
+        mu_sd_override = float(
+            resolved_model.latency.mu_sd_pred
+            or resolved_model.latency.mu_sd
+            or 0.0
+        )
+    else:
+        prior_alpha_raw = raw_alpha
+        prior_beta_raw = raw_beta
+        prior_alpha_pred_for_proposal = (
+            raw_alpha_pred if raw_alpha_pred and raw_alpha_pred > 0 else None
+        )
+        prior_beta_pred_for_proposal = (
+            raw_beta_pred if raw_beta_pred and raw_beta_pred > 0 else None
+        )
+        mu_sd_override = float(resolved_model.latency.mu_sd or 0.0)
+    prior_alpha = max(prior_alpha_raw, 0.0)
+    prior_beta = max(prior_beta_raw, 0.0)
     prior_posterior = _beta_summary(prior_alpha, prior_beta)
     timing_obj = _timing_posterior(
         latency=resolved_model.latency,
@@ -302,10 +381,9 @@ def _condition_primitive_uncached(
     weighted_view = resolution.weighted_view
     raw_scope_key = weighted_view.evidence_scope_key
 
-    # Degraded topology: raw points existed but every one was rejected
-    # off-clock because arrival_weights[U] is degraded (no path from
-    # root, horizon inadequate, etc.). The binder still produced a
-    # zero-row weighted view; the resulting primitive is draw-bearing
+    # Degraded topology: raw points existed but every one has zero clock
+    # weight because arrival_weights[U] is degraded (no path from root,
+    # horizon inadequate, etc.). The resulting primitive is draw-bearing
     # from the prior, ``status=DEGRADED`` is surfaced as provenance.
     is_degraded_topology = (
         weighted_view.arrival_weight_summary.get('topology_case') == 'degraded'
@@ -324,6 +402,7 @@ def _condition_primitive_uncached(
             prior_source=prior_source,
             raw_evidence_scope_key=resolution.raw_evidence_set.provenance.scope_key,
             draw_family_key=draw_family_key,
+            dispersion_basis=dispersion_basis,
             note=(
                 f'arrival_weight[{transition.source_node}] degraded; '
                 f'primitive falls back to prior'
@@ -343,18 +422,11 @@ def _condition_primitive_uncached(
         resolved_latency=resolved_model.latency,
         prior_alpha=prior_alpha,
         prior_beta=prior_beta,
-        prior_alpha_pred=(
-            float(resolved_model.alpha_pred)
-            if resolved_model.alpha_pred and resolved_model.alpha_pred > 0
-            else None
-        ),
-        prior_beta_pred=(
-            float(resolved_model.beta_pred)
-            if resolved_model.beta_pred and resolved_model.beta_pred > 0
-            else None
-        ),
+        prior_alpha_pred=prior_alpha_pred_for_proposal,
+        prior_beta_pred=prior_beta_pred_for_proposal,
         draw_count=options.draw_count,
         draw_family_key=draw_family_key,
+        mu_sd_override=mu_sd_override,
     )
 
     # ── Materialise stage ──
@@ -374,6 +446,7 @@ def _condition_primitive_uncached(
             draw_family_key=draw_family_key,
             prior_only_reason=outcome.reason,
             plan_provenance=plan.provenance,
+            dispersion_basis=dispersion_basis,
         )
 
     # CONDITIONED branch: doc-52 subset policy + blend, then build the
@@ -445,7 +518,6 @@ def _condition_primitive_uncached(
             if blend_applied else None
         ),
     )
-
     return ConditionedTransitionPrimitive(
         transition=transition,
         scope=primitive_scope,
@@ -464,23 +536,11 @@ def _condition_primitive_uncached(
         timing_prior=timing_obj,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
-        observation_mask_draws=_build_observation_mask_from_weighted_view(
-            weighted_view,
-            options.draw_count,
-            options.timing_cdf_max_tau + 1,
-        ),
-        observation_mask_draws_by_source_day=(
-            _build_observation_masks_by_source_day_from_weighted_view(
-                weighted_view,
-                options.draw_count,
-                options.timing_cdf_max_tau + 1,
-            )
-        ),
         skipped_evidence_summary={
             'raw_point_count': resolution.diagnostics.raw_point_count,
             'bound_point_count': resolution.diagnostics.bound_point_count,
-            'off_clock_rejection_count':
-                resolution.diagnostics.off_clock_rejection_count,
+            'zero_clock_weight_row_count':
+                resolution.diagnostics.zero_clock_weight_row_count,
             **(
                 {'plan_provenance': list(plan.provenance)}
                 if plan.provenance else {}
@@ -488,6 +548,7 @@ def _condition_primitive_uncached(
         },
         notes=(
             f'topology_case={resolution.diagnostics.topology_case}',
+            f'dispersion_basis={dispersion_basis}',
             # ``n_eff_posterior`` is the posterior informational mass —
             # the conjugate equivalent of an ESS health diagnostic
             # (plan §648). After the per-retrieval merge rekey and the
@@ -735,57 +796,6 @@ def _weights_and_ess(
         return (None, 0.0)
     ess = float(1.0 / np.sum(np.square(weights)))
     return (weights, ess)
-
-
-def _build_observation_mask_from_weighted_view(
-    weighted_view: 'WeightedPrimitiveEvidenceView',
-    draw_count: int,
-    T_p: int,
-) -> np.ndarray:
-    """Aggregate row-presence mask of shape ``(draw_count, T_p)``.
-
-    Retained for diagnostics and legacy/manual tests. The load-bearing
-    composer surface is now source-day-aware; see
-    ``_build_observation_masks_by_source_day_from_weighted_view``.
-    """
-    age_mask = np.zeros(T_p, dtype=np.float64)
-    for row in weighted_view.rows:
-        age = _row_age_days(row)
-        if age is None:
-            continue
-        if 0 <= age < T_p:
-            age_mask[age] = 1.0
-    return np.tile(age_mask, (draw_count, 1))
-
-
-def _build_observation_masks_by_source_day_from_weighted_view(
-    weighted_view: 'WeightedPrimitiveEvidenceView',
-    draw_count: int,
-    T_p: int,
-) -> Mapping[str, np.ndarray]:
-    """Source-day row-presence masks — Phase 6 §4.7.
-
-    ``mask_by_source_day[day][s, age] = 1`` iff an admitted row exists
-    for that exact ``(day, age)`` cell. Covered-positive and covered-zero
-    both set the mask to 1; absent cells remain 0. The mask is shared
-    across draws because row presence is an admission fact, not a draw
-    outcome.
-    """
-    masks_1d: Dict[str, np.ndarray] = {}
-    for row in weighted_view.rows:
-        age = _row_age_days(row)
-        if age is None:
-            continue
-        if 0 <= age < T_p:
-            mask = masks_1d.setdefault(
-                str(row.observed_date),
-                np.zeros(T_p, dtype=np.float64),
-            )
-            mask[age] = 1.0
-    return {
-        day: np.tile(mask, (draw_count, 1))
-        for day, mask in masks_1d.items()
-    }
 
 
 def _row_age_days(row: 'WeightedEvidenceRow') -> Optional[int]:
@@ -1213,6 +1223,7 @@ def _evaluate_likelihood_plan(
     prior_beta_pred: Optional[float],
     draw_count: int,
     draw_family_key: DrawFamilyKey,
+    mu_sd_override: Optional[float] = None,
 ) -> _ConditioningOutcome:
     """Evaluate the plan and emit one ``_ConditioningOutcome``.
 
@@ -1309,11 +1320,20 @@ def _evaluate_likelihood_plan(
     # particles in both places. The zero-dispersion data case is an
     # algebraic degeneracy of the same multivariate sample (cov=0 ⇒
     # numpy SVD returns the mean), not a separate code path.
+    # ``mu_sd_override`` lets the caller select epistemic vs predictive
+    # mu-dispersion at the basis-aware perimeter (proposal §9.4). When
+    # ``None`` (default) the epistemic mu_sd from resolved_latency is
+    # used — preserving existing-caller behaviour exactly.
+    mu_sd_effective = (
+        float(mu_sd_override)
+        if mu_sd_override is not None
+        else float(resolved_latency.mu_sd or 0.0)
+    )
     mu_draws, sigma_draws, onset_draws = sample_timing_particles_from_params(
         mu=float(resolved_latency.mu),
         sigma=float(resolved_latency.sigma),
         onset=float(resolved_latency.onset_delta_days),
-        mu_sd=float(resolved_latency.mu_sd or 0.0),
+        mu_sd=mu_sd_effective,
         sigma_sd=float(resolved_latency.sigma_sd or 0.0),
         onset_sd=float(resolved_latency.onset_sd or 0.0),
         onset_mu_corr=float(resolved_latency.onset_mu_corr or 0.0),
@@ -1375,7 +1395,7 @@ def _evaluate_likelihood_plan(
     for bucket in plan.cohort_buckets:
         prev_F = np.zeros(draw_count, dtype=np.float64)
         for tau_idx, inc_k_draws in bucket.increments_draws:
-            cur_F = proposal_cdf_draws_row_aligned[:, tau_idx]
+            cur_F = proposal_cdf_draws[:, tau_idx]
             cell_prob = np.clip(
                 proposal_p_draws * (cur_F - prev_F),
                 1e-15, 1.0 - 1e-15,
@@ -1383,7 +1403,7 @@ def _evaluate_likelihood_plan(
             log_lik += inc_k_draws * np.log(cell_prob)
             prev_F = cur_F
         p_arrived_total = np.clip(
-            proposal_p_draws * proposal_cdf_draws_row_aligned[:, bucket.last_observed_tau_idx],
+            proposal_p_draws * proposal_cdf_draws[:, bucket.last_observed_tau_idx],
             1e-15, 1.0 - 1e-15,
         )
         residual_draws = np.maximum(
@@ -1493,6 +1513,7 @@ def _make_prior_only_primitive(
     draw_family_key: DrawFamilyKey,
     prior_only_reason: Optional[str] = None,
     plan_provenance: Tuple[str, ...] = (),
+    dispersion_basis: str = 'epistemic',
 ) -> ConditionedTransitionPrimitive:
     """Build a PRIOR_ONLY primitive (n_weighted_total == 0).
 
@@ -1526,13 +1547,6 @@ def _make_prior_only_primitive(
         sd=float(prior_posterior.sd) if prior_posterior.sd is not None else 0.0,
         draws=prior_draws,
     )
-    # CONDITIONED-path-with-zero-admitted-rows MUST emit an explicit
-    # all-zeros mask, not None — None is reserved for the F-mode
-    # unconditioned-overlay path. The conditioning locus consulted the
-    # evidence and found none; coverage/exposure consumers downstream
-    # must see "no observation" rather than "fully observed".
-    T_p = len(timing_obj.cdf_mean)
-    mask_zeros = np.zeros((draw_count, T_p), dtype=np.float64)
     return ConditionedTransitionPrimitive(
         transition=transition,
         scope=scope,
@@ -1556,7 +1570,6 @@ def _make_prior_only_primitive(
         timing_prior=timing_obj,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
-        observation_mask_draws=mask_zeros,
         skipped_evidence_summary=(
             {
                 **(
@@ -1571,6 +1584,7 @@ def _make_prior_only_primitive(
         ),
         notes=(
             'status=prior_only',
+            f'dispersion_basis={dispersion_basis}',
             *(
                 (f'prior_only_reason={prior_only_reason}',)
                 if prior_only_reason
@@ -1595,12 +1609,13 @@ def _make_degraded_primitive(
     raw_evidence_scope_key: Optional[str],
     draw_family_key: DrawFamilyKey,
     note: str,
+    dispersion_basis: str = 'epistemic',
 ) -> ConditionedTransitionPrimitive:
     """Build a DEGRADED primitive when Stage 2 produced no weighted view.
 
     A degraded primitive carries the prior outright: there was no
-    evidence to condition on (arrival weights rejected every row
-    off-clock), so the posterior equals the prior. Per the new
+    positive-weight evidence to condition on, so the posterior equals
+    the prior. Per the new
     contract, every constructed primitive is draw-bearing — draws are
     sampled from the prior via the keyed-RNG seam under the same
     ``primitive_p_draws`` derivation that PRIOR_ONLY uses, so two
@@ -1619,13 +1634,6 @@ def _make_degraded_primitive(
         sd=float(prior_posterior.sd) if prior_posterior.sd is not None else 0.0,
         draws=prior_draws,
     )
-    # DEGRADED is a conditioned-path outcome (arrival weights were
-    # consulted; every row rejected off-clock). Per the contract, emit
-    # all-zeros so downstream coverage/exposure correctly report
-    # zero observation — None is reserved for F-mode overlays that
-    # bypass evidence binding entirely.
-    T_p = len(timing_obj.cdf_mean)
-    mask_zeros = np.zeros((draw_count, T_p), dtype=np.float64)
     return ConditionedTransitionPrimitive(
         transition=transition,
         scope=scope,
@@ -1644,9 +1652,8 @@ def _make_degraded_primitive(
         timing_prior=timing_obj,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
-        observation_mask_draws=mask_zeros,
         skipped_evidence_summary={},
-        notes=(note,),
+        notes=(note, f'dispersion_basis={dispersion_basis}'),
     )
 
 
@@ -1742,7 +1749,6 @@ def make_unconditioned_primitive(
         family=timing_family,
         max_tau=options.timing_cdf_max_tau,
     )
-
     if timing_family == TimingFamily.NON_LATENT:
         # All dispersion in p; structural identity timing.
         posterior_summary = ProbabilityPosterior(
@@ -1842,11 +1848,6 @@ def make_unconditioned_primitive(
         structural_identity_compat=timing_obj_prior.structural_identity_compat,
     )
 
-    # F-mode unconditioned overlay bypasses evidence binding by design —
-    # no rows are consulted. observation_mask_draws=None signals to the
-    # composer "use all-ones default"; this is safe because coverage/
-    # exposure are never read from this path (Phase 6 §4.8 reads them
-    # from the conditioned operator).
     return ConditionedTransitionPrimitive(
         transition=transition,
         scope=primitive_scope,
@@ -1872,7 +1873,6 @@ def make_unconditioned_primitive(
         timing_prior=timing_obj_prior,
         draw_family_key=draw_family_key,
         prior_source=prior_source,
-        observation_mask_draws=None,
         skipped_evidence_summary={},
         notes=tuple(
             n for n in (

@@ -41,11 +41,9 @@ envelope is `[min, max]` over `arrival_weight[source].keys()` from the
 relevant map.
 
 Per-primitive binding (`primitive_evidence.bind_primitive_evidence`)
-filters fetched rows onto each primitive's local clock at admission,
-so over-fetch is harmless: superset rows that don't bind to a given
-primitive are rejected at binding with `off_clock_rejection_count`
-recorded in diagnostics. The merge / binding / weighting layers are
-unchanged by this module.
+assigns fetched rows a primitive-local clock weight. Over-fetch is
+harmless: rows outside clock support carry zero weight rather than
+being rejected.
 
 `as_at` is a retrieval-time admissibility gate, not an envelope clip:
 the envelope is computed in full from primitive-local arrival weights;
@@ -65,7 +63,7 @@ from .lag_distribution_utils import log_normal_inverse_cdf
 from .model_resolver import ResolvedModelParams, resolve_model_params
 from .prefix_arrival import PrefixArrivalIdentity, PrefixArrivalMap, build_prefix_arrival_map
 from .primitive_readout import _resolved_to_timing_transition
-from .primitives import TransitionIdentity
+from .primitives import TransitionIdentity, current_mc_draws
 from .span_kernel import _build_span_topology
 from .timing_span import TimingTransitionPrimitive
 
@@ -412,6 +410,7 @@ def build_request_envelope_plan(
         "subject_resolutions": len(subject_resolutions),
         "carrier_resolutions": len(carrier_resolutions),
     }
+    draw_count = current_mc_draws()
 
     fingerprint = _fingerprint(
         is_window=is_window,
@@ -470,6 +469,7 @@ def build_request_envelope_plan(
             transitions=carrier_transitions,
             identity=carrier_identity,
             max_tau=max_tau,
+            draw_count=draw_count,
             target_node_ids=tuple(carrier_target_nodes) if carrier_target_nodes else None,
         )
 
@@ -479,9 +479,9 @@ def build_request_envelope_plan(
     # the A-anchor days. _identity_root_weights(anchor_from, anchor_to) was
     # using the A-day range, which left the subject map's roots orphaned of
     # any X-days the carrier latency actually populates; the carrier backmap
-    # then had no roots to redistribute through, every subject row landed
-    # off-clock, and subject_coverage collapsed to 0 — invisible dots even
-    # when carrier evidence existed. In window mode (no carrier) and in
+    # then had no roots to redistribute through, every subject row carried
+    # zero clock weight and subject_coverage collapsed to 0 — invisible
+    # dots even when carrier evidence existed. In window mode (no carrier) and in
     # cohort(A=X), the cohort range IS the X-day range; identity weights
     # remain correct.
     subject_arrival_map: Optional[PrefixArrivalMap] = None
@@ -550,6 +550,7 @@ def build_request_envelope_plan(
             transitions=subject_transitions,
             identity=subject_identity,
             max_tau=max_tau,
+            draw_count=draw_count,
             target_node_ids=tuple(subject_target_nodes) if subject_target_nodes else None,
         )
 

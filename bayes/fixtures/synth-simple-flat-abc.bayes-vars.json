@@ -1,0 +1,119 @@
+{
+  "schema_version": 2,
+  "generated_at": "21-May-26 00:53:47",
+  "sidecar_fingerprint": {
+    "truth_sha256": "f2b5a72b441096f5d552ea41be3315577f0271842a4f029c0800fadffc8d150c",
+    "param_file_hashes": {
+      "synth-simple-flat-abc-a-to-b": "bb22fa230264897dd4bf60456e66d493962c585d61cd94caf8f8b9d24ad61d2e",
+      "synth-simple-flat-abc-b-to-c": "f8b11559544a402d6475e34b2d878576602ba2c6ba7ed23a62fdc3fadd532691"
+    }
+  },
+  "job_id": "harness-enrich-1779321227",
+  "fitted_at": "2026-05-20T23:52:05Z",
+  "fingerprint": "",
+  "model_version": 1,
+  "quality": {
+    "max_rhat": 1.0023,
+    "min_ess": 13093.9,
+    "converged_pct": 100.0
+  },
+  "skipped": [],
+  "webhook_payload_edges": [
+    {
+      "param_id": "synth-simple-flat-abc-a-to-b",
+      "file_path": "parameters/synth-simple-flat-abc-a-to-b.yaml",
+      "slices": {
+        "window()": {
+          "alpha": 156665.792,
+          "beta": 17321.2059,
+          "p_hdi_lower": 0.899246,
+          "p_hdi_upper": 0.901608,
+          "ess": 16644.7,
+          "rhat": 1.0008,
+          "divergences": 0,
+          "evidence_grade": 3,
+          "provenance": "bayesian",
+          "alpha_pred": 28.7477,
+          "beta_pred": 3.1709,
+          "hdi_lower_pred": 0.831219,
+          "hdi_upper_pred": 0.985578,
+          "n_effective": 2397830.0,
+          "mu_mean": 2.303,
+          "mu_sd": 0.0035,
+          "mu_sd_pred": 0.0074,
+          "sigma_mean": 0.4987,
+          "sigma_sd": 0.002,
+          "onset_mean": 0.98,
+          "onset_sd": 0.03,
+          "hdi_t95_lower": 23.6,
+          "hdi_t95_upper": 23.8,
+          "onset_mu_corr": -0.943,
+          "kappa_lat_mean": 91687.1,
+          "kappa_lat_sd": 52754.2,
+          "delta_elpd": 62.888,
+          "pareto_k_max": 0.185,
+          "n_loo_obs": 5572
+        }
+      },
+      "_model_state": {
+        "p_base_alpha_0fc4ce0b_0854_55e0_a89b_d78963cf1b22": 156665.792,
+        "p_base_beta_0fc4ce0b_0854_55e0_a89b_d78963cf1b22": 17321.2059,
+        "kappa_0fc4ce0b_0854_55e0_a89b_d78963cf1b22": 80.34,
+        "p_base_alpha_485eb0c0_08f2_5bc9_9107_2ee31dfddc20": 107748.8974,
+        "p_base_beta_485eb0c0_08f2_5bc9_9107_2ee31dfddc20": 11973.9828,
+        "kappa_485eb0c0_08f2_5bc9_9107_2ee31dfddc20": 80.11
+      },
+      "prior_tier": "kn_derived",
+      "evidence_grade": 3,
+      "divergences": 0
+    },
+    {
+      "param_id": "synth-simple-flat-abc-b-to-c",
+      "file_path": "parameters/synth-simple-flat-abc-b-to-c.yaml",
+      "slices": {
+        "window()": {
+          "alpha": 107748.8974,
+          "beta": 11973.9828,
+          "p_hdi_lower": 0.898555,
+          "p_hdi_upper": 0.901397,
+          "ess": 16230.5,
+          "rhat": 1.0003,
+          "divergences": 0,
+          "evidence_grade": 3,
+          "provenance": "bayesian",
+          "alpha_pred": 28.9761,
+          "beta_pred": 3.2297,
+          "hdi_lower_pred": 0.828917,
+          "hdi_upper_pred": 0.98274,
+          "n_effective": 2158490.0,
+          "mu_mean": 2.4995,
+          "mu_sd": 0.0034,
+          "mu_sd_pred": 0.0096,
+          "sigma_mean": 0.5996,
+          "sigma_sd": 0.0025,
+          "onset_mean": 2.0,
+          "onset_sd": 0.03,
+          "hdi_t95_lower": 34.5,
+          "hdi_t95_upper": 34.8,
+          "onset_mu_corr": -0.887,
+          "kappa_lat_mean": 98110.9,
+          "kappa_lat_sd": 54676.8,
+          "delta_elpd": 131.408,
+          "pareto_k_max": 0.164,
+          "n_loo_obs": 6769
+        }
+      },
+      "_model_state": {
+        "p_base_alpha_0fc4ce0b_0854_55e0_a89b_d78963cf1b22": 156665.792,
+        "p_base_beta_0fc4ce0b_0854_55e0_a89b_d78963cf1b22": 17321.2059,
+        "kappa_0fc4ce0b_0854_55e0_a89b_d78963cf1b22": 80.34,
+        "p_base_alpha_485eb0c0_08f2_5bc9_9107_2ee31dfddc20": 107748.8974,
+        "p_base_beta_485eb0c0_08f2_5bc9_9107_2ee31dfddc20": 11973.9828,
+        "kappa_485eb0c0_08f2_5bc9_9107_2ee31dfddc20": 80.11
+      },
+      "prior_tier": "kn_derived",
+      "evidence_grade": 3,
+      "divergences": 0
+    }
+  ]
+}

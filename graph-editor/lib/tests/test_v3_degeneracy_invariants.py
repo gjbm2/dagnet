@@ -114,6 +114,12 @@ def _ensure_ready(graph: str) -> Optional[Path]:
 
 
 def _run_v3(graph: str, dsl: str, sidecar: Optional[Path]) -> dict[str, Any]:
+    # FC chart-surface Atom 1: tests i1/i2/i3 read `model_curve_midpoint`
+    # (the unconditioned model overlay), which is opt-in via the
+    # `show_model_curve` display setting per the v3 contract
+    # (test_cohort_maturity_v3_contract enforces the opt-in invariant).
+    # We always request it here — i4/i5 read `midpoint` instead and are
+    # unaffected by the extra overlay computation.
     args = [
         "--graph", _DATA_REPO_PATH or "",
         "--name", graph,
@@ -121,6 +127,7 @@ def _run_v3(graph: str, dsl: str, sidecar: Optional[Path]) -> dict[str, Any]:
         "--type", "cohort_maturity",
         "--no-cache", "--no-snapshot-cache",
         "--format", "json",
+        "--display", '{"show_model_curve":true}',
     ]
     if sidecar is not None:
         args += ["--bayes-vars", str(sidecar)]
@@ -136,7 +143,8 @@ def _run_v3(graph: str, dsl: str, sidecar: Optional[Path]) -> dict[str, Any]:
             )
 
     cmd = ["bash", str(_ANALYSE_SH), graph, dsl,
-           "--type", "cohort_maturity", "--no-cache", "--no-snapshot-cache", "--format", "json"]
+           "--type", "cohort_maturity", "--no-cache", "--no-snapshot-cache", "--format", "json",
+           "--display", '{"show_model_curve":true}']
     if sidecar is not None:
         cmd += ["--bayes-vars", str(sidecar)]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(_REPO_ROOT), timeout=300)
@@ -147,11 +155,22 @@ def _run_v3(graph: str, dsl: str, sidecar: Optional[Path]) -> dict[str, Any]:
 
 
 def _model_midpoint_curve(payload: dict[str, Any]) -> dict[int, float]:
+    """Per-τ unconditioned model-overlay midline.
+
+    FC chart-surface proposal Atom 1 flipped ``model_midpoint`` from the
+    unconditioned predictive overlay to the unspliced conditioned model
+    surface. The three TestV3DegeneracyInvariants callers (test_i1
+    zero-evidence rise, test_i2 cohort-lags-window, test_i3 A=X collapse)
+    all assert unconditioned-overlay shape invariants, so this helper
+    now reads ``model_curve_midpoint`` (the surviving unconditioned
+    overlay, with epistemic bands). Function name retained for now;
+    Atom 7 owns the terminology promotion.
+    """
     rows = (payload.get("result") or {}).get("data") or []
     out: dict[int, float] = {}
     for r in rows:
         tau = r.get("tau_days")
-        m = r.get("model_midpoint")
+        m = r.get("model_curve_midpoint")
         if tau is not None and isinstance(m, (int, float)):
             out[int(tau)] = float(m)
     return out

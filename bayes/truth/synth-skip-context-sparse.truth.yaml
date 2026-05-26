@@ -107,6 +107,7 @@ edges:
     onset: 0.0
     mu: 0.8
     sigma: 0.4
+    latency_parameter: true
   synth-sk-anchor-to-target:
     from: anchor
     to: target
@@ -114,6 +115,7 @@ edges:
     onset: 0.5
     mu: 1.2
     sigma: 0.5
+    latency_parameter: true
   synth-sk-middle-to-target:
     from: middle
     to: target
@@ -121,6 +123,7 @@ edges:
     onset: 1.0
     mu: 1.0
     sigma: 0.4
+    latency_parameter: true
   synth-sk-target-to-outcome:
     from: target
     to: outcome
@@ -128,6 +131,7 @@ edges:
     onset: 0.5
     mu: 0.8
     sigma: 0.3
+    latency_parameter: true
 
 nodes:
   anchor:

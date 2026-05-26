@@ -113,6 +113,7 @@ edges:
     onset: 1.0
     mu: 2.3
     sigma: 0.5
+    latency_parameter: true
   synth-abc2d-b-to-c:
     from: b
     to: c
@@ -120,6 +121,7 @@ edges:
     onset: 2.0
     mu: 2.5
     sigma: 0.6
+    latency_parameter: true
 
 nodes:
   a:

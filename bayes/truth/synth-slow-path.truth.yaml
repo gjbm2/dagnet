@@ -51,6 +51,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   created-to-delegated:
     from: created
     to: delegated
@@ -58,6 +59,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
   delegated-to-registered:
     from: delegated
     to: registered
@@ -65,6 +67,7 @@ edges:
     onset: 8.0
     mu: 3.8
     sigma: 0.40
+    latency_parameter: true
   registered-to-success:
     from: registered
     to: success
@@ -72,3 +75,4 @@ edges:
     onset: 3.0
     mu: 2.5
     sigma: 0.35
+    latency_parameter: true

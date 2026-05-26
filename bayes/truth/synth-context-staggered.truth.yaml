@@ -131,6 +131,7 @@ edges:
     onset: 1.0
     mu: 1.5
     sigma: 0.5
+    latency_parameter: true
 
 nodes:
   anchor:

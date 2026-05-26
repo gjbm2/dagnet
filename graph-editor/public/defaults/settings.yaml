@@ -101,6 +101,14 @@ forecasting:
   # NUTS target acceptance rate.
   BAYES_TARGET_ACCEPT: 0.90
 
+  # ── Forecast Monte Carlo sampling ──────────────────────────
+
+  # Request-scope MC draw count S used by the forecast / CF runtime
+  # (primitive substrate, span CDF MC, cohort sweep, confidence bands,
+  # funnel sweep). Draw-family coherence requires every consumer of a
+  # primitive under the same DrawFamilyKey to use the same S.
+  MC_DRAWS: 1000
+
   # Per-cohort drift fraction around the global Bayesian posterior (cohort maturity fan chart).
   # 0 = no drift; 0.1–0.2 = modest (default); 0.5–1.0 = large deviation per cohort.
   COHORT_DRIFT_FRACTION: 0.20

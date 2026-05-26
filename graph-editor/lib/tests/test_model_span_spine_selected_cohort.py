@@ -41,6 +41,7 @@ from runner.empirical_evidence_operator import (
 from runner.model_resolver import ResolvedLatency, ResolvedModelParams
 from runner.model_span_spine import (
     SelectedCohortRowProjection,
+    build_per_draw_chain,
     project_selected_cohort_rows,
 )
 from runner.prefix_arrival import (
@@ -52,7 +53,9 @@ from runner.prefix_arrival import (
 from runner.primitive_conditioning import (
     ConditioningPolicyOptions,
     condition_primitive,
+    make_unconditioned_primitive,
 )
+from runner.primitives import ConditioningStatus
 from runner.primitive_evidence import (
     RequestPrimitiveRegistry,
     bind_primitive_evidence,
@@ -62,7 +65,9 @@ from runner.primitives import (
     TransitionIdentity,
 )
 from runner.subject_span_composer import (
+    ComposedPrimitiveSpan,
     ComposeOptions,
+    EvidenceReadoutBinding,
     compose_primitive_span,
 )
 
@@ -211,6 +216,40 @@ def _empty_arrival_map() -> PrefixArrivalMap:
     )
 
 
+def test_per_draw_chain_differences_composed_cdf_without_reapplying_bucket_k():
+    """Composed spans already carry the bucket-K placement chosen upstream."""
+
+    span = ComposedPrimitiveSpan(
+        x_node_id='X',
+        end_node_id='Y',
+        primitive_count=1,
+        draw_count=1,
+        span_p_mean=0.5,
+        span_p_sd=0.0,
+        span_p_draws=np.asarray([0.5], dtype=np.float64),
+        cdf_mean=np.asarray([0.0, 0.2, 0.6, 1.0], dtype=np.float64),
+        cdf_draws=np.asarray([[0.0, 0.2, 0.6, 1.0]], dtype=np.float64),
+        max_tau=3,
+        node_density_by_node_bucket={},
+        edge_contribution_by_edge_source={},
+        node_basis_by_node_bucket={},
+        node_mass_by_provenance={},
+    )
+
+    chain = build_per_draw_chain(
+        span,
+        S=1,
+        days=4,
+        edge_id='composed-X-Y',
+    )
+
+    assert len(chain) == 1
+    np.testing.assert_allclose(
+        chain[0][0].value,
+        np.asarray([[0.0, 0.1, 0.2, 0.2]], dtype=np.float64),
+    )
+
+
 def _build_conditioned_primitive(
     *,
     from_id: str,
@@ -267,7 +306,14 @@ def _build_empirical_primitive(
 
 
 def _make_graph(edges):
-    """edges: list of (edge_id, from_id, to_id)."""
+    """edges: list of (edge_id, from_id, to_id).
+
+    Edges carry the contract-minimal ``p.latency.latency_parameter``
+    flag the predictive kernel provider direct-indexes (FC plan Atom 4
+    engine-discipline rework — perimeter populates the required edge
+    metadata, the engine fails fast on missing keys). The default
+    ``True`` mirrors the production graph schema for latent edges.
+    """
     node_ids: list[str] = []
     seen: set[str] = set()
     for _, f, t in edges:
@@ -278,7 +324,12 @@ def _make_graph(edges):
     return {
         'nodes': [{'id': n} for n in node_ids],
         'edges': [
-            {'edge_id': eid, 'from': f, 'to': t}
+            {
+                'edge_id': eid,
+                'from': f,
+                'to': t,
+                'p': {'latency': {'latency_parameter': True}},
+            }
             for eid, f, t in edges
         ],
     }
@@ -299,10 +350,7 @@ def _build_window_mode_spans(
     - composed_empirical_subject = single-hop empirical X→Y
 
     With ``sigma_xy > 0`` the conditioned operator's timing CDF spreads
-    mass across τ via the lognormal latency family — required for any
-    test that exercises coverage / exposure (under σ=0 the value kernel
-    is a Dirac at τ=0 and coverage collapses against the empirical
-    operator's mask presence).
+    model mass across τ via the lognormal latency family.
 
     Returns the four ``ComposedPrimitiveSpan`` objects.
     """
@@ -316,6 +364,7 @@ def _build_window_mode_spans(
     empirical_xy = _build_empirical_primitive(
         from_id='X', to_id='Y', candidates=candidates_xy,
     )
+    readout_binding = EvidenceReadoutBinding.window()
 
     registry = RequestPrimitiveRegistry(arrival_map=_empty_arrival_map())
 
@@ -336,6 +385,7 @@ def _build_window_mode_spans(
         registry=registry,
         edge_to_primitive_lookup=_model_lookup,
         options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+        evidence_readout_binding=readout_binding,
     )
     composed_subject = compose_primitive_span(
         graph=graph,
@@ -344,6 +394,7 @@ def _build_window_mode_spans(
         registry=registry,
         edge_to_primitive_lookup=_model_lookup,
         options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+        evidence_readout_binding=readout_binding,
     )
     composed_empirical_carrier = compose_empirical_span(
         graph=graph,
@@ -352,6 +403,7 @@ def _build_window_mode_spans(
         edge_to_empirical_primitive_lookup=_empirical_lookup,
         draw_count=_DRAW_COUNT,
         horizon_len=_HORIZON + 1,
+        evidence_readout_binding=readout_binding,
     )
     composed_empirical_subject = compose_empirical_span(
         graph=graph,
@@ -360,6 +412,7 @@ def _build_window_mode_spans(
         edge_to_empirical_primitive_lookup=_empirical_lookup,
         draw_count=_DRAW_COUNT,
         horizon_len=_HORIZON + 1,
+        evidence_readout_binding=readout_binding,
     )
 
     return (
@@ -390,9 +443,8 @@ def _build_multihop_window_spans(
 
     This is the load-bearing fixture for Phase 6 §6.1 invariant 3 (mass
     conservation at intermediate nodes) and §6.2 W2 (multi-hop rate
-    composition). Latent edges (σ > 0) are required for the parametric
-    posterior to spread mass across τ; without σ the value kernel is a
-    Dirac at τ=0 and the coverage / IPW story degenerates.
+    composition). Latent edges (σ > 0) make the parametric posterior
+    spread mass across τ; σ=0 produces a Dirac value kernel at τ=0.
     """
     graph = _make_graph([('e-xy', 'X', 'Y'), ('e-yz', 'Y', 'Z')])
 
@@ -412,6 +464,7 @@ def _build_multihop_window_spans(
     empirical_yz = _build_empirical_primitive(
         from_id='Y', to_id='Z', candidates=candidates_yz,
     )
+    readout_binding = EvidenceReadoutBinding.window()
 
     registry = RequestPrimitiveRegistry(arrival_map=_empty_arrival_map())
 
@@ -433,21 +486,25 @@ def _build_multihop_window_spans(
         graph=graph, x_node_id='X', end_node_id='X',
         registry=registry, edge_to_primitive_lookup=_model_lookup,
         options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+        evidence_readout_binding=readout_binding,
     )
     composed_subject = compose_primitive_span(
         graph=graph, x_node_id='X', end_node_id='Z',
         registry=registry, edge_to_primitive_lookup=_model_lookup,
         options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+        evidence_readout_binding=readout_binding,
     )
     composed_empirical_carrier = compose_empirical_span(
         graph=graph, x_node_id='X', end_node_id='X',
         edge_to_empirical_primitive_lookup=_empirical_lookup,
         draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+        evidence_readout_binding=readout_binding,
     )
     composed_empirical_subject = compose_empirical_span(
         graph=graph, x_node_id='X', end_node_id='Z',
         edge_to_empirical_primitive_lookup=_empirical_lookup,
         draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+        evidence_readout_binding=readout_binding,
     )
 
     return (
@@ -455,6 +512,171 @@ def _build_multihop_window_spans(
         composed_subject,
         composed_empirical_carrier,
         composed_empirical_subject,
+    )
+
+
+# ─── Source-day ledger regression ─────────────────────────────────────
+
+
+def test_active_single_hop_empirical_readout_uses_reclocked_source_day():
+    """Active cohort single-hop: A→B mass arriving on a B-day must read
+    the B→C empirical curve for that exact B source day.
+
+    A→B sends all ten selected users from 1-Mar to B on 2-Mar. B→C has
+    two source-day curves: 1/10 on 1-Mar and 9/10 on 2-Mar. The selected
+    A-clock numerator at τ=1 is therefore 9, not the stationarity-style
+    collapsed answer 1.
+    """
+    graph = _make_graph([
+        ('e-ab', 'A', 'B'),
+        ('e-bc', 'B', 'C'),
+    ])
+    scope = _scope()
+    registry = RequestPrimitiveRegistry(arrival_map=_empty_arrival_map())
+
+    carrier_candidates = (
+        _candidate(
+            from_id='A', to_id='B',
+            observed_date='2026-03-01',
+            retrieved_at='2026-03-02',
+            n=10, k=10,
+        ),
+    )
+    subject_candidates = (
+        _candidate(
+            from_id='B', to_id='C',
+            observed_date='2026-03-01',
+            retrieved_at='2026-03-01',
+            n=10, k=1,
+        ),
+        _candidate(
+            from_id='B', to_id='C',
+            observed_date='2026-03-02',
+            retrieved_at='2026-03-02',
+            n=10, k=9,
+        ),
+    )
+
+    conditioned_ab = _build_conditioned_primitive(
+        from_id='A', to_id='B', edge_id='e-ab',
+        alpha=9.0, beta=1.0, candidates=carrier_candidates,
+    )
+    conditioned_bc = _build_conditioned_primitive(
+        from_id='B', to_id='C', edge_id='e-bc',
+        alpha=9.0, beta=1.0, candidates=subject_candidates,
+    )
+    empirical_ab = _build_empirical_primitive(
+        from_id='A', to_id='B', candidates=carrier_candidates,
+    )
+    empirical_bc = _build_empirical_primitive(
+        from_id='B', to_id='C', candidates=subject_candidates,
+    )
+
+    def _model_lookup(from_id, to_id, edge_data):
+        return {
+            ('A', 'B'): conditioned_ab,
+            ('B', 'C'): conditioned_bc,
+        }.get((from_id, to_id))
+
+    def _empirical_lookup(from_id, to_id, edge_data):
+        return {
+            ('A', 'B'): empirical_ab,
+            ('B', 'C'): empirical_bc,
+        }.get((from_id, to_id))
+
+    composed_carrier = compose_primitive_span(
+        graph=graph, x_node_id='A', end_node_id='B',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_subject = compose_primitive_span(
+        graph=graph, x_node_id='B', end_node_id='C',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_empirical_carrier = compose_empirical_span(
+        graph=graph, x_node_id='A', end_node_id='B',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+    composed_empirical_subject = compose_empirical_span(
+        graph=graph, x_node_id='B', end_node_id='C',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=composed_carrier,
+        composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
+        composed_empirical_carrier=composed_empirical_carrier,
+        composed_empirical_subject=composed_empirical_subject,
+        selected_cohorts=[
+            {'anchor_day': '2026-03-01', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
+        ],
+        horizon=_HORIZON,
+    )
+
+    anchor = '2026-03-01'
+    assert projection.evidence_x_strict_by_anchor_tau[anchor][1] == pytest.approx(10.0)
+    assert projection.evidence_y_strict_by_anchor_tau[anchor][1] == pytest.approx(5.0)
+
+
+def test_window_multihop_empirical_readout_uses_same_window_local_lookup():
+    """Window multi-hop local lookup identity.
+
+    X→Y sends the whole selected window cohort to Y by τ=1. Y→Z has two
+    deliberately different local source-day rows:
+
+      * source day C0 at age 1 has rate 0.1;
+      * source day C0+1 at age 0 has rate 0.9.
+
+    The window readout must use R_YZ(C0, τ=1), so the selected numerator
+    is 10 × 1.0 × 0.1 = 1. The shifted composition bug would read
+    R_YZ(C0+1, 0) and return 9.
+    """
+    c0 = '2026-03-15'
+    c1 = '2026-03-16'
+    candidates_xy = (
+        _candidate(
+            from_id='X', to_id='Y', observed_date=c0,
+            retrieved_at=c1, n=10, k=10,
+        ),
+    )
+    candidates_yz = (
+        _candidate(
+            from_id='Y', to_id='Z', observed_date=c0,
+            retrieved_at=c1, n=10, k=1,
+        ),
+        _candidate(
+            from_id='Y', to_id='Z', observed_date=c1,
+            retrieved_at=c1, n=10, k=9,
+        ),
+    )
+
+    carrier, subject, ec, es = _build_multihop_window_spans(
+        candidates_xy=candidates_xy,
+        candidates_yz=candidates_yz,
+    )
+    projection = project_selected_cohort_rows(
+        composed_carrier=carrier,
+        composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
+        composed_empirical_carrier=ec,
+        composed_empirical_subject=es,
+        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30}],
+        horizon=_HORIZON,
+    )
+
+    assert projection.evidence_y_strict_by_anchor_tau[0][1] == pytest.approx(
+        1.0,
+        abs=1e-10,
+    )
+    assert projection.evidence_y_strict_by_anchor_tau[0][1] != pytest.approx(
+        9.0,
+        abs=1e-10,
     )
 
 
@@ -476,27 +698,25 @@ def test_projection_shapes_match_horizon_and_draw_count():
     projection = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 100.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
     T = _HORIZON + 1
     assert isinstance(projection, SelectedCohortRowProjection)
-    assert projection.rate_draws_model.shape == (_DRAW_COUNT, T)
-    assert projection.x_draws_model.shape == (_DRAW_COUNT, T)
-    assert projection.y_draws_model.shape == (_DRAW_COUNT, T)
-    assert set(projection.coverage_x_by_anchor_tau) == {0}
-    assert projection.coverage_x_by_anchor_tau[0].shape == (T,)
-    assert projection.coverage_y_by_anchor_tau[0].shape == (T,)
-    assert projection.exposure_x_by_anchor_tau[0].shape == (T,)
-    assert projection.exposure_y_by_anchor_tau[0].shape == (T,)
+    assert projection.rate_draws_spliced.shape == (_DRAW_COUNT, T)
+    assert projection.x_draws_spliced.shape == (_DRAW_COUNT, T)
+    assert projection.y_draws_spliced.shape == (_DRAW_COUNT, T)
+    assert projection.applicability_row.shape == (T,)
+    assert projection.applicable_cohort_count.shape == (T,)
     assert projection.evidence_x_strict_by_anchor_tau[0].shape == (T,)
     assert projection.evidence_y_strict_by_anchor_tau[0].shape == (T,)
-    assert 0 in projection.frontier_by_anchor
 
 
 # ─── Identity-carrier (window mode) degeneracy ──────────────────────
@@ -515,49 +735,19 @@ def test_identity_carrier_window_x_draws_equal_cohort_size_at_all_tau():
     projection = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': N, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
-    # x_draws_model is cumulative — for an identity carrier at τ=0 the
+    # x_draws_spliced is cumulative — for an identity carrier at τ=0 the
     # cohort is fully at X; the cumulative stays at N for every τ.
-    np.testing.assert_allclose(projection.x_draws_model, N, atol=1e-10)
-
-
-def test_identity_carrier_window_coverage_x_equals_one():
-    """Identity carrier: composer pre-seeds δ(0) at the carrier root
-    in support AND value streams (Phase 6 §4.8 — the cohort itself
-    IS the observation at the root). So coverage_x = support / value
-    = 1.0 at every τ."""
-    carrier, subject, emp_carrier, emp_subject = _build_window_mode_spans(
-        candidates_xy=(
-            _candidate(
-                from_id='X', to_id='Y', observed_date='2026-03-15',
-                retrieved_at='2026-03-22', n=50, k=5,
-            ),
-        ),
-    )
-
-    projection = project_selected_cohort_rows(
-        composed_carrier=carrier,
-        composed_subject=subject,
-        composed_empirical_carrier=emp_carrier,
-        composed_empirical_subject=emp_subject,
-        selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 50.0, 'tau_max': 30},
-        ],
-        horizon=_HORIZON,
-    )
-
-    np.testing.assert_allclose(
-        projection.coverage_x_by_anchor_tau[0],
-        1.0,
-        atol=1e-12,
-    )
+    np.testing.assert_allclose(projection.x_draws_spliced, N, atol=1e-10)
 
 
 # ─── Single-hop strict evidence saturation ──────────────────────────
@@ -588,19 +778,22 @@ def test_strict_evidence_y_single_hop_matches_observed_k():
     projection = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': float(n), 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': float(n), 'N_pop': float(n), 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
     strict_y = projection.evidence_y_strict_by_anchor_tau[0]
-    # Pre-observation: cumulative empirical conversions = 0.
+    # Bucket-K midpoint placement starts moving half the observed mass in
+    # the bucket immediately before the endpoint observation.
     assert strict_y[0] == pytest.approx(0.0, abs=1e-12)
-    assert strict_y[age_observed - 1] == pytest.approx(0.0, abs=1e-12)
-    # Post-observation: saturates at N × k/n = 8.
+    assert strict_y[age_observed - 1] == pytest.approx(float(k) / 2.0, abs=1e-10)
+    # At the observed endpoint and thereafter: saturates at N × k/n = 8.
     assert strict_y[age_observed] == pytest.approx(float(k), abs=1e-10)
     assert strict_y[-1] == pytest.approx(float(k), abs=1e-10)
 
@@ -616,10 +809,12 @@ def test_strict_evidence_x_window_mode_equals_cohort_size():
     projection = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': N, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -646,6 +841,12 @@ def test_model_and_empirical_y_surfaces_can_disagree():
     will pull toward the data but won't collapse to 0.1 because the
     prior is strong; the empirical kernel will read exactly 0.1. The
     saturation gap is large enough to detect.
+
+    Per FC plan Atom 1: ``y_draws_spliced`` is the *spliced* E+F surface,
+    so at saturation under no ``tau_observed`` clamp it inherits the
+    strict empirical numerator. The pure conditioned model surface
+    lives on ``f_y_draws`` (unspliced); this is what disagreement is
+    asserted against.
     """
     n_obs = 20
     k_obs = 2
@@ -704,15 +905,17 @@ def test_model_and_empirical_y_surfaces_can_disagree():
     projection = project_selected_cohort_rows(
         composed_carrier=composed_carrier,
         composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
         composed_empirical_carrier=composed_empirical_carrier,
         composed_empirical_subject=composed_empirical_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': N, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
-    model_y_at_saturation = float(projection.y_draws_model[:, -1].mean())
+    model_y_at_saturation = float(projection.f_y_draws[:, -1].mean())
     empirical_y_at_saturation = float(
         projection.evidence_y_strict_by_anchor_tau[0][-1]
     )
@@ -728,49 +931,135 @@ def test_model_and_empirical_y_surfaces_can_disagree():
     assert abs(model_y_at_saturation - empirical_y_at_saturation) > 5.0
 
 
-# ─── Frontier per anchor ─────────────────────────────────────────────
+def test_f_surface_is_unspliced_while_model_surface_is_spliced():
+    """FC plan Atom 1 contract: ``f_x_draws`` / ``f_y_draws`` /
+    ``f_rate_draws`` snapshot the cross-Cohort conditioned model
+    surface *before* the per-Cohort strict-prefix splice that produces
+    ``x_draws_spliced`` / ``y_draws_spliced`` / ``rate_draws_spliced``.
 
+    Pin: with a Cohort whose ``tau_observed`` is strictly less than
+    ``tau_max`` and a model surface that visibly disagrees with the
+    strict empirical surface,
 
-def test_frontier_per_anchor_marks_last_positive_exposure_y():
-    """The frontier τ per anchor is the last τ where draw-mean
-    cumulative exposure_y > 0. With an exposure-stream that begins
-    propagating once carrier+subject mass arrives, the frontier ought
-    to land somewhere within the horizon for a finite-mass cohort."""
-    carrier, subject, emp_carrier, emp_subject = _build_window_mode_spans(
-        candidates_xy=(
-            _candidate(
-                from_id='X', to_id='Y', observed_date='2026-03-15',
-                retrieved_at='2026-03-22', n=10, k=4,
-            ),
+    - within ``[0, tau_observed]``: ``x_draws_spliced`` / ``y_draws_spliced``
+      equal the per-particle broadcast of the cumulative strict
+      empirical (the splice landed), while ``f_x_draws`` / ``f_y_draws``
+      differ;
+    - within ``(tau_observed, tau_max]``: both surfaces agree (no
+      splice past the frontier).
+
+    This is the load-bearing separation Atom 1 introduces; F mode
+    consumes ``f_*`` and E+F mode consumes ``*_draws_model``.
+    """
+    n_obs = 20
+    k_obs = 2
+    tau_observed = 10
+    candidates = (
+        _candidate(
+            from_id='X', to_id='Y', observed_date='2026-03-15',
+            retrieved_at='2026-03-20', n=n_obs, k=k_obs,
         ),
     )
+    graph = _make_graph([('e-xy', 'X', 'Y')])
 
+    conditioned_xy = _build_conditioned_primitive(
+        from_id='X', to_id='Y', edge_id='e-xy',
+        alpha=40.0, beta=10.0,  # strong prior — model p ≈ 0.8 vs empirical 0.1
+        candidates=candidates,
+    )
+    empirical_xy = _build_empirical_primitive(
+        from_id='X', to_id='Y', candidates=candidates,
+    )
+
+    registry = RequestPrimitiveRegistry(arrival_map=_empty_arrival_map())
+
+    def _model_lookup(f, t, e):
+        if (f, t) == ('X', 'Y'):
+            return conditioned_xy
+        return None
+
+    def _empirical_lookup(f, t, e):
+        if (f, t) == ('X', 'Y'):
+            return empirical_xy
+        return None
+
+    composed_carrier = compose_primitive_span(
+        graph=graph, x_node_id='X', end_node_id='X',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_subject = compose_primitive_span(
+        graph=graph, x_node_id='X', end_node_id='Y',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_empirical_carrier = compose_empirical_span(
+        graph=graph, x_node_id='X', end_node_id='X',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+    composed_empirical_subject = compose_empirical_span(
+        graph=graph, x_node_id='X', end_node_id='Y',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+
+    N = float(n_obs)
     projection = project_selected_cohort_rows(
-        composed_carrier=carrier,
-        composed_subject=subject,
-        composed_empirical_carrier=emp_carrier,
-        composed_empirical_subject=emp_subject,
+        composed_carrier=composed_carrier,
+        composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
+        composed_empirical_carrier=composed_empirical_carrier,
+        composed_empirical_subject=composed_empirical_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
+            {
+                'anchor_day': 0,
+                'N_anchor': N,
+                'N_pop': N,
+                'tau_max': _HORIZON,
+                'tau_observed': tau_observed,
+            },
         ],
         horizon=_HORIZON,
     )
 
-    frontier = projection.frontier_by_anchor[0]
-    exposure_y = projection.exposure_y_by_anchor_tau[0]
-    # Frontier is the last positive index of cumulative exposure_y.
-    # If exposure_y is all-zero (no observed wavefront ever propagated),
-    # frontier is -1. With an admitted row at age 7, the conditioned
-    # mask is 1 at age 7, exposure propagates downstream → frontier
-    # should land at the horizon end.
-    if frontier >= 0:
-        assert exposure_y[frontier] > 0.0
-        # Beyond the frontier, cumulative exposure cannot drop (it's a
-        # cumulative); but the last positive index is the frontier.
-        # No assertion on what's after — cumulative is monotone.
-    else:
-        # Frontier == -1 only if no exposure ever propagated.
-        np.testing.assert_allclose(exposure_y, 0.0, atol=1e-12)
+    strict_y = projection.evidence_y_strict_by_anchor_tau[0]
+    strict_x = projection.evidence_x_strict_by_anchor_tau[0]
+
+    # Within the spliced prefix [0, tau_observed], every particle of
+    # the spliced surface equals the strict empirical cumulative.
+    for tau in range(tau_observed + 1):
+        spliced_y_at_tau = projection.y_draws_spliced[:, tau]
+        spliced_x_at_tau = projection.x_draws_spliced[:, tau]
+        assert np.allclose(spliced_y_at_tau, strict_y[tau])
+        assert np.allclose(spliced_x_at_tau, strict_x[tau])
+
+    # Within the spliced prefix, the unspliced surface disagrees with
+    # the strict empirical — it carries the conditioned model belief.
+    # We assert this on the mean-across-particles to be robust to
+    # per-particle noise, using saturation-side τ where the model has
+    # accumulated enough mass to clearly separate from empirical 0.1.
+    f_y_mean_at_obs = float(projection.f_y_draws[:, tau_observed].mean())
+    empirical_y_at_obs = float(strict_y[tau_observed])
+    # Empirical at τ=10 is bounded by N × k/n = 2.0 (cumulative).
+    assert empirical_y_at_obs <= 2.0 + 1e-9
+    # Model at τ=10 already accumulates well above empirical because
+    # p ≈ 0.62 dominates the small lag. The exact value depends on
+    # composed-span timing; require a margin that excludes coincidence.
+    assert f_y_mean_at_obs > empirical_y_at_obs + 1.0
+
+    # Past the splice frontier (τ > tau_observed), the spliced and
+    # unspliced surfaces coincide — no second splice.
+    for tau in range(tau_observed + 1, _HORIZON + 1):
+        assert np.allclose(
+            projection.y_draws_spliced[:, tau],
+            projection.f_y_draws[:, tau],
+        )
+        assert np.allclose(
+            projection.x_draws_spliced[:, tau],
+            projection.f_x_draws[:, tau],
+        )
 
 
 # ─── Per-anchor decomposition ────────────────────────────────────────
@@ -793,34 +1082,38 @@ def test_two_anchor_aggregation_sums_model_surfaces():
     proj_single = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 1.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 1.0, 'N_pop': 1.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
     proj_pair = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 3.0, 'tau_max': 30},
-            {'anchor_day': 7, 'N_anchor': 5.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 3.0, 'N_pop': 3.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': 7, 'N_anchor': 5.0, 'N_pop': 5.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
-    # x_draws_model at unit cohort × 8 total = pair aggregated x_draws.
+    # x_draws_spliced at unit cohort × 8 total = pair aggregated x_draws.
     np.testing.assert_allclose(
-        proj_pair.x_draws_model,
-        8.0 * proj_single.x_draws_model,
+        proj_pair.x_draws_spliced,
+        8.0 * proj_single.x_draws_spliced,
         rtol=1e-10,
     )
     np.testing.assert_allclose(
-        proj_pair.y_draws_model,
-        8.0 * proj_single.y_draws_model,
+        proj_pair.y_draws_spliced,
+        8.0 * proj_single.y_draws_spliced,
         rtol=1e-10,
     )
     # Two anchors in the by_anchor maps.
@@ -846,23 +1139,29 @@ def test_reducer_is_mode_blind_against_a_mode_field():
     clean = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
     noisy = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
             {
                 'anchor_day': 0,
                 'N_anchor': 10.0,
+                'N_pop': 10.0,
                 'tau_max': 30,
+                'tau_observed': 30,
                 # Decoy fields the reducer should ignore.
                 'is_window': True,
                 'is_active_carrier': False,
@@ -873,8 +1172,8 @@ def test_reducer_is_mode_blind_against_a_mode_field():
         horizon=_HORIZON,
     )
 
-    np.testing.assert_array_equal(clean.x_draws_model, noisy.x_draws_model)
-    np.testing.assert_array_equal(clean.y_draws_model, noisy.y_draws_model)
+    np.testing.assert_array_equal(clean.x_draws_spliced, noisy.x_draws_spliced)
+    np.testing.assert_array_equal(clean.y_draws_spliced, noisy.y_draws_spliced)
     np.testing.assert_array_equal(
         clean.evidence_y_strict_by_anchor_tau[0],
         noisy.evidence_y_strict_by_anchor_tau[0],
@@ -886,14 +1185,12 @@ def test_reducer_is_mode_blind_against_a_mode_field():
 #
 # Plan: docs/current/project-generalise/selected-cohort-projection-cutover-plan.md
 # §"Stage 2(b) — outstanding work" + the original Atom 2.4 spec.
-# Contract: docs/current/project-generalise/phase-6-evidence-operator-contract.md
-# §6.1 (invariants 1–12), §6.2 (W1–W4), §5.6 (strict vs adjusted).
+# Contract: strict empirical evidence remains observed k/n on the selected
+# clock while model surfaces remain conditioned value projections.
 #
 # Expected numerics are derived from §3–§5 first principles — no test
-# records outputs of a prior run. Latent (σ > 0) fixtures unblock the
-# coverage / IPW story; σ=0 puts all conditioned mass at τ=0 and
-# degenerates coverage to the empirical mask at τ=0 (the trap Stage 2(a)
-# fell into, noted in the handover).
+# records outputs of a prior run. Latent (σ > 0) fixtures spread model
+# mass across τ; σ=0 puts all conditioned mass at τ=0.
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -908,8 +1205,7 @@ def _dense_admitted_rows(
     ages: Sequence[int] = range(0, _HORIZON + 1),
 ):
     """Synthesise a saturated row pool: one retrieval per age in
-    ``ages`` (so the empirical operator's mask is `1` at every age, and
-    `R_emp(s, age)` is dense across τ). ``k_curve`` is the cumulative
+    ``ages`` so `R_emp(s, age)` is dense across τ. ``k_curve`` is the cumulative
     `k` curve as a function of age — monotone non-decreasing."""
     from datetime import date, timedelta
 
@@ -942,7 +1238,9 @@ def test_phase6_inv1_saturation_conservation_single_hop_with_latency():
     `α/(α+β)`.
 
     Setup: prior `Beta(4, 6)` (mean 0.4), σ = 0.8, N = 100. Expected
-    y_draws_model.mean at horizon ≈ 100 × 0.4 = 40.
+    f_y_draws.mean at horizon ≈ 100 × 0.4 = 40. `f_y_draws` is the
+    unspliced conditioned model surface; `y_draws_spliced` is the spliced
+    E+F surface after Atom 1.
     """
     carrier, subject, emp_carrier, emp_subject = _build_window_mode_spans(
         candidates_xy=(),
@@ -952,16 +1250,18 @@ def test_phase6_inv1_saturation_conservation_single_hop_with_latency():
     proj = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 100.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
     # Posterior with no evidence ≡ prior; mean p = α/(α+β) = 0.4.
     # IS sampling at S=64 introduces noise; allow ≤ 10% relative drift.
-    y_mean_at_sat = float(proj.y_draws_model.mean(axis=0)[-1])
+    y_mean_at_sat = float(proj.f_y_draws.mean(axis=0)[-1])
     expected = 100.0 * 0.4
     assert abs(y_mean_at_sat - expected) / expected < 0.1
 
@@ -982,65 +1282,20 @@ def test_phase6_inv1_saturation_conservation_multihop():
     proj = project_selected_cohort_rows(
         composed_carrier=carrier,
         composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 100.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
     # p_xy × p_yz = 0.4 × 0.4 = 0.16. N × product = 16.
-    y_mean_at_sat = float(proj.y_draws_model.mean(axis=0)[-1])
+    y_mean_at_sat = float(proj.f_y_draws.mean(axis=0)[-1])
     expected = 100.0 * 0.16
     # Allow ≤ 15% relative drift (IS sampling noise compounds over hops).
     assert abs(y_mean_at_sat - expected) / expected < 0.15
-
-
-def test_phase6_inv3_mass_conservation_at_intermediate_node():
-    """Phase 6 §6.1 invariant 3 — mass conservation at on-path nodes.
-
-    At any on-path node U, ``Σ_s mass_at_U(s)`` at τ→∞ equals
-    ``N × reach_to_U``. For a chain X→Y→Z (window, identity carrier),
-    cumulative mass at the intermediate node Y at τ→∞ should equal
-    ``N × p_xy``.
-
-    Reads the subject span's per-node density at Y directly via
-    ``read_node_mass_draws`` and convolves the carrier-seed at X with
-    it the same way the reducer convolves to Z — the structural
-    parallel that makes mass conservation hold at every checkpoint.
-    """
-    from runner.model_span_spine import (
-        read_node_mass_draws,
-        seed_subject_from_carrier,
-    )
-
-    carrier, subject, emp_carrier, emp_subject = _build_multihop_window_spans(
-        candidates_xy=(), candidates_yz=(),
-        sigma_xy=0.8, sigma_yz=0.8,
-        alpha_xy=4.0, beta_xy=6.0,
-        alpha_yz=4.0, beta_yz=6.0,
-    )
-    # Seed at X with the cohort delta.
-    seed_value, _, _ = seed_subject_from_carrier(
-        carrier=carrier, x_node_id='X',
-        anchor_days=[0], anchor_counts=[100.0], days=_HORIZON + 1,
-    )
-    # Density at the intermediate node Y, per-(draw, τ).
-    density_at_Y = read_node_mass_draws(subject, 'Y')
-    # Convolve seed at X with density at Y, summed to cumulative.
-    S = seed_value.shape[0]
-    T = _HORIZON + 1
-    mass_at_Y = np.zeros((S, T), dtype=np.float64)
-    for s in range(S):
-        mass_at_Y[s, :] = np.convolve(
-            seed_value[s, :], density_at_Y[s, :],
-        )[:T]
-    cumulative_at_Y = np.cumsum(mass_at_Y, axis=-1)
-    y_at_sat = float(cumulative_at_Y.mean(axis=0)[-1])
-    expected = 100.0 * 0.4
-    # Same tolerance as the saturation conservation test; mass at
-    # intermediate must hit the topological reach at saturation.
-    assert abs(y_at_sat - expected) / expected < 0.15
 
 
 def test_phase6_inv4_time_shift_invariance_in_anchor_day():
@@ -1067,17 +1322,19 @@ def test_phase6_inv4_time_shift_invariance_in_anchor_day():
     )
     proj_0 = project_selected_cohort_rows(
         composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
     proj_5 = project_selected_cohort_rows(
         composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
-            {'anchor_day': 5, 'N_anchor': 10.0, 'tau_max': 30},
+            {'anchor_day': 5, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1113,14 +1370,16 @@ def test_phase6_inv6_dirac_edge_collapses_to_one_edge_reach():
     proj_mh = project_selected_cohort_rows(
         composed_carrier=carrier_mh,
         composed_subject=subject_mh,
+        composed_carrier_predictive=carrier_mh,
+        composed_subject_predictive=subject_mh,
         composed_empirical_carrier=ec_mh,
         composed_empirical_subject=es_mh,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 100.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
-    y_mh_at_sat = float(proj_mh.y_draws_model.mean(axis=0)[-1])
+    y_mh_at_sat = float(proj_mh.f_y_draws.mean(axis=0)[-1])
     expected_product = 100.0 * 0.16
     # The Dirac at Y→Z degenerates to a multiplicative reach; saturation
     # is governed by the single latent edge X→Y plus the rate multiplier
@@ -1129,10 +1388,10 @@ def test_phase6_inv6_dirac_edge_collapses_to_one_edge_reach():
     assert abs(y_mh_at_sat - expected_product) / expected_product < 0.15
 
 
-def test_phase6_inv9_y_draws_model_is_cumulative_only():
+def test_phase6_inv9_y_draws_spliced_is_cumulative_only():
     """Phase 6 §6.1 invariant 9 — cumulative-vs-incremental boundary.
 
-    ``y_draws_model`` is the terminal cumulative; per draw it must be
+    ``y_draws_spliced`` is the terminal cumulative; per draw it must be
     monotone non-decreasing in τ. A violation would surface the
     previous attempt's 1-day-shift signature (where internal cumulative
     accumulation leaked through to the reducer).
@@ -1148,13 +1407,14 @@ def test_phase6_inv9_y_draws_model_is_cumulative_only():
     )
     proj = project_selected_cohort_rows(
         composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 50.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 50.0, 'N_pop': 50.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
-    diffs = np.diff(proj.y_draws_model, axis=-1)
+    diffs = np.diff(proj.y_draws_spliced, axis=-1)
     # Per-(draw, τ) increment must be non-negative.
     assert np.all(diffs >= -1e-12)
     # Same property for the empirical strict cumulative.
@@ -1163,80 +1423,13 @@ def test_phase6_inv9_y_draws_model_is_cumulative_only():
     assert np.all(strict_diffs >= -1e-12)
 
 
-def test_phase6_inv10_coverage_y_is_one_under_dense_mask():
-    """Phase 6 §6.1 invariant 10 — coverage as masked-kernel ratio
-    under fully-observed rows.
-
-    When every (source-day, age) cell on the wavefront is observed
-    (``mask = 1`` everywhere the wavefront reaches), the support stream
-    coincides with the value stream and ``coverage = support / value
-    → 1`` at every τ where ``value > 0``.
-
-    Setup: single-hop, σ=0.8, dense candidate pool covering every age
-    from 0 to horizon. The empirical operator's per-age mask is 1 at
-    every age; the conditioned operator's masked support stream
-    therefore mirrors its value stream and coverage approaches 1 at
-    saturation.
-    """
-    dense_rows = _dense_admitted_rows(
-        from_id='X', to_id='Y', n=10,
-        k_curve=lambda age: min(4, age // 3),
-        ages=range(0, _HORIZON + 1),
-    )
-    carrier, subject, ec, es = _build_window_mode_spans(
-        candidates_xy=dense_rows,
-        sigma_xy=0.8,
-    )
-    proj = project_selected_cohort_rows(
-        composed_carrier=carrier, composed_subject=subject,
-        composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
-        ],
-        horizon=_HORIZON,
-    )
-    # At saturation, coverage_y is close to 1 because every cell along
-    # the wavefront is observed. Tolerance accounts for boundary
-    # effects at τ=horizon where the kernel tail extends beyond the
-    # composer window.
-    coverage_y_at_sat = float(proj.coverage_y_by_anchor_tau[0][-1])
-    assert coverage_y_at_sat > 0.95
-
-
-def test_phase6_inv10_coverage_y_is_zero_with_no_observation():
-    """Phase 6 §6.1 invariant 10 — corner case: zero mask.
-
-    With every per-cell mask zero (no admitted rows), the support
-    stream is identically zero and coverage = 0 everywhere — even
-    where the parametric value stream is positive.
-    """
-    carrier, subject, ec, es = _build_window_mode_spans(
-        candidates_xy=(),
-        sigma_xy=0.8,
-    )
-    proj = project_selected_cohort_rows(
-        composed_carrier=carrier, composed_subject=subject,
-        composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
-        ],
-        horizon=_HORIZON,
-    )
-    np.testing.assert_allclose(
-        proj.coverage_y_by_anchor_tau[0], 0.0, atol=1e-12,
-    )
-    np.testing.assert_allclose(
-        proj.exposure_y_by_anchor_tau[0], 0.0, atol=1e-12,
-    )
-
-
 def test_phase6_inv11_empirical_covered_zero_keeps_strict_y_at_zero():
     """Phase 6 §6.1 invariant 11 — empirical-half of the
     covered-zero / absent discrimination.
 
     Per §4.9, the empirical kernel is zero at covered-zero cells
     (because the observed `k` is literally zero). Strict empirical Y
-    therefore stays at 0 even though the mask is 1 (the row exists).
+    therefore stays at 0 even though a row exists.
     """
     candidate = _candidate(
         from_id='X', to_id='Y', observed_date='2026-03-15',
@@ -1248,9 +1441,10 @@ def test_phase6_inv11_empirical_covered_zero_keeps_strict_y_at_zero():
     )
     proj = project_selected_cohort_rows(
         composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1258,105 +1452,6 @@ def test_phase6_inv11_empirical_covered_zero_keeps_strict_y_at_zero():
     np.testing.assert_allclose(
         proj.evidence_y_strict_by_anchor_tau[0], 0.0, atol=1e-12,
     )
-
-
-def test_phase6_inv11_covered_zero_vs_absent_disambiguates_via_exposure():
-    """Phase 6 §6.1 invariant 11 — conditioned-half: covered-zero (mask
-    = 1) keeps exposure > 0; absent (mask = 0) drops exposure to 0.
-
-    Per §4.9, the parametric value kernel is positive everywhere the
-    fitted distribution has support — including at covered-zero cells.
-    The mask discriminates absent (no row → mask=0) from non-absent
-    (row exists, regardless of `k` → mask=1). Tests both cases against
-    the same conditioned posterior so the only diff is mask presence.
-    """
-    # Covered-zero: admitted row with k=0.
-    cz_candidate = _candidate(
-        from_id='X', to_id='Y', observed_date='2026-03-15',
-        retrieved_at='2026-03-22', n=10, k=0,
-    )
-    carrier_cz, subject_cz, ec_cz, es_cz = _build_window_mode_spans(
-        candidates_xy=(cz_candidate,),
-        sigma_xy=0.8,
-    )
-    proj_cz = project_selected_cohort_rows(
-        composed_carrier=carrier_cz, composed_subject=subject_cz,
-        composed_empirical_carrier=ec_cz, composed_empirical_subject=es_cz,
-        selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
-        ],
-        horizon=_HORIZON,
-    )
-    # Absent: no rows.
-    carrier_abs, subject_abs, ec_abs, es_abs = _build_window_mode_spans(
-        candidates_xy=(),
-        sigma_xy=0.8,
-    )
-    proj_abs = project_selected_cohort_rows(
-        composed_carrier=carrier_abs, composed_subject=subject_abs,
-        composed_empirical_carrier=ec_abs, composed_empirical_subject=es_abs,
-        selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
-        ],
-        horizon=_HORIZON,
-    )
-    # Covered-zero: exposure is positive past the observed age (mask
-    # propagates through the parametric kernel).
-    cz_exposure = proj_cz.exposure_y_by_anchor_tau[0]
-    abs_exposure = proj_abs.exposure_y_by_anchor_tau[0]
-    assert cz_exposure[-1] > 0.0
-    np.testing.assert_allclose(abs_exposure, 0.0, atol=1e-12)
-
-
-def test_phase6_inv12_zero_terminal_distinguishes_covered_zero_from_absent():
-    """Phase 6 §6.1 invariant 12 — zero-value terminal discrimination.
-
-    The empirical strict cumulative is 0 in both:
-    - case (a) every path covered-zero  → coverage_y ≈ 1, exposure_y > 0
-    - case (b) every path absent        → coverage_y = 0, exposure_y = 0
-
-    The two are distinguishable by coverage and exposure even though
-    the empirical strict is zero in both — answering the contract's
-    "we observed zero" vs "we don't know" question.
-    """
-    # Case (a): covered-zero rows at every age (mask = 1 everywhere).
-    cz_rows = _dense_admitted_rows(
-        from_id='X', to_id='Y', n=10, k_curve=lambda age: 0,
-        ages=range(0, _HORIZON + 1),
-    )
-    carrier_a, subject_a, ec_a, es_a = _build_window_mode_spans(
-        candidates_xy=cz_rows, sigma_xy=0.8,
-    )
-    proj_a = project_selected_cohort_rows(
-        composed_carrier=carrier_a, composed_subject=subject_a,
-        composed_empirical_carrier=ec_a, composed_empirical_subject=es_a,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30}],
-        horizon=_HORIZON,
-    )
-    # Case (b): absent everywhere.
-    carrier_b, subject_b, ec_b, es_b = _build_window_mode_spans(
-        candidates_xy=(), sigma_xy=0.8,
-    )
-    proj_b = project_selected_cohort_rows(
-        composed_carrier=carrier_b, composed_subject=subject_b,
-        composed_empirical_carrier=ec_b, composed_empirical_subject=es_b,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30}],
-        horizon=_HORIZON,
-    )
-    strict_a = proj_a.evidence_y_strict_by_anchor_tau[0]
-    strict_b = proj_b.evidence_y_strict_by_anchor_tau[0]
-    np.testing.assert_allclose(strict_a, 0.0, atol=1e-12)
-    np.testing.assert_allclose(strict_b, 0.0, atol=1e-12)
-    # Discriminator: coverage at saturation.
-    cov_a = float(proj_a.coverage_y_by_anchor_tau[0][-1])
-    cov_b = float(proj_b.coverage_y_by_anchor_tau[0][-1])
-    assert cov_a > 0.95           # "observed zero everywhere"
-    assert cov_b == pytest.approx(0.0, abs=1e-12)   # "we don't know"
-    # Same disambiguation via cumulative exposure.
-    exp_a = float(proj_a.exposure_y_by_anchor_tau[0][-1])
-    exp_b = float(proj_b.exposure_y_by_anchor_tau[0][-1])
-    assert exp_a > 0.0
-    assert exp_b == pytest.approx(0.0, abs=1e-12)
 
 
 # ─── Phase 6 §6.2 W1–W4 window-mode invariants ────────────────────────
@@ -1383,16 +1478,17 @@ def test_phase6_w1_single_edge_window_strict_matches_local_kn():
     N = 100.0
     proj = project_selected_cohort_rows(
         composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': N, 'tau_max': 30}],
+        selected_cohorts=[{'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
     strict_y = proj.evidence_y_strict_by_anchor_tau[0]
     # Empirical Y at saturation = N × k/n.
     expected = N * (k / n)
     assert strict_y[-1] == pytest.approx(expected, abs=1e-10)
-    # Pre-observation: 0. Post-observation: saturates.
-    assert strict_y[6] == pytest.approx(0.0, abs=1e-12)
+    # Bucket-K midpoint placement moves half the endpoint bucket into τ=6.
+    assert strict_y[6] == pytest.approx(expected / 2.0, abs=1e-10)
     assert strict_y[7] == pytest.approx(expected, abs=1e-10)
 
 
@@ -1424,9 +1520,10 @@ def test_phase6_w2_multihop_strict_at_saturation_equals_rate_product():
     )
     proj = project_selected_cohort_rows(
         composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1478,19 +1575,23 @@ def test_phase6_w4_window_local_rate_reproduction_no_cross_evidence_folding():
     )
     proj_low = project_selected_cohort_rows(
         composed_carrier=spans_low[0], composed_subject=spans_low[1],
+        composed_carrier_predictive=spans_low[0],
+        composed_subject_predictive=spans_low[1],
         composed_empirical_carrier=spans_low[2],
         composed_empirical_subject=spans_low[3],
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
     proj_high = project_selected_cohort_rows(
         composed_carrier=spans_high[0], composed_subject=spans_high[1],
+        composed_carrier_predictive=spans_high[0],
+        composed_subject_predictive=spans_high[1],
         composed_empirical_carrier=spans_high[2],
         composed_empirical_subject=spans_high[3],
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30},
+            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1513,7 +1614,7 @@ def test_same_data_parity_rich_evidence_model_approaches_empirical_at_saturation
 
     With rich evidence and a good parametric fit (α, β proportional to
     k_obs, n_obs−k_obs), the conditioned posterior closely matches the
-    empirical rate. At saturation, ``y_draws_model.mean()`` and
+    empirical rate. At saturation, ``y_draws_spliced.mean()`` and
     ``evidence_y_strict_by_anchor_tau[anchor][-1]`` agree within
     sampling noise — proving the two surfaces converge at the limit
     even though they're separate operator families.
@@ -1540,11 +1641,12 @@ def test_same_data_parity_rich_evidence_model_approaches_empirical_at_saturation
     N = 100.0
     proj = project_selected_cohort_rows(
         composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': N, 'tau_max': 30}],
+        selected_cohorts=[{'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
-    model_y = float(proj.y_draws_model.mean(axis=0)[-1])
+    model_y = float(proj.y_draws_spliced.mean(axis=0)[-1])
     empirical_y = float(proj.evidence_y_strict_by_anchor_tau[0][-1])
     # Empirical saturation: N × k/n = 100 × 0.3 = 30.
     assert empirical_y == pytest.approx(30.0, abs=1e-9)
@@ -1552,180 +1654,6 @@ def test_same_data_parity_rich_evidence_model_approaches_empirical_at_saturation
     # Hence model_y ≈ 30.2. Allow ≤ 5% relative agreement.
     rel_gap = abs(model_y - empirical_y) / empirical_y
     assert rel_gap < 0.05
-
-
-# ─── Strict vs adjusted decomposition (Phase 6 §5.6) ─────────────────
-
-
-def test_strict_vs_adjusted_full_coverage_ipw_is_noop():
-    """Phase 6 §5.6 — full-coverage variant.
-
-    When ``coverage_y_A = 1.0`` at every τ where there's evidence,
-    ``adjusted = strict / 1.0 = strict``. The IPW divide is a no-op.
-
-    Dense rows across every age + small σ make coverage ≈ 1 at
-    saturation; the per-τ adjusted value at saturation equals the strict.
-    """
-    dense_rows = _dense_admitted_rows(
-        from_id='X', to_id='Y', n=10,
-        k_curve=lambda age: min(4, age // 3),
-        ages=range(0, _HORIZON + 1),
-    )
-    carrier, subject, ec, es = _build_window_mode_spans(
-        candidates_xy=dense_rows,
-        sigma_xy=0.5,
-    )
-    proj = project_selected_cohort_rows(
-        composed_carrier=carrier, composed_subject=subject,
-        composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30}],
-        horizon=_HORIZON,
-    )
-    coverage = proj.coverage_y_by_anchor_tau[0]
-    # At saturation, coverage approaches 1.
-    assert coverage[-1] > 0.95
-    # Full observed support makes adjusted a no-op relative to strict.
-    assert proj.evidence_y_adjusted[-1] == pytest.approx(
-        proj.evidence_y_strict[-1],
-        rel=0.05,
-    )
-
-
-def test_strict_vs_adjusted_partial_coverage_does_not_forward_fill_adjusted():
-    """Phase 6 §5.6 — partial-coverage deterministic gap variant.
-
-    Strict evidence uses latest-at-or-before, so an every-other-age row
-    set can preserve the saturation value. Adjusted evidence is not
-    strict/coverage and does not forward-fill before IPW: without
-    adjacent observed increments, this deterministic fixture has no
-    adjusted numerator at saturation. The MCAR recovery property is
-    tested in ``test_mcar_sparsity_recovery.py`` over random row
-    dropout, not this adversarial missingness pattern.
-    """
-    n = 10
-    k_curve = lambda age: min(4, age // 3)
-    dense_rows = _dense_admitted_rows(
-        from_id='X', to_id='Y', n=n, k_curve=k_curve,
-        ages=range(0, _HORIZON + 1),
-    )
-    # Sparse: keep every other age (deterministic MCAR-like drop).
-    sparse_rows = _dense_admitted_rows(
-        from_id='X', to_id='Y', n=n, k_curve=k_curve,
-        ages=range(0, _HORIZON + 1, 2),
-    )
-    dense_spans = _build_window_mode_spans(
-        candidates_xy=dense_rows, sigma_xy=0.5,
-    )
-    sparse_spans = _build_window_mode_spans(
-        candidates_xy=sparse_rows, sigma_xy=0.5,
-    )
-    dense_proj = project_selected_cohort_rows(
-        composed_carrier=dense_spans[0], composed_subject=dense_spans[1],
-        composed_empirical_carrier=dense_spans[2],
-        composed_empirical_subject=dense_spans[3],
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30}],
-        horizon=_HORIZON,
-    )
-    sparse_proj = project_selected_cohort_rows(
-        composed_carrier=sparse_spans[0], composed_subject=sparse_spans[1],
-        composed_empirical_carrier=sparse_spans[2],
-        composed_empirical_subject=sparse_spans[3],
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30}],
-        horizon=_HORIZON,
-    )
-    dense_y = float(dense_proj.evidence_y_strict_by_anchor_tau[0][-1])
-    sparse_y = float(sparse_proj.evidence_y_strict_by_anchor_tau[0][-1])
-    sparse_coverage = float(sparse_proj.coverage_y_by_anchor_tau[0][-1])
-    # The empirical saturation is unchanged (latest-at-or-before still
-    # reads the same cumulative k at the final age either way).
-    assert sparse_y == pytest.approx(dense_y, abs=1e-10)
-    # Sparse coverage is below dense coverage (mask has half the cells).
-    dense_coverage = float(dense_proj.coverage_y_by_anchor_tau[0][-1])
-    assert sparse_coverage < dense_coverage
-    # Adjusted is the reducer-owned IPW readout, not strict / coverage.
-    # This deterministic gap pattern has no adjacent observed increments,
-    # so adjusted must not fabricate the strict forward-filled mass.
-    sparse_adjusted = float(sparse_proj.evidence_y_adjusted[-1])
-    assert sparse_adjusted == pytest.approx(0.0, abs=1e-12)
-
-
-def test_strict_vs_adjusted_admissibility_filter_excludes_zero_exposure():
-    """Phase 6 §5.6 — admissibility filter.
-
-    Cohorts with ``exposure_y_A[τ] = 0`` contribute neither to strict
-    nor adjusted sums at that τ. Tested via a no-observation cohort:
-    no admitted rows → exposure_y = 0 across τ → adjusted formula
-    emits NaN per the admissibility contract, while strict stays at 0.
-    """
-    carrier, subject, ec, es = _build_window_mode_spans(
-        candidates_xy=(),  # absent: exposure_y == 0
-        sigma_xy=0.8,
-    )
-    proj = project_selected_cohort_rows(
-        composed_carrier=carrier, composed_subject=subject,
-        composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30}],
-        horizon=_HORIZON,
-    )
-    # exposure_y is identically zero; admissibility filter excludes
-    # this cohort at every τ.
-    np.testing.assert_allclose(
-        proj.exposure_y_by_anchor_tau[0], 0.0, atol=1e-12,
-    )
-    # Strict is identically zero (no rows to read).
-    np.testing.assert_allclose(
-        proj.evidence_y_strict_by_anchor_tau[0], 0.0, atol=1e-12,
-    )
-    # Adjusted row-level output is zero when no anchor is admissible.
-    np.testing.assert_allclose(proj.evidence_y_adjusted, 0.0, atol=1e-12)
-    np.testing.assert_allclose(proj.evidence_x_adjusted, 0.0, atol=1e-12)
-
-
-def test_strict_vs_adjusted_per_terminal_coverage_x_and_y_are_independent():
-    """Phase 6 §5.6 — per-terminal coverage reads at X and Z are
-    independent.
-
-    The IPW factors ``coverage_x_A`` (read at the carrier terminal X)
-    and ``coverage_y_A`` (read at the chain terminal Z) come from
-    distinct nodes. In window mode the carrier is identity, so
-    ``coverage_x_A`` is trivially 1.0 at every τ; the subject-side
-    ``coverage_y_A`` is computed independently from the chain mask
-    and can be anywhere in [0, 1].
-
-    Tests that adjusted_x and adjusted_y use the appropriate factors —
-    the same strict count cannot be IPW-scaled by an unrelated
-    coverage value.
-    """
-    candidate = _candidate(
-        from_id='X', to_id='Y', observed_date='2026-03-15',
-        retrieved_at='2026-03-22', n=10, k=4,  # age 7
-    )
-    carrier, subject, ec, es = _build_window_mode_spans(
-        candidates_xy=(candidate,),
-        sigma_xy=0.8,
-    )
-    proj = project_selected_cohort_rows(
-        composed_carrier=carrier, composed_subject=subject,
-        composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'tau_max': 30}],
-        horizon=_HORIZON,
-    )
-    # Window mode → carrier is identity → coverage_x = 1 trivially.
-    np.testing.assert_allclose(
-        proj.coverage_x_by_anchor_tau[0], 1.0, atol=1e-12,
-    )
-    # coverage_y is non-trivial — the subject-side mask is positive only
-    # at age 7, while the conditioned value kernel spreads across τ;
-    # the ratio is strictly below 1 at saturation.
-    coverage_y_at_sat = float(proj.coverage_y_by_anchor_tau[0][-1])
-    assert 0.0 < coverage_y_at_sat < 1.0
-    # The two coverages are distinct: coverage_x != coverage_y.
-    assert proj.coverage_x_by_anchor_tau[0][-1] != coverage_y_at_sat
-    # The adjusted x/y fields are reducer-owned outputs. This test only
-    # asserts that both terminals are available and finite; it does not
-    # recompute adjusted from strict with either terminal's coverage.
-    assert np.isfinite(proj.evidence_x_adjusted[-1])
-    assert np.isfinite(proj.evidence_y_adjusted[-1])
 
 
 # ─── Phase 6 §6.1 invariants 2/5/7/8 + §6.2 W3 — outstanding from Stage 2(b) ───
@@ -1751,7 +1679,7 @@ def _build_one_edge_carrier(
     independently.
 
     With ``sigma_ax = 0`` the latency is Dirac at τ=0 — propagation mass
-    arrives at X at the root day; ``node_density_draws['X'][:, 0]`` per
+    arrives at X at the root day; ``node_density('X')[:, 0]`` per
     draw equals ``probability_draws`` and the rest of the τ axis is 0.
     """
     graph = _make_graph([('e-ax', 'A', 'X')])
@@ -1903,7 +1831,7 @@ def _build_cohort_mode_multihop_subject(
 
     # Cohort-mode arrival map at Y = X→Y propagation density at Y.
     cohort_arrival_at_y = _arrival_weights_from_density(
-        composed_xy.node_density_draws['Y'],
+        composed_xy.node_density('Y'),
         root_day=_scope().date_from,
     )
 
@@ -2035,10 +1963,10 @@ def test_phase6_inv5_identity_carrier_degeneracy_across_constructions():
           at ``x_node_id == end_node_id == 'X'``.
 
     Both must produce a ``ComposedPrimitiveSpan`` whose
-    ``node_density_draws['X']`` is δ(0) per draw and whose reducer
-    output is byte-identical. The invariant fails if mode encoding has
-    leaked into the composer and produces different identity-carrier
-    objects on different graph shapes.
+    ``node_density('X')`` is δ(0) per draw and whose reducer output is
+    byte-identical. The invariant fails if mode encoding has leaked
+    into the composer and produces different identity-carrier objects
+    on different graph shapes.
     """
     from runner.model_span_spine import read_node_mass_draws
 
@@ -2073,20 +2001,22 @@ def test_phase6_inv5_identity_carrier_degeneracy_across_constructions():
     # Reducer outputs must be byte-identical across both constructions.
     proj_A = project_selected_cohort_rows(
         composed_carrier=carrier_A, composed_subject=subject,
+        composed_carrier_predictive=carrier_A, composed_subject_predictive=subject,
         composed_empirical_carrier=ec_A, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'tau_max': 30}],
+        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
     proj_B = project_selected_cohort_rows(
         composed_carrier=carrier_B, composed_subject=subject,
+        composed_carrier_predictive=carrier_B, composed_subject_predictive=subject,
         composed_empirical_carrier=ec_B, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'tau_max': 30}],
+        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
-    np.testing.assert_array_equal(proj_A.x_draws_model, proj_B.x_draws_model)
-    np.testing.assert_array_equal(proj_A.y_draws_model, proj_B.y_draws_model)
+    np.testing.assert_array_equal(proj_A.x_draws_spliced, proj_B.x_draws_spliced)
+    np.testing.assert_array_equal(proj_A.y_draws_spliced, proj_B.y_draws_spliced)
     np.testing.assert_array_equal(
-        proj_A.rate_draws_model, proj_B.rate_draws_model,
+        proj_A.rate_draws_spliced, proj_B.rate_draws_spliced,
     )
     np.testing.assert_array_equal(
         proj_A.evidence_y_strict_by_anchor_tau[0],
@@ -2108,12 +2038,12 @@ def test_phase6_inv7_arrival_map_equals_propagation_density_per_draw():
         g_X[s, 0] = p_AB[s] × p_BX[s]                (mass arrives at X at τ=0)
         g_B[s, τ > 0] = g_X[s, τ > 0] = 0
 
-    Per §3.2, the engine exposes these as ``node_density_draws[U]`` and
-    the SAME object is what the arrival map at U would supply for
-    weighting evidence on any U→V edge. Asserting the closed-form
-    identity per draw catches a regression where the composer's
-    intermediate-node density drifts from the push-forward formula —
-    the previous-attempt failure mode the contract names.
+    Per §3.2, the engine exposes these as ``node_density(U)`` and the
+    SAME object is what the arrival map at U would supply for weighting
+    evidence on any U→V edge. Asserting the closed-form identity per
+    draw catches a regression where the composer's intermediate-node
+    density drifts from the push-forward formula — the previous-attempt
+    failure mode the contract names.
     """
     composed_carrier, conditioned_ab, conditioned_bx = _build_two_edge_carrier(
         sigma_ab=0.0, sigma_bx=0.0,
@@ -2130,7 +2060,7 @@ def test_phase6_inv7_arrival_map_equals_propagation_density_per_draw():
 
     # Intermediate node B: density at τ=0 equals p_AB per draw, zero
     # elsewhere. This IS the per-draw arrival map at B per §3.2.
-    density_at_B = composed_carrier.node_density_draws['B']
+    density_at_B = composed_carrier.node_density('B')
     np.testing.assert_allclose(
         density_at_B[:, 0], p_ab_draws, atol=1e-10,
     )
@@ -2139,7 +2069,7 @@ def test_phase6_inv7_arrival_map_equals_propagation_density_per_draw():
     )
 
     # Terminal node X: density at τ=0 equals the product per draw.
-    density_at_X = composed_carrier.node_density_draws['X']
+    density_at_X = composed_carrier.node_density('X')
     np.testing.assert_allclose(
         density_at_X[:, 0], p_ab_draws * p_bx_draws, atol=1e-10,
     )
@@ -2181,7 +2111,7 @@ def test_phase6_inv8_cohort_cancellation_n_equals_propagated_mass_per_draw():
     # composed density at X (§3.2 one source of truth realised by hand).
     root_day = _scope().date_from
     cohort_arrival_at_x = _arrival_weights_from_density(
-        composed_carrier.node_density_draws['X'],
+        composed_carrier.node_density('X'),
         root_day=root_day,
     )
 
@@ -2218,8 +2148,8 @@ def test_phase6_inv8_cohort_cancellation_n_equals_propagated_mass_per_draw():
     )
 
     # Cancellation condition: n_weighted_draws[s] = m_X(root_day, s) per draw.
-    # m_X at root_day is composed_carrier.node_density_draws['X'][:, 0].
-    m_at_X_root = composed_carrier.node_density_draws['X'][:, 0]
+    # m_X at root_day is composed_carrier.node_density('X')[:, 0].
+    m_at_X_root = composed_carrier.node_density('X')[:, 0]
     np.testing.assert_allclose(n_weighted, m_at_X_root, atol=1e-12)
 
     # And by the engine's identity, that equals p_AX per draw — the
@@ -2245,7 +2175,7 @@ def test_phase6_w3_window_vs_cohort_divergence_at_finite_tau_convergence_at_satu
     With no admitted evidence on Y→Z the conditioned posterior depends
     only on the prior (clock-agnostic); both regimes yield the same
     per-edge p draws and saturation cumulatives match to float precision.
-    But the intermediate ``y_draws_model`` cumulative at finite τ depends
+    But the intermediate ``f_y_draws`` cumulative at finite τ depends
     on the convolution of the seed at X with the X→Y kernel and then
     Y→Z kernel — the two regimes give the same convolution because the
     per-edge kernels are the same (priors unchanged).
@@ -2286,14 +2216,16 @@ def test_phase6_w3_window_vs_cohort_divergence_at_finite_tau_convergence_at_satu
     # placeholders. The only difference is the subject's clock encoding.
     proj_W = project_selected_cohort_rows(
         composed_carrier=carrier_W, composed_subject=subject_W,
+        composed_carrier_predictive=carrier_W, composed_subject_predictive=subject_W,
         composed_empirical_carrier=ec_W, composed_empirical_subject=es_W,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'tau_max': 30}],
+        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
     proj_C = project_selected_cohort_rows(
         composed_carrier=carrier_W, composed_subject=subject_C,
+        composed_carrier_predictive=carrier_W, composed_subject_predictive=subject_C,
         composed_empirical_carrier=ec_W, composed_empirical_subject=es_W,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'tau_max': 30}],
+        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
 
@@ -2304,8 +2236,8 @@ def test_phase6_w3_window_vs_cohort_divergence_at_finite_tau_convergence_at_satu
     # posterior. Strict equality between the two regimes at saturation
     # is the load-bearing contract: clock differences must not change
     # the asymptotic reach.
-    y_W_at_sat = float(proj_W.y_draws_model.mean(axis=0)[-1])
-    y_C_at_sat = float(proj_C.y_draws_model.mean(axis=0)[-1])
+    y_W_at_sat = float(proj_W.f_y_draws.mean(axis=0)[-1])
+    y_C_at_sat = float(proj_C.f_y_draws.mean(axis=0)[-1])
     expected_saturation = 100.0 * 0.16
     assert abs(y_W_at_sat - expected_saturation) / expected_saturation < 0.15
     assert abs(y_C_at_sat - expected_saturation) / expected_saturation < 0.15
@@ -2320,9 +2252,1589 @@ def test_phase6_w3_window_vs_cohort_divergence_at_finite_tau_convergence_at_satu
     # weaker condition: every per-τ value is finite and monotone
     # non-decreasing in τ in both regimes (the algebra produces a valid
     # cumulative on either clock).
-    y_W_mean = proj_W.y_draws_model.mean(axis=0)
-    y_C_mean = proj_C.y_draws_model.mean(axis=0)
+    y_W_mean = proj_W.f_y_draws.mean(axis=0)
+    y_C_mean = proj_C.f_y_draws.mean(axis=0)
     assert np.all(np.diff(y_W_mean) >= -1e-12)
     assert np.all(np.diff(y_C_mean) >= -1e-12)
     assert np.all(np.isfinite(y_W_mean))
     assert np.all(np.isfinite(y_C_mean))
+
+
+# ─── Atom 3: carrier→subject mixed-basis handoff (spine level) ─────────
+
+
+def test_spine_handoff_passes_mixed_basis_provenance_into_subject_empirical_kernel():
+    """Spine-level handoff: when the carrier terminal carries two same-
+    column provenances with different ``BucketSourceBasis`` values, the
+    subject-side empirical DP must dispatch each provenance to its own
+    kernel call with that provenance's basis. A last-write-wins collapse
+    at the handoff would pin both provenances under a single basis and
+    only one kernel call would fire per source column.
+
+    This test uses the public spine entry point
+    ``evaluate_empirical_span_from_seed_flat_origins`` — the same
+    function ``project_selected_cohort_rows`` calls — and wraps the
+    empirical batched kernel function so every ``source_basis`` value
+    the DP dispatches is recorded. Mixed basis at a single carrier
+    terminal column must produce calls under BOTH bases at the
+    matching subject source column.
+    """
+    from datetime import date as _date
+    from unittest import mock
+
+    from runner.bucket_transition import BucketSourceBasis
+    from runner.empirical_evidence_operator import (
+        evaluate_empirical_span_from_seed_flat_origins,
+        evaluate_empirical_span_from_seed_flat_origins_with_provenance,
+    )
+    from runner import empirical_evidence_operator as eeo
+
+    graph = _make_graph([('e-xy', 'X', 'Y')])
+    candidates = (
+        _candidate(
+            from_id='X', to_id='Y', observed_date='2026-03-15',
+            retrieved_at='2026-03-20', n=20, k=5,
+        ),
+    )
+    empirical_xy = _build_empirical_primitive(
+        from_id='X', to_id='Y', candidates=candidates,
+    )
+
+    def _empirical_lookup(from_id, to_id, edge_data):
+        if (from_id, to_id) == ('X', 'Y'):
+            return empirical_xy
+        return None
+
+    readout_binding = EvidenceReadoutBinding.cohort()
+    composed_empirical_subject = compose_empirical_span(
+        graph=graph, x_node_id='X', end_node_id='Y',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+        evidence_readout_binding=readout_binding,
+    )
+
+    # Synthetic carrier-terminal state: two provenances at column 0 of
+    # the subject's root with distinct bases. The legacy flat-basis
+    # seed could only carry ONE basis at column 0; the per-bucket seed
+    # carries both as separate entries.
+    S_flat = _DRAW_COUNT
+    T = _HORIZON + 1
+    mass_alpha = np.full(S_flat, 0.4, dtype=np.float64)
+    mass_beta = np.full(S_flat, 0.6, dtype=np.float64)
+    root_provenance_mass = {
+        0: {
+            'carrier_alpha': mass_alpha,
+            'carrier_beta': mass_beta,
+        },
+    }
+    root_provenance_basis = {
+        0: {
+            'carrier_alpha': int(BucketSourceBasis.POINT_AT_ENDPOINT),
+            'carrier_beta': int(BucketSourceBasis.BUCKET_DISTRIBUTED),
+        },
+    }
+    # ``root_seed`` is the collapsed view; provided for shape/draw-count
+    # parity but the DP uses the per-bucket maps when both are supplied.
+    root_seed = np.zeros((S_flat, T), dtype=np.float64)
+    root_seed[:, 0] = mass_alpha + mass_beta
+
+    # SOURCE_BANDED policy (atom 4d) drives one provider call per
+    # (edge, basis) via ``source_banded_op``; that is the per-basis
+    # dispatch the spine handoff must drive when mixed basis arrives at
+    # a source node. Wrap the provider-builder so we see every
+    # ``source_basis`` the DP body passes to the applier.
+    call_log: list[BucketSourceBasis] = []
+    real_build = eeo._build_empirical_flat_kernel_provider
+
+    def _recording_build(**kwargs):
+        provider = real_build(**kwargs)
+        real_source_banded_op = provider.source_banded_op
+
+        def _recording_source_banded_op(ce, source_basis, source_mass_3d):
+            call_log.append(BucketSourceBasis(int(source_basis)))
+            return real_source_banded_op(ce, source_basis, source_mass_3d)
+
+        provider.source_banded_op = _recording_source_banded_op
+        return provider
+
+    with mock.patch.object(
+        eeo, '_build_empirical_flat_kernel_provider',
+        side_effect=_recording_build,
+    ):
+        _trace = evaluate_empirical_span_from_seed_flat_origins_with_provenance(
+            composed_empirical_subject,
+            S_flat=S_flat,
+            T=T,
+            origin_days=[_date.fromisoformat(_scope().date_from)],
+            evidence_readout_binding=readout_binding,
+            root_provenance_mass=root_provenance_mass,
+            root_provenance_basis=root_provenance_basis,
+        )
+
+    # Both bases the carrier delivered must appear in the call log at
+    # source column 0 — proof that the per-bucket per-provenance seed
+    # survived the carrier→subject handoff and drove distinct kernel
+    # calls.
+    assert BucketSourceBasis.POINT_AT_ENDPOINT in call_log, (
+        f"POINT_AT_ENDPOINT not dispatched; call_log={call_log}"
+    )
+    assert BucketSourceBasis.BUCKET_DISTRIBUTED in call_log, (
+        f"BUCKET_DISTRIBUTED not dispatched; call_log={call_log}"
+    )
+
+
+def test_fc_predictive_spans_use_conditioned_primitives_not_unconditioned_overlay():
+    """FC plan §9.4 invariant — the FC shadow surface reads CONDITIONED
+    primitives built with ``dispersion_basis='predictive'`` from the
+    bound request evidence, NOT the unconditioned-predictive overlay
+    (which carries no evidence and just samples the prior).
+
+    Constructs three primitives over the same edge with a prior far
+    from the evidence so the conditioned-predictive posterior shifts
+    visibly toward the evidence while the unconditioned-predictive
+    overlay sits at the prior:
+
+      - epistemic conditioned (``f_*`` model surface);
+      - predictive conditioned (the surface FC must consume);
+      - predictive unconditioned overlay
+        (``make_unconditioned_primitive`` — the bug-shape input).
+
+    The earlier mis-wiring that handed
+    ``runtime.unconditioned_overlays['predictive']`` to the FC shadow
+    would fail this test because the overlay primitives carry
+    ``status=PRIOR_ONLY`` and no admitted evidence, while the
+    correctly-wired FC consumer reads CONDITIONED primitives whose
+    posterior is pulled toward the data.
+    """
+    # Prior centred at 0.8; evidence pinning rate ~0.1 with high n
+    # so the conditioned posterior cannot ignore the data.
+    candidate = _candidate(
+        from_id='X', to_id='Y',
+        observed_date='2026-03-15', retrieved_at='2026-03-22',
+        n=400, k=40,  # rate = 0.1
+    )
+
+    epistemic_conditioned = _build_conditioned_primitive(
+        from_id='X', to_id='Y', edge_id='e-xy',
+        alpha=80.0, beta=20.0,  # Beta(80, 20) — prior mean 0.8
+        sigma=0.3,
+        candidates=(candidate,),
+    )
+
+    # Build a predictive-conditioned primitive against the SAME bound
+    # evidence the epistemic family used. Mirrors what
+    # ``_prepare_conditioned_only_family`` does inside
+    # ``resolve_request_spans``, just inline here so the test is a
+    # primitive-level pin without graph plumbing.
+    scope = _scope()
+    transition = TransitionIdentity(
+        source_node='X', destination_node='Y', edge_id='e-xy',
+    )
+    arrival = _identity_arrival_weights(scope.date_from, scope.date_to)
+    resolution = bind_primitive_evidence(
+        transition=transition,
+        primitive_scope=scope,
+        evidence_scope=_evidence_scope('X', 'Y', scope),
+        candidates=(candidate,),
+        arrival_weights=arrival,
+    )
+    predictive_conditioned = condition_primitive(
+        resolution=resolution,
+        resolved_model=_resolved_model(alpha=80.0, beta=20.0, sigma=0.3),
+        scenario_seed=12345,
+        options=ConditioningPolicyOptions(
+            draw_count=_DRAW_COUNT, timing_cdf_max_tau=_HORIZON,
+        ),
+        prior_source='test_synthetic',
+        dispersion_basis='predictive',
+    )
+
+    # The unconditioned-predictive overlay primitive — what the bug
+    # shape passes in. ``make_unconditioned_primitive`` does not bind
+    # request evidence; it materialises the prior under the requested
+    # dispersion basis.
+    unconditioned_predictive = make_unconditioned_primitive(
+        transition=transition,
+        primitive_scope=scope,
+        resolved_model=_resolved_model(alpha=80.0, beta=20.0, sigma=0.3),
+        scenario_seed=12345,
+        options=ConditioningPolicyOptions(
+            draw_count=_DRAW_COUNT, timing_cdf_max_tau=_HORIZON,
+        ),
+        dispersion_basis='predictive',
+        prior_source='test_synthetic',
+    )
+
+    # (1) Status: conditioned-predictive must be CONDITIONED; the
+    # overlay must be PRIOR_ONLY. The mis-wiring substituted the
+    # latter for the former.
+    assert predictive_conditioned.status == ConditioningStatus.CONDITIONED, (
+        f"predictive-conditioned primitive lost CONDITIONED status: "
+        f"{predictive_conditioned.status}"
+    )
+    assert unconditioned_predictive.status == ConditioningStatus.PRIOR_ONLY, (
+        f"unconditioned-predictive overlay should carry PRIOR_ONLY: "
+        f"{unconditioned_predictive.status}"
+    )
+
+    # (2) Provenance: the conditioned-predictive primitive must carry
+    # the admitted evidence; the overlay must carry none.
+    assert predictive_conditioned.weighted_evidence is not None, (
+        "predictive-conditioned primitive missing weighted_evidence"
+    )
+    assert predictive_conditioned.weighted_evidence.n_weighted_total > 0.0, (
+        f"predictive-conditioned primitive admitted no evidence: "
+        f"n_weighted_total={predictive_conditioned.weighted_evidence.n_weighted_total}"
+    )
+    assert (
+        unconditioned_predictive.weighted_evidence is None
+        or unconditioned_predictive.weighted_evidence.n_weighted_total == 0.0
+    ), (
+        "unconditioned-predictive overlay should not carry admitted evidence"
+    )
+
+    # (3) Posterior means diverge: the unconditioned overlay sits at
+    # the prior; the conditioned-predictive primitive moves under the
+    # evidence. Under the prior-far-from-evidence setup, the move is
+    # visible regardless of arrival-weight scaling. Picking the
+    # overlay in place of the conditioned primitive would silently
+    # undo the evidence update.
+    cond_mean = predictive_conditioned.probability_posterior.mean
+    uncond_mean = unconditioned_predictive.probability_posterior.mean
+    prior_mean = 80.0 / (80.0 + 20.0)  # =0.8
+    # The unconditioned overlay's posterior mean tracks the prior up
+    # to MC-sample noise from the draw-family construction; the
+    # conditioned-predictive primitive's posterior is pulled below
+    # the prior toward the evidence rate (=0.1). The exact magnitude
+    # depends on arrival-weight scaling and IS proposal density, so
+    # this test asserts the algebraic *direction* and the divergence
+    # rather than exact conjugate posterior numerics.
+    assert abs(uncond_mean - prior_mean) < 0.05, (
+        f"unconditioned-predictive mean should sit at the prior "
+        f"({prior_mean}) up to MC noise; got {uncond_mean}"
+    )
+    assert cond_mean < uncond_mean, (
+        f"predictive-conditioned mean should be pulled below the prior by "
+        f"evidence (rate=0.1, n=400); got conditioned={cond_mean} "
+        f"unconditioned={uncond_mean}"
+    )
+
+    # (4) Both conditioned primitives admit the same evidence even
+    # though their draws differ — confirms the predictive pass really
+    # bound the candidate, not silently skipped it. (Posterior means
+    # can still differ between bases due to IS proposal variance
+    # under the tempering schedule, but the admitted-evidence totals
+    # are basis-invariant.)
+    epi_ev = epistemic_conditioned.weighted_evidence
+    pred_ev = predictive_conditioned.weighted_evidence
+    assert pred_ev.n_weighted_total == epi_ev.n_weighted_total, (
+        f"predictive vs epistemic conditioned n_weighted_total differ: "
+        f"epi={epi_ev.n_weighted_total} pred={pred_ev.n_weighted_total}"
+    )
+    assert pred_ev.k_weighted_total == epi_ev.k_weighted_total, (
+        f"predictive vs epistemic conditioned k_weighted_total differ: "
+        f"epi={epi_ev.k_weighted_total} pred={pred_ev.k_weighted_total}"
+    )
+
+
+# ─── Blind FC §5.4 / §9.6 shadow-surface spec tests ────────────────────────
+#
+# Tests below this line are written blind from the FC plan §5.2, §5.3,
+# §5.4, §9.3, §9.5, §9.6 spec. They were added during the Atom 4
+# re-open after the engine-discipline review found that the prior test
+# coverage shared assumptions with the implementation (e.g. the
+# occupancy survivor was computed from a model kernel, and the tests
+# mirrored that kernel in their assertions). Each test below pins one
+# sentence of the spec; the assertion is justified by that sentence
+# alone, not by the implementation's internal field shapes.
+
+
+def _build_off_model_window_spans(
+    *, n_obs: int = 200, k_obs: int = 10, alpha: float = 80.0, beta: float = 20.0,
+):
+    """Spans for an off-model window fixture.
+
+    Strong prior centred at α/(α+β) = 0.8; sparse off-prior evidence
+    pinning empirical rate at k/n = 0.05. Conditioned model posterior
+    therefore stays well above the strict empirical surface, giving
+    the §5.4 prefix-pin and post-frontier non-parity tests a visible
+    gap to assert against.
+    """
+    candidates = (
+        _candidate(
+            from_id='X', to_id='Y',
+            observed_date='2026-03-15', retrieved_at='2026-03-20',
+            n=n_obs, k=k_obs,
+        ),
+    )
+    graph = _make_graph([('e-xy', 'X', 'Y')])
+
+    conditioned_xy = _build_conditioned_primitive(
+        from_id='X', to_id='Y', edge_id='e-xy',
+        alpha=alpha, beta=beta, candidates=candidates,
+    )
+    empirical_xy = _build_empirical_primitive(
+        from_id='X', to_id='Y', candidates=candidates,
+    )
+
+    registry = RequestPrimitiveRegistry(arrival_map=_empty_arrival_map())
+
+    def _model_lookup(f, t, e):
+        if (f, t) == ('X', 'Y'):
+            return conditioned_xy
+        return None
+
+    def _empirical_lookup(f, t, e):
+        if (f, t) == ('X', 'Y'):
+            return empirical_xy
+        return None
+
+    composed_carrier = compose_primitive_span(
+        graph=graph, x_node_id='X', end_node_id='X',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_subject = compose_primitive_span(
+        graph=graph, x_node_id='X', end_node_id='Y',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_empirical_carrier = compose_empirical_span(
+        graph=graph, x_node_id='X', end_node_id='X',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+    composed_empirical_subject = compose_empirical_span(
+        graph=graph, x_node_id='X', end_node_id='Y',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+    return (
+        composed_carrier, composed_subject,
+        composed_empirical_carrier, composed_empirical_subject,
+    )
+
+
+def test_shadow_surface_pins_to_strict_evidence_through_frontier():
+    """FC plan §5.4 first bullet:
+
+      "initialise the frontier-conditioned row with the fixed
+       empirical prefix. For every τ ≤ f, set denominator and
+       numerator draws to the strict empirical prefix. The fan is
+       therefore zero-width or absent through the observed prefix by
+       construction."
+
+    And §5.3 boundary rule: "at τ = f, B_s,e is zero, so the
+    continuation contributes no extra mass at the frontier" — i.e.
+    the future-residual surfaces must be zero through the frontier.
+
+    Fixture: one cohort with strong prior far from observed evidence
+    so the conditioned model surface stays visibly above the strict
+    empirical surface. Spline-cohort `tau_observed` is strictly less
+    than `tau_max` so the prefix region is non-trivial.
+
+    Per the spec:
+
+      - for every τ ≤ tau_observed, every draw of `ef_x_draws` /
+        `ef_y_draws` equals the per-cohort sum of the strict empirical
+        cumulative (which collapses to the single-cohort cumulative);
+      - for every τ ≤ tau_observed, `ef_rate_draws` equals
+        `rate_strict` (since both numerator and denominator are the
+        same strict cumulative);
+      - for every τ ≤ tau_observed, `ef_forecast_x` and
+        `ef_forecast_y` are zero (future residual is zero through the
+        observed prefix by construction).
+    """
+    tau_observed = 10
+    spans = _build_off_model_window_spans()
+    composed_carrier, composed_subject = spans[0], spans[1]
+    composed_empirical_carrier, composed_empirical_subject = spans[2], spans[3]
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=composed_carrier,
+        composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
+        composed_empirical_carrier=composed_empirical_carrier,
+        composed_empirical_subject=composed_empirical_subject,
+        selected_cohorts=[
+            {
+                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    strict_x_cum = projection.evidence_x_strict_by_anchor_tau[0]
+    strict_y_cum = projection.evidence_y_strict_by_anchor_tau[0]
+    rate_strict = projection.rate_strict
+
+    for tau in range(tau_observed + 1):
+        # Every draw of ef_x / ef_y must equal the per-cohort sum of
+        # the strict empirical cumulative through the prefix.
+        np.testing.assert_allclose(
+            projection.ef_x_draws[:, tau], strict_x_cum[tau],
+            atol=1e-9, rtol=1e-9,
+            err_msg=f"ef_x_draws not pinned to strict at τ={tau}",
+        )
+        np.testing.assert_allclose(
+            projection.ef_y_draws[:, tau], strict_y_cum[tau],
+            atol=1e-9, rtol=1e-9,
+            err_msg=f"ef_y_draws not pinned to strict at τ={tau}",
+        )
+        # ef_rate per draw equals rate_strict in the prefix region —
+        # both are y_strict / x_strict on the same cohort.
+        np.testing.assert_allclose(
+            projection.ef_rate_draws[:, tau], rate_strict[tau],
+            atol=1e-9, rtol=1e-9,
+            err_msg=f"ef_rate_draws not pinned to rate_strict at τ={tau}",
+        )
+        # Future residual must be zero through the prefix.
+        np.testing.assert_allclose(
+            projection.ef_forecast_x[:, tau], 0.0, atol=1e-12,
+            err_msg=f"ef_forecast_x not zero at τ={tau} ≤ frontier",
+        )
+        np.testing.assert_allclose(
+            projection.ef_forecast_y[:, tau], 0.0, atol=1e-12,
+            err_msg=f"ef_forecast_y not zero at τ={tau} ≤ frontier",
+        )
+
+
+def test_fully_observed_cohort_collapses_shadow_to_strict_evidence():
+    """FC plan §5.4 (boundary case): when `tau_observed = tau_max =
+    horizon`, every τ in the row range is at or before the frontier,
+    so the §5.4 fourth-bullet prefix rule covers the whole horizon:
+
+      - X_draw(τ) = X_obs(τ) for τ ≤ f → all τ;
+      - Y_draw(τ) = Y_obs(τ) for τ ≤ f → all τ;
+      - future_X(τ) = future_Y(τ) = 0 for τ ≤ f → all τ.
+
+    The conditioned-model spliced surface `rate_draws_spliced` also
+    inherits the strict prefix (Atom 1 contract) over the whole
+    horizon when `tau_observed = horizon`. Therefore all three
+    surfaces — `ef_rate_draws`, `rate_draws_spliced`, and `rate_strict`
+    — must agree everywhere, and `ef_forecast_*` must be zero
+    everywhere.
+    """
+    spans = _build_off_model_window_spans()
+    composed_carrier, composed_subject = spans[0], spans[1]
+    composed_empirical_carrier, composed_empirical_subject = spans[2], spans[3]
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=composed_carrier,
+        composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
+        composed_empirical_carrier=composed_empirical_carrier,
+        composed_empirical_subject=composed_empirical_subject,
+        selected_cohorts=[
+            {
+                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'tau_max': _HORIZON, 'tau_observed': _HORIZON,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    rate_strict = projection.rate_strict
+    # ef_rate per draw equals rate_strict at every τ.
+    for tau in range(_HORIZON + 1):
+        np.testing.assert_allclose(
+            projection.ef_rate_draws[:, tau], rate_strict[tau],
+            atol=1e-9, rtol=1e-9,
+            err_msg=f"fully-observed: ef_rate ≠ rate_strict at τ={tau}",
+        )
+        np.testing.assert_allclose(
+            projection.rate_draws_spliced[:, tau], rate_strict[tau],
+            atol=1e-9, rtol=1e-9,
+            err_msg=f"fully-observed: rate_draws_spliced ≠ rate_strict at τ={tau}",
+        )
+
+    # Future residuals are zero everywhere.
+    np.testing.assert_allclose(
+        projection.ef_forecast_x, 0.0, atol=1e-12,
+        err_msg="fully-observed: ef_forecast_x not zero",
+    )
+    np.testing.assert_allclose(
+        projection.ef_forecast_y, 0.0, atol=1e-12,
+        err_msg="fully-observed: ef_forecast_y not zero",
+    )
+
+
+def test_off_model_post_frontier_shadow_diverges_from_conditioned_model():
+    """FC plan §5.4 second/third/fourth bullets describe a
+    fundamentally different post-frontier algebra from the spliced
+    conditioned-model surface:
+
+      - shadow `ef_*` past the frontier: fixed `X_obs(f)` /
+        `Y_obs(f)` plus future continuation propagated from the
+        unresolved empirical occupancy ledger through the residual
+        predictive operators (§5.4 second & third bullets);
+      - `rate_draws_spliced` past the frontier: the spliced conditioned
+        model curve, which is the conditioned posterior projection
+        without reference to the empirical occupancy ledger.
+
+    When the empirical prefix is FAR from the conditioned model (off-
+    model), the post-frontier predictions necessarily disagree —
+    shadow is anchored to the empirical occupancy state, model is
+    anchored to its posterior projection. Per Atom 4's "Pin
+    non-parity is the semantic point" principle, the two surfaces
+    MUST differ after the frontier even though they MUST agree at
+    and before it.
+
+    The test asserts:
+
+      - at every τ ≤ tau_observed the two surfaces agree (both
+        prefix-pinned to strict empirical);
+      - at SOME τ > tau_observed the two surfaces materially differ
+        (some cell separated by more than a rate-tolerance of 1%).
+
+    A regression that re-wired ef_* to read the conditioned model
+    surface (or that subtracted full-model means rather than
+    propagating from the frontier ledger) would fail this test by
+    collapsing post-frontier to parity.
+    """
+    tau_observed = 10
+    spans = _build_off_model_window_spans()
+    composed_carrier, composed_subject = spans[0], spans[1]
+    composed_empirical_carrier, composed_empirical_subject = spans[2], spans[3]
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=composed_carrier,
+        composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
+        composed_empirical_carrier=composed_empirical_carrier,
+        composed_empirical_subject=composed_empirical_subject,
+        selected_cohorts=[
+            {
+                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    # Within the prefix, both surfaces are pinned to rate_strict, so
+    # ef_rate_draws ≈ rate_draws_spliced (cell-wise) by transitivity.
+    for tau in range(tau_observed + 1):
+        np.testing.assert_allclose(
+            projection.ef_rate_draws[:, tau],
+            projection.rate_draws_spliced[:, tau],
+            atol=1e-9, rtol=1e-9,
+            err_msg=(
+                f"off-model: ef_rate and rate_draws_spliced disagree at τ={tau} "
+                "(within prefix — both should equal rate_strict)"
+            ),
+        )
+
+    # Past the frontier, the two surfaces are different mathematical
+    # objects (frontier-continuation from empirical occupancy vs
+    # spliced conditioned posterior). Assert at least one
+    # post-frontier cell shows a material disagreement.
+    post_tau_slice = slice(tau_observed + 1, _HORIZON + 1)
+    rate_delta = (
+        projection.ef_rate_draws[:, post_tau_slice]
+        - projection.rate_draws_spliced[:, post_tau_slice]
+    )
+    max_abs_post = float(np.nanmax(np.abs(rate_delta)))
+    # 1% absolute rate gap is well above the prefix-pin tolerance and
+    # well below the prior-vs-evidence spread (≈75% for this fixture).
+    # If the implementation collapses the two surfaces after the
+    # frontier, this delta vanishes.
+    assert max_abs_post > 0.01, (
+        "off-model: shadow ef_rate did not diverge from rate_draws_spliced "
+        f"after frontier (max post-frontier rate delta = {max_abs_post:.6f}). "
+        "The two surfaces must differ when the empirical prefix is far "
+        "from the conditioned model — collapsing them is the regression "
+        "this test catches."
+    )
+
+
+def test_pop_c_future_x_arrivals_propagate_through_ordinary_subject_kernels():
+    """FC plan §5.4 third bullet:
+
+      "future arrivals at X produced by the carrier continuation,
+       propagated through ordinary predictive subject operators from
+       their future source buckets. ... These arrivals were not
+       present at the observation frontier, so they must not use the
+       residual operator conditioned on not having crossed the
+       subject span by f. Their subject clock starts when they arrive
+       at X, exactly as the existing carrier-to-subject handoff
+       pattern already does."
+
+    Fixture: an active cohort A→X→Y where the empirical carrier
+    evidence shows that not all selected mass has reached X by the
+    cohort's frontier (carrier completeness < 1 at f). The unresolved
+    carrier-side mass is then continued by the predictive carrier
+    residual into future X arrivals; those Pop-C arrivals are then
+    fed through the ordinary subject kernel to deliver future Y.
+
+    Spec-derived assertion: with sub-saturation empirical carrier
+    evidence at the frontier (some root mass still in transit), the
+    shadow `ef_y_draws` at row ages well past the frontier MUST be
+    strictly greater than `Y_obs(f)` (the per-cohort sum of the
+    strict-evidence numerator at the frontier).
+
+    If Pop-C handoff were disabled — i.e. future X arrivals failed to
+    propagate through ordinary subject operators — the post-frontier
+    Y growth would come ONLY from the frontier-conditioned subject
+    occupancy ledger (the §5.4 second bullet path), and any mass
+    that arrives at X after the frontier would never make it to Y.
+    The asymptotic ef_y would then under-shoot the value Pop-C should
+    deliver.
+
+    The blind assertion this test pins: ef_y at the horizon strictly
+    exceeds Y_obs(f); the post-frontier increment is real Pop-C +
+    Pop-D contribution, not silent zero.
+    """
+    # Active cohort: A→B (carrier) → C (subject end). Partial carrier
+    # completeness at the frontier: only k_ab = 4 of n_ab = 10
+    # observed to have arrived at B by retrieval. The remaining
+    # ~60% of selected mass is unresolved carrier occupancy at the
+    # frontier, eligible for Pop-C continuation.
+    n_ab, k_ab = 10, 4
+    n_bc, k_bc = 10, 5  # subject p ≈ 0.5
+    carrier_candidates = (
+        _candidate(
+            from_id='A', to_id='B',
+            observed_date='2026-03-01', retrieved_at='2026-03-05',
+            n=n_ab, k=k_ab,
+        ),
+    )
+    subject_candidates = (
+        _candidate(
+            from_id='B', to_id='C',
+            observed_date='2026-03-01', retrieved_at='2026-03-05',
+            n=n_bc, k=k_bc,
+        ),
+    )
+
+    graph = _make_graph([('e-ab', 'A', 'B'), ('e-bc', 'B', 'C')])
+    registry = RequestPrimitiveRegistry(arrival_map=_empty_arrival_map())
+
+    # σ > 0 on the carrier so the conditioned-predictive kernel
+    # spreads probability mass across columns. With σ = 0 (Dirac at
+    # lag 0) the residual operator has no post-frontier support and
+    # the test is vacuous regardless of whether Pop-C is wired — the
+    # spec demands a latency-bearing carrier for the handoff to
+    # exercise. σ = 2.0 places non-trivial predictive mass beyond
+    # frontier f = 5.
+    conditioned_ab = _build_conditioned_primitive(
+        from_id='A', to_id='B', edge_id='e-ab',
+        alpha=4.0, beta=6.0, sigma=2.0, candidates=carrier_candidates,
+    )
+    conditioned_bc = _build_conditioned_primitive(
+        from_id='B', to_id='C', edge_id='e-bc',
+        alpha=5.0, beta=5.0, candidates=subject_candidates,
+    )
+    empirical_ab = _build_empirical_primitive(
+        from_id='A', to_id='B', candidates=carrier_candidates,
+    )
+    empirical_bc = _build_empirical_primitive(
+        from_id='B', to_id='C', candidates=subject_candidates,
+    )
+
+    def _model_lookup(f, t, _ed):
+        return {('A', 'B'): conditioned_ab, ('B', 'C'): conditioned_bc}.get(
+            (f, t),
+        )
+
+    def _empirical_lookup(f, t, _ed):
+        return {('A', 'B'): empirical_ab, ('B', 'C'): empirical_bc}.get(
+            (f, t),
+        )
+
+    composed_carrier = compose_primitive_span(
+        graph=graph, x_node_id='A', end_node_id='B',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_subject = compose_primitive_span(
+        graph=graph, x_node_id='B', end_node_id='C',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_empirical_carrier = compose_empirical_span(
+        graph=graph, x_node_id='A', end_node_id='B',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+    composed_empirical_subject = compose_empirical_span(
+        graph=graph, x_node_id='B', end_node_id='C',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+
+    tau_observed = 5
+    projection = project_selected_cohort_rows(
+        composed_carrier=composed_carrier,
+        composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
+        composed_empirical_carrier=composed_empirical_carrier,
+        composed_empirical_subject=composed_empirical_subject,
+        selected_cohorts=[
+            {
+                'anchor_day': '2026-03-01', 'N_anchor': float(n_ab), 'N_pop': float(n_ab),
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    # Strict Y at the frontier — what's been observed before any
+    # continuation runs.
+    strict_y_at_f = float(
+        projection.evidence_y_strict_by_anchor_tau['2026-03-01'][tau_observed]
+    )
+    # Mean ef_y at horizon across draws.
+    ef_y_at_horizon = float(projection.ef_y_draws[:, -1].mean())
+    # And ef_y at frontier — must equal strict by the prefix-pin rule.
+    ef_y_at_f = float(projection.ef_y_draws[:, tau_observed].mean())
+    np.testing.assert_allclose(
+        ef_y_at_f, strict_y_at_f, atol=1e-9,
+        err_msg="prefix-pin: ef_y at frontier ≠ strict_y at frontier",
+    )
+
+    # Pop-C + Pop-D delivered post-frontier numerator growth. Strict
+    # at frontier is a small number bounded by what was observed;
+    # ef_y at horizon should be visibly larger when there's
+    # significant unresolved carrier mass that converts through the
+    # subject. A nontrivial increment proves the handoff fires.
+    increment = ef_y_at_horizon - strict_y_at_f
+    assert increment > 0.1, (
+        "Pop-C/Pop-D handoff produced no post-frontier numerator growth: "
+        f"strict_y(f) = {strict_y_at_f:.4f}, ef_y(horizon) = "
+        f"{ef_y_at_horizon:.4f}, increment = {increment:.4f}. Future-X "
+        "arrivals from the carrier continuation are not being "
+        "propagated through the subject span."
+    )
+
+
+# ─── Atom 5 pre-step: FC shadow-delta witness matrix ────────────────────
+#
+# Per FC proposal §10 Atom 5 pre-step: blind, contract-derived witnesses
+# that prove the risk-control premise from §1.1. Four model-consistent
+# witnesses establish FC ≈ conditioned model when the realised frontier
+# is model-consistent; two divergence witnesses prove the surfaces
+# separate when the frontier state carries information the full-root
+# surface cannot represent. Expected bounds derive from fixture scale
+# (Beta posterior std, draw count) and the contract text in §§3.3, 5.2,
+# 5.3, 5.4 — never from a prior run's output.
+
+
+def _build_model_consistent_single_hop_window(
+    *,
+    n_obs: int = 200,
+    k_obs: int = 160,
+    tau_observed: int = 15,
+):
+    """Single-hop window fixture where the empirical prefix is
+    generated from the same transition kernel as the conditioned model.
+
+    Strategy: Jeffreys-style prior centred on the empirical rate
+    (α = k_obs+1, β = n_obs-k_obs+1) so the conditioned posterior mean
+    is (α+k)/(α+β+n) ≈ k_obs/n_obs to within 1/(α+β+n) (here ≈ 0.0025
+    for n=200). σ=0 (Dirac latency) — both conditioned-model and FC
+    surfaces project a flat rate equal to the posterior mean over the
+    horizon, which the §1.1 risk-control premise predicts must coincide.
+    Returns the four spans plus the rate the test should expect.
+    """
+    observed_date = '2026-03-08'
+    retrieved_at = '2026-03-23'
+    candidates = (
+        _candidate(
+            from_id='X', to_id='Y',
+            observed_date=observed_date, retrieved_at=retrieved_at,
+            n=n_obs, k=k_obs,
+        ),
+    )
+    alpha = float(k_obs + 1)
+    beta = float(n_obs - k_obs + 1)
+    carrier, subject, ec, es = _build_window_mode_spans(
+        candidates_xy=(candidates[0],),
+        sigma_xy=0.0,
+        alpha_xy=alpha, beta_xy=beta,
+    )
+    p_post_mean = (alpha + k_obs) / (alpha + beta + n_obs)  # closed-form
+    return carrier, subject, ec, es, p_post_mean, tau_observed
+
+
+def test_atom5_w1_model_consistent_single_hop_window_witness():
+    """FC §1.1 risk-control premise — single-hop window model-consistent.
+
+    Contract: the FC surface and the conditioned-model (unspliced) surface
+    must agree within a small bounded envelope after the frontier when
+    the realised empirical frontier is generated by the same transition
+    kernel as the conditioned model.
+
+    Setup (closed-form, derived from §1.1):
+
+      - Single-hop X→Y window mode, identity carrier.
+      - σ = 0 (Dirac latency) so the conditioned-model curve and the
+        empirical-prefix curve are both flat after the observation date.
+      - Jeffreys prior (α = k+1, β = n-k+1) centred at the empirical
+        rate p_emp = k/n. Posterior mean p_post = (α+k)/(α+β+n) differs
+        from p_emp by ≤ 1/(α+β+n) ≤ 0.003 for n=200.
+
+    Asserted bounds (from contract, not from a run):
+
+      - Pre-frontier (τ ≤ f): ef_rate_draws.mean(0)[τ] == rate_strict[τ]
+        exactly (§5.4 first bullet: every draw equals the strict prefix).
+      - Post-frontier (τ > f): |ef_rate_draws.mean(0)[τ] − f_rate_draws.mean(0)[τ]|
+        ≤ TOL, where TOL = 0.02. Derivation: posterior-vs-empirical
+        delta ≤ 0.003 + MC noise across S=64 draws. Posterior std for
+        α=161, β=41 is sqrt(αβ/((α+β)²(α+β+1))) ≈ 0.028; draw-mean
+        std ≈ 0.028/sqrt(64) ≈ 0.0035; 2σ headroom: 2*sqrt(2)*0.0035 ≈
+        0.01. Round up to 0.02.
+    """
+    carrier, subject, ec, es, _p_post, tau_observed = (
+        _build_model_consistent_single_hop_window()
+    )
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=carrier,
+        composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
+        composed_empirical_carrier=ec,
+        composed_empirical_subject=es,
+        selected_cohorts=[
+            {
+                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    rate_strict = projection.rate_strict
+    ef_rate_mean = projection.ef_rate_draws.mean(axis=0)
+    f_rate_mean = projection.f_rate_draws.mean(axis=0)
+
+    # Pre-frontier: every draw of ef_rate equals rate_strict
+    # (§5.4 first bullet — exact prefix pinning).
+    for tau in range(tau_observed + 1):
+        if np.isfinite(rate_strict[tau]):
+            np.testing.assert_allclose(
+                projection.ef_rate_draws[:, tau], rate_strict[tau],
+                atol=1e-9, rtol=1e-9,
+                err_msg=(
+                    f"W1 prefix-pin: ef_rate not pinned to rate_strict at τ={tau}"
+                ),
+            )
+
+    # Post-frontier: ef and f surfaces agree within the contract bound.
+    TOL = 0.02
+    for tau in range(tau_observed + 1, _HORIZON + 1):
+        delta = abs(ef_rate_mean[tau] - f_rate_mean[tau])
+        assert delta <= TOL, (
+            f"W1 model-consistent agreement: |ef_rate - f_rate| = {delta:.6f} "
+            f"exceeds TOL={TOL} at τ={tau}. Either FC has drifted from the "
+            "conditioned model under model-consistent evidence, or the "
+            "conditioned-model surface has been polluted by the empirical "
+            "prefix splice."
+        )
+
+
+def _build_model_consistent_multihop_window(
+    *,
+    n_obs: int = 200,
+    k_obs_xy: int = 160,
+    k_obs_yz: int = 160,
+    tau_observed: int = 15,
+):
+    """Multi-hop X→Y→Z window fixture; Jeffreys priors per edge so each
+    posterior mean ≈ each empirical rate. Identity carrier.
+    """
+    observed_date = '2026-03-08'
+    retrieved_at = '2026-03-23'
+    candidates_xy = (
+        _candidate(
+            from_id='X', to_id='Y',
+            observed_date=observed_date, retrieved_at=retrieved_at,
+            n=n_obs, k=k_obs_xy,
+        ),
+    )
+    candidates_yz = (
+        _candidate(
+            from_id='Y', to_id='Z',
+            observed_date=observed_date, retrieved_at=retrieved_at,
+            n=n_obs, k=k_obs_yz,
+        ),
+    )
+    alpha_xy = float(k_obs_xy + 1)
+    beta_xy = float(n_obs - k_obs_xy + 1)
+    alpha_yz = float(k_obs_yz + 1)
+    beta_yz = float(n_obs - k_obs_yz + 1)
+    return _build_multihop_window_spans(
+        candidates_xy=candidates_xy,
+        candidates_yz=candidates_yz,
+        sigma_xy=0.0, sigma_yz=0.0,
+        alpha_xy=alpha_xy, beta_xy=beta_xy,
+        alpha_yz=alpha_yz, beta_yz=beta_yz,
+    ), tau_observed
+
+
+def test_atom5_w2_model_consistent_multi_hop_window_witness():
+    """FC §1.1 — multi-hop window model-consistent agreement.
+
+    Same model-consistent regime as W1 but a 2-edge subject span X→Y→Z.
+    Proves the multi-hop continuation state does not introduce a
+    spurious shape change relative to the conditioned-model surface
+    when both surfaces project the same composed transition kernel.
+
+    Contract bound: TOL=0.04 — looser than W1 because composition of
+    two posteriors adds variance. Derivation: per-edge posterior std
+    ≈ 0.028 (Jeffreys, n=200); composed product std bounded by
+    p_xy*σ_yz + p_yz*σ_xy ≈ 0.8*0.028 + 0.8*0.028 ≈ 0.045. Mean across
+    64 draws further reduces by 1/sqrt(64); 2σ headroom puts the bound
+    near 0.04.
+    """
+    (carrier, subject, ec, es), tau_observed = (
+        _build_model_consistent_multihop_window()
+    )
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
+        composed_empirical_carrier=ec, composed_empirical_subject=es,
+        selected_cohorts=[
+            {
+                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    rate_strict = projection.rate_strict
+    ef_rate_mean = projection.ef_rate_draws.mean(axis=0)
+    f_rate_mean = projection.f_rate_draws.mean(axis=0)
+
+    for tau in range(tau_observed + 1):
+        if np.isfinite(rate_strict[tau]):
+            np.testing.assert_allclose(
+                projection.ef_rate_draws[:, tau], rate_strict[tau],
+                atol=1e-9, rtol=1e-9,
+                err_msg=(
+                    f"W2 multi-hop prefix-pin: ef_rate not pinned at τ={tau}"
+                ),
+            )
+
+    TOL = 0.04
+    for tau in range(tau_observed + 1, _HORIZON + 1):
+        delta = abs(ef_rate_mean[tau] - f_rate_mean[tau])
+        assert delta <= TOL, (
+            f"W2 multi-hop model-consistent: |ef_rate - f_rate| = "
+            f"{delta:.6f} > TOL={TOL} at τ={tau}. Multi-hop subject "
+            "composition has either drifted FC or spliced the model."
+        )
+
+
+def test_atom5_w3_model_consistent_cohort_identity_witness():
+    """FC §1.1 — cohort(A = X) identity-carrier model-consistent witness.
+
+    Cohort(A=X) mode is the identity-carrier degeneracy of cohort mode
+    (proposal §3.3; semantics doc invariant 6 "Identity carrier is data,
+    not a route"). The FC and conditioned-model surfaces under cohort-
+    mode binding must agree to the same bound as W1 — the binding mode
+    is provenance, not algebra. A test that flipped FC vs model under
+    cohort binding (e.g. by routing identity through a separate branch)
+    would fail this witness.
+
+    Setup: same Jeffreys-prior single-hop fixture as W1, but the
+    EvidenceReadoutBinding is constructed as cohort-mode. Identity
+    carrier collapses composed_carrier to identity in both bindings;
+    the model-consistent rate trajectory is unchanged.
+
+    Contract bound: TOL=0.02 (same as W1).
+    """
+    # Build the same fixture as W1 but with a cohort-mode readout
+    # binding on the subject span. The identity-carrier window
+    # construction already sets the carrier to identity; switching
+    # to cohort binding on an identity carrier is the algebraic
+    # collapse the witness pins.
+    observed_date = '2026-03-08'
+    retrieved_at = '2026-03-23'
+    n_obs, k_obs = 200, 160
+    tau_observed = 15
+    candidates = (
+        _candidate(
+            from_id='X', to_id='Y',
+            observed_date=observed_date, retrieved_at=retrieved_at,
+            n=n_obs, k=k_obs,
+        ),
+    )
+    alpha = float(k_obs + 1)
+    beta = float(n_obs - k_obs + 1)
+
+    conditioned_xy = _build_conditioned_primitive(
+        from_id='X', to_id='Y', edge_id='e-xy',
+        alpha=alpha, beta=beta, sigma=0.0,
+        candidates=candidates,
+    )
+    empirical_xy = _build_empirical_primitive(
+        from_id='X', to_id='Y', candidates=candidates,
+    )
+    readout_binding = EvidenceReadoutBinding.cohort()
+    graph = _make_graph([('e-xy', 'X', 'Y')])
+    registry = RequestPrimitiveRegistry(arrival_map=_empty_arrival_map())
+
+    def _model_lookup(f, t, _ed):
+        return conditioned_xy if (f, t) == ('X', 'Y') else None
+
+    def _empirical_lookup(f, t, _ed):
+        return empirical_xy if (f, t) == ('X', 'Y') else None
+
+    carrier = compose_primitive_span(
+        graph=graph, x_node_id='X', end_node_id='X',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+        evidence_readout_binding=readout_binding,
+    )
+    subject = compose_primitive_span(
+        graph=graph, x_node_id='X', end_node_id='Y',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+        evidence_readout_binding=readout_binding,
+    )
+    ec = compose_empirical_span(
+        graph=graph, x_node_id='X', end_node_id='X',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+        evidence_readout_binding=readout_binding,
+    )
+    es = compose_empirical_span(
+        graph=graph, x_node_id='X', end_node_id='Y',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+        evidence_readout_binding=readout_binding,
+    )
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
+        composed_empirical_carrier=ec, composed_empirical_subject=es,
+        selected_cohorts=[
+            {
+                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    rate_strict = projection.rate_strict
+    ef_rate_mean = projection.ef_rate_draws.mean(axis=0)
+    f_rate_mean = projection.f_rate_draws.mean(axis=0)
+
+    for tau in range(tau_observed + 1):
+        if np.isfinite(rate_strict[tau]):
+            np.testing.assert_allclose(
+                projection.ef_rate_draws[:, tau], rate_strict[tau],
+                atol=1e-9, rtol=1e-9,
+                err_msg=(
+                    f"W3 cohort(A=X) prefix-pin: not pinned at τ={tau}"
+                ),
+            )
+
+    TOL = 0.02
+    for tau in range(tau_observed + 1, _HORIZON + 1):
+        delta = abs(ef_rate_mean[tau] - f_rate_mean[tau])
+        assert delta <= TOL, (
+            f"W3 cohort(A=X) model-consistent: |ef_rate - f_rate| = "
+            f"{delta:.6f} > TOL={TOL} at τ={tau}. The cohort-mode "
+            "identity-carrier degeneracy is being routed through a "
+            "different algebra than window-mode identity."
+        )
+
+
+def test_atom5_w4_model_consistent_active_cohort_witness():
+    """FC §1.1 — active cohort(A != X) model-consistent witness.
+
+    An active carrier A→B + subject B→C fixture where both carrier and
+    subject empirical evidence are generated from the same transition
+    kernels as the conditioned operators (Jeffreys per-edge priors).
+    The FC and conditioned-model surfaces under active cohort binding
+    must agree to within the multi-edge model-consistent envelope —
+    proving FC is a semantic refinement, not a new shape, when the
+    realised frontier matches the model.
+
+    Pop-C handoff (future X arrivals propagated through ordinary
+    subject kernels) must NOT introduce a model-consistent regime drift
+    relative to the full-root projection.
+
+    Contract bound: TOL=0.04 (multi-edge envelope, same derivation as
+    W2).
+    """
+    n_ab, k_ab = 200, 160
+    n_bc, k_bc = 200, 160
+    observed_date = '2026-03-08'
+    retrieved_at = '2026-03-23'
+    carrier_candidates = (
+        _candidate(
+            from_id='A', to_id='B',
+            observed_date=observed_date, retrieved_at=retrieved_at,
+            n=n_ab, k=k_ab,
+        ),
+    )
+    subject_candidates = (
+        _candidate(
+            from_id='B', to_id='C',
+            observed_date=observed_date, retrieved_at=retrieved_at,
+            n=n_bc, k=k_bc,
+        ),
+    )
+    graph = _make_graph([('e-ab', 'A', 'B'), ('e-bc', 'B', 'C')])
+    registry = RequestPrimitiveRegistry(arrival_map=_empty_arrival_map())
+
+    alpha_ab = float(k_ab + 1)
+    beta_ab = float(n_ab - k_ab + 1)
+    alpha_bc = float(k_bc + 1)
+    beta_bc = float(n_bc - k_bc + 1)
+
+    conditioned_ab = _build_conditioned_primitive(
+        from_id='A', to_id='B', edge_id='e-ab',
+        alpha=alpha_ab, beta=beta_ab, sigma=0.0,
+        candidates=carrier_candidates,
+    )
+    conditioned_bc = _build_conditioned_primitive(
+        from_id='B', to_id='C', edge_id='e-bc',
+        alpha=alpha_bc, beta=beta_bc, sigma=0.0,
+        candidates=subject_candidates,
+    )
+    empirical_ab = _build_empirical_primitive(
+        from_id='A', to_id='B', candidates=carrier_candidates,
+    )
+    empirical_bc = _build_empirical_primitive(
+        from_id='B', to_id='C', candidates=subject_candidates,
+    )
+
+    def _model_lookup(f, t, _ed):
+        return {('A', 'B'): conditioned_ab, ('B', 'C'): conditioned_bc}.get(
+            (f, t),
+        )
+
+    def _empirical_lookup(f, t, _ed):
+        return {('A', 'B'): empirical_ab, ('B', 'C'): empirical_bc}.get(
+            (f, t),
+        )
+
+    composed_carrier = compose_primitive_span(
+        graph=graph, x_node_id='A', end_node_id='B',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_subject = compose_primitive_span(
+        graph=graph, x_node_id='B', end_node_id='C',
+        registry=registry, edge_to_primitive_lookup=_model_lookup,
+        options=ComposeOptions(max_tau=_HORIZON, draw_count=_DRAW_COUNT),
+    )
+    composed_empirical_carrier = compose_empirical_span(
+        graph=graph, x_node_id='A', end_node_id='B',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+    composed_empirical_subject = compose_empirical_span(
+        graph=graph, x_node_id='B', end_node_id='C',
+        edge_to_empirical_primitive_lookup=_empirical_lookup,
+        draw_count=_DRAW_COUNT, horizon_len=_HORIZON + 1,
+    )
+
+    tau_observed = 15
+    projection = project_selected_cohort_rows(
+        composed_carrier=composed_carrier,
+        composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
+        composed_empirical_carrier=composed_empirical_carrier,
+        composed_empirical_subject=composed_empirical_subject,
+        selected_cohorts=[
+            {
+                'anchor_day': '2026-03-01', 'N_anchor': float(n_ab), 'N_pop': float(n_ab),
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    rate_strict = projection.rate_strict
+    ef_rate_mean = projection.ef_rate_draws.mean(axis=0)
+    f_rate_mean = projection.f_rate_draws.mean(axis=0)
+
+    # Prefix-pin: only meaningful where strict evidence has arrived.
+    # Before the observation date, evidence_x_strict = 0 and the
+    # rate is undefined (0/0 → NaN in the ef projection).
+    for tau in range(tau_observed + 1):
+        if projection.evidence_x_strict[tau] > 0.0:
+            np.testing.assert_allclose(
+                projection.ef_rate_draws[:, tau], rate_strict[tau],
+                atol=1e-9, rtol=1e-9,
+                err_msg=(
+                    f"W4 active prefix-pin: ef_rate not pinned at τ={tau}"
+                ),
+            )
+
+    TOL = 0.04
+    for tau in range(tau_observed + 1, _HORIZON + 1):
+        if not np.isfinite(ef_rate_mean[tau]) or not np.isfinite(f_rate_mean[tau]):
+            continue
+        delta = abs(ef_rate_mean[tau] - f_rate_mean[tau])
+        assert delta <= TOL, (
+            f"W4 active cohort model-consistent: |ef_rate - f_rate| = "
+            f"{delta:.6f} > TOL={TOL} at τ={tau}. Either Pop-C handoff "
+            "is mis-clocked, or the carrier-side FC continuation has "
+            "drifted from the conditioned-model surface under model-"
+            "consistent evidence."
+        )
+
+
+def test_atom5_w5_off_model_prefix_divergence_witness():
+    """FC §1.1 — off-model prefix divergence witness.
+
+    Contract: when the strict empirical prefix is far from the
+    conditioned model surface, FC and conditioned-model must
+    materially disagree after the frontier — FC anchors to the
+    realised empirical prefix and projects continuation, while
+    the conditioned-model surface ignores the prefix and projects
+    from the prior+evidence Beta posterior.
+
+    This is the positive control: if FC were wired to read the
+    conditioned-model surface, or if the prefix were ignored, this
+    test would collapse to parity and fail. Distinct from the
+    existing `test_off_model_post_frontier_shadow_diverges_from_conditioned_model`
+    test in that this assertion is against the UNSPLICED `f_rate_draws`,
+    not against the spliced surface — so it directly catches a
+    regression that wired FC to read the F-mode surface.
+
+    Setup: strong prior at α/(α+β) = 0.8; off-prior empirical
+    k/n = 0.05. Posterior stays well above the strict empirical floor
+    because the prior dominates the sparse evidence.
+
+    Contract bound: max post-frontier |ef_rate_mean - f_rate_mean|
+    > 0.05 (vs the 0.02 model-consistent envelope). For this fixture
+    the algebra predicts a roughly 0.7 gap (posterior ≈ 0.8, strict
+    ≈ 0.05), so any reasonable bound discriminates.
+    """
+    tau_observed = 15
+    spans = _build_off_model_window_spans(
+        n_obs=200, k_obs=10, alpha=80.0, beta=20.0,
+    )
+    composed_carrier, composed_subject = spans[0], spans[1]
+    composed_empirical_carrier, composed_empirical_subject = spans[2], spans[3]
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=composed_carrier,
+        composed_subject=composed_subject,
+        composed_carrier_predictive=composed_carrier,
+        composed_subject_predictive=composed_subject,
+        composed_empirical_carrier=composed_empirical_carrier,
+        composed_empirical_subject=composed_empirical_subject,
+        selected_cohorts=[
+            {
+                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    rate_strict = projection.rate_strict
+    ef_rate_mean = projection.ef_rate_draws.mean(axis=0)
+    f_rate_mean = projection.f_rate_draws.mean(axis=0)
+
+    # Pre-frontier: FC pins to strict (regardless of off-model state).
+    for tau in range(tau_observed + 1):
+        if np.isfinite(rate_strict[tau]):
+            np.testing.assert_allclose(
+                projection.ef_rate_draws[:, tau], rate_strict[tau],
+                atol=1e-9, rtol=1e-9,
+                err_msg=(
+                    f"W5 off-model prefix-pin: not pinned at τ={tau}"
+                ),
+            )
+
+    # Post-frontier: FC (anchored to empirical ≈ 0.05) and conditioned
+    # model (≈ 0.8) must diverge. Contract minimum: 0.05 gap somewhere.
+    post_slice = slice(tau_observed + 1, _HORIZON + 1)
+    max_gap = float(np.max(np.abs(
+        ef_rate_mean[post_slice] - f_rate_mean[post_slice]
+    )))
+    assert max_gap > 0.05, (
+        f"W5 off-model divergence: max post-frontier "
+        f"|ef_rate - f_rate| = {max_gap:.6f} < 0.05. FC has collapsed "
+        "to the conditioned-model surface under off-model evidence — "
+        "either the prefix is being ignored or FC reads f_*."
+    )
+
+
+def test_atom5_w6_multi_hop_frontier_state_divergence_witness():
+    """FC §1.1 — multi-hop frontier-state witness.
+
+    Two multi-hop X→Y→Z fixtures with deliberately different
+    intermediate-node occupancy at the frontier. The scalar
+    Y_obs(f) on its own does NOT discriminate between them; the
+    per-node frontier ledger does. A scalar-remainder implementation
+    of the FC continuation would yield identical post-frontier
+    surfaces in both fixtures. The Atom 4 source-bucket ledger
+    machinery is the minimum state required to distinguish them
+    (proposal §4 "The Missing Runtime Object", §5.2 "occupancy
+    excludes the terminal node").
+
+    Construction: two fixtures with the SAME terminal observations
+    (X_obs(f) and Y_obs(f) at the frontier), but the underlying
+    per-edge candidate distributions differ:
+      - Fixture A: balanced per-edge evidence — both edges observe
+        similar fraction of mass.
+      - Fixture B: skewed per-edge evidence — one edge observes most
+        of the X→Y conversion, the other observes most of the Y→Z
+        conversion. Same composed product, different bucket
+        decomposition.
+
+    The test passes if the FC ef_rate_draws differs between A and B
+    post-frontier (max delta > 0.02). A scalar-remainder FC would
+    yield max delta ≈ 0 (within MC noise).
+
+    Contract bound: max delta > 0.02 (above MC noise floor of ~0.01).
+    """
+    observed_date = '2026-03-08'
+    retrieved_at = '2026-03-23'
+
+    def _build_multihop(*, k_xy: int, k_yz: int):
+        candidates_xy = (
+            _candidate(
+                from_id='X', to_id='Y',
+                observed_date=observed_date, retrieved_at=retrieved_at,
+                n=200, k=k_xy,
+            ),
+        )
+        candidates_yz = (
+            _candidate(
+                from_id='Y', to_id='Z',
+                observed_date=observed_date, retrieved_at=retrieved_at,
+                n=200, k=k_yz,
+            ),
+        )
+        # σ > 0 on both edges so the predictive residual operator has
+        # well-defined post-frontier support. With σ = 0 (Dirac) the
+        # residual fraction `B_s,e(u, f, τ) = (Q(τ) − Q(f)) / (1 − H(f))`
+        # degenerates because H(f) = 1 for any source bucket whose mass
+        # has already moved by f, and the test is vacuous regardless of
+        # the per-bucket ledger. With σ > 0 the post-frontier delta
+        # carries the multi-hop frontier state.
+        return _build_multihop_window_spans(
+            candidates_xy=candidates_xy,
+            candidates_yz=candidates_yz,
+            sigma_xy=1.2, sigma_yz=1.2,
+            alpha_xy=80.0, beta_xy=20.0,
+            alpha_yz=20.0, beta_yz=80.0,
+        )
+
+    # Fixture A: balanced — both edges convert at p ≈ 0.5.
+    # Composed expected end-rate ≈ 0.25.
+    spans_a = _build_multihop(k_xy=100, k_yz=100)
+    # Fixture B: skewed — high p_xy * low p_yz = same product 0.25.
+    spans_b = _build_multihop(k_xy=160, k_yz=63)
+    # 160/200 * 63/200 = 0.8 * 0.315 = 0.252 ≈ 0.25; matched product
+    # to 1% precision so terminal Y_obs(f) ≈ identical, but the
+    # per-edge per-bucket occupancy at the frontier differs.
+
+    tau_observed = 15
+    cohort = {
+        'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+        'tau_max': _HORIZON, 'tau_observed': tau_observed,
+    }
+
+    def _project(spans):
+        return project_selected_cohort_rows(
+            composed_carrier=spans[0], composed_subject=spans[1],
+            composed_carrier_predictive=spans[0],
+            composed_subject_predictive=spans[1],
+            composed_empirical_carrier=spans[2],
+            composed_empirical_subject=spans[3],
+            selected_cohorts=[cohort],
+            horizon=_HORIZON,
+        )
+
+    proj_a = _project(spans_a)
+    proj_b = _project(spans_b)
+
+    # Sanity: terminal Y at frontier should be similar between fixtures
+    # — the test is meaningful only if scalar Y_obs(f) ≈ matches across
+    # the two fixtures.
+    strict_y_a_at_f = float(proj_a.evidence_y_strict_by_anchor_tau[0][tau_observed])
+    strict_y_b_at_f = float(proj_b.evidence_y_strict_by_anchor_tau[0][tau_observed])
+    assert abs(strict_y_a_at_f - strict_y_b_at_f) < 1.0, (
+        f"W6 sanity: terminal Y(f) differs too much between fixtures "
+        f"(A={strict_y_a_at_f:.2f} vs B={strict_y_b_at_f:.2f}); "
+        "the scalar-equivalence premise is not met."
+    )
+
+    # The FC surfaces should differ post-frontier because the per-bucket
+    # ledger occupancy at the frontier differs between A and B.
+    ef_a_mean = proj_a.ef_rate_draws.mean(axis=0)
+    ef_b_mean = proj_b.ef_rate_draws.mean(axis=0)
+    post_slice = slice(tau_observed + 1, _HORIZON + 1)
+    max_delta = float(np.max(np.abs(ef_a_mean[post_slice] - ef_b_mean[post_slice])))
+
+    assert max_delta > 0.02, (
+        f"W6 frontier-state: max post-frontier |ef_A - ef_B| = "
+        f"{max_delta:.6f} ≤ 0.02. FC produces identical surfaces for "
+        "fixtures with same scalar Y(f) but different per-bucket "
+        "ledger state — the multi-hop frontier state has collapsed "
+        "to a scalar remainder. Per proposal §5.2 the frontier ledger "
+        "must distinguish per-node and per-source-bucket occupancy."
+    )
+
+
+def test_atom5_multi_cohort_rows_sum_y_and_x_before_division():
+    """FC Atom 5 acceptance — multi-Cohort rows sum Y and X BEFORE division.
+
+    Semantics doc invariant 4 ("The displayed rate is always Y/X")
+    combined with §5.4 fourth bullet ("For multi-Cohort chart rows,
+    sum denominators and numerators across selected Cohorts first,
+    then divide once. Do not average per-Cohort rates."): the
+    projection's ef_*, f_*, and rate_draws_spliced surfaces must all
+    use the ΣY/ΣX reduction across selected Cohorts, never avg(Y/X).
+
+    Test discriminates avg-of-ratios from mass-first by using two
+    cohorts with very different denominators (200 vs 20) and very
+    different per-cohort rates (≈0.8 vs ≈0.2):
+
+      avg-of-ratios = (0.8 + 0.2) / 2 = 0.5
+      ΣY/ΣX = (200*0.8 + 20*0.2) / (200 + 20) = 164/220 ≈ 0.7454
+
+    These are well-separated; any avg-of-ratios reducer would
+    produce ≈0.5 and fail the assertion against ≈0.75.
+    """
+    high_anchor = '2026-03-08'
+    low_anchor = '2026-03-09'
+    tau_observed = 20
+    candidates = (
+        _candidate(
+            from_id='X', to_id='Y',
+            observed_date=high_anchor, retrieved_at='2026-03-23',
+            n=200, k=160,
+        ),
+        _candidate(
+            from_id='X', to_id='Y',
+            observed_date=low_anchor, retrieved_at='2026-03-24',
+            n=20, k=4,
+        ),
+    )
+
+    # One composed empirical span carries both source-day curves. The two
+    # selected Cohorts below bind to different anchor/source days, so this
+    # is a genuine multi-Cohort projection with different per-Cohort rates.
+    # A reducer that averages per-Cohort rates would produce 0.5 at the
+    # frontier; the correct mass-first row is 164 / 220.
+    carrier, subject, ec, es = _build_window_mode_spans(
+        candidates_xy=candidates,
+        sigma_xy=0.0,
+        alpha_xy=166.0, beta_xy=58.0,
+    )
+
+    projection = project_selected_cohort_rows(
+        composed_carrier=carrier, composed_subject=subject,
+        composed_carrier_predictive=carrier,
+        composed_subject_predictive=subject,
+        composed_empirical_carrier=ec, composed_empirical_subject=es,
+        selected_cohorts=[
+            {
+                'anchor_day': high_anchor, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+            {
+                'anchor_day': low_anchor, 'N_anchor': 20.0, 'N_pop': 20.0,
+                'tau_max': _HORIZON, 'tau_observed': tau_observed,
+            },
+        ],
+        horizon=_HORIZON,
+    )
+
+    # Verify each per-anchor prefix came from its own source-day curve.
+    x_h = float(
+        projection.evidence_x_strict_by_anchor_tau[high_anchor][tau_observed],
+    )
+    y_h = float(
+        projection.evidence_y_strict_by_anchor_tau[high_anchor][tau_observed],
+    )
+    x_l = float(
+        projection.evidence_x_strict_by_anchor_tau[low_anchor][tau_observed],
+    )
+    y_l = float(
+        projection.evidence_y_strict_by_anchor_tau[low_anchor][tau_observed],
+    )
+
+    assert x_h == pytest.approx(200.0, abs=1e-9)
+    assert y_h == pytest.approx(160.0, abs=1e-9)
+    assert x_l == pytest.approx(20.0, abs=1e-9)
+    assert y_l == pytest.approx(4.0, abs=1e-9)
+
+    # Per-cohort rates differ widely: 0.8 vs 0.2.
+    rate_h = y_h / x_h
+    rate_l = y_l / x_l
+    assert abs(rate_h - rate_l) > 0.5, (
+        "Test premise: per-cohort rates must differ widely to "
+        "discriminate avg-of-ratios from ΣY/ΣX."
+    )
+
+    # The multi-cohort ΣY/ΣX expected value:
+    expected_sum_y = y_h + y_l  # 160 + 4 = 164
+    expected_sum_x = x_h + x_l  # 200 + 20 = 220
+    expected_pooled = expected_sum_y / expected_sum_x  # ≈ 0.7454
+    expected_avg_of_ratios = (rate_h + rate_l) / 2  # = 0.5
+
+    # These two reductions must be well-separated for the
+    # test to discriminate.
+    assert abs(expected_pooled - expected_avg_of_ratios) > 0.1
+
+    # Strict evidence fields are one real multi-Cohort row: sum Y and X,
+    # divide once. This is the direct acceptance proof.
+    np.testing.assert_allclose(
+        projection.evidence_x_strict[tau_observed],
+        expected_sum_x, atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        projection.evidence_y_strict[tau_observed],
+        expected_sum_y, atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        projection.rate_strict[tau_observed],
+        expected_pooled, atol=1e-9,
+    )
+    assert projection.rate_strict[tau_observed] != pytest.approx(
+        expected_avg_of_ratios, abs=1e-3,
+    )
+
+    # Atom 5's public split surfaces must preserve the same mass-first
+    # boundary at the observed frontier. Both spliced and FC surfaces are
+    # prefix-pinned there, so every draw equals the pooled strict row.
+    np.testing.assert_allclose(
+        projection.rate_draws_spliced[:, tau_observed],
+        expected_pooled,
+        atol=1e-9,
+    )
+    np.testing.assert_allclose(
+        projection.ef_rate_draws[:, tau_observed],
+        expected_pooled,
+        atol=1e-9,
+    )
+
+    # Structural guard: if a future refactor changes the rate draw
+    # computation, the draw surfaces must still be Y/X after summing
+    # across Cohorts, not an average of per-Cohort ratios.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        expected_ef_rate = projection.ef_y_draws / projection.ef_x_draws
+    finite_mask = projection.ef_x_draws > 0.0
+    np.testing.assert_allclose(
+        projection.ef_rate_draws[finite_mask],
+        expected_ef_rate[finite_mask],
+        atol=1e-12,
+    )
+

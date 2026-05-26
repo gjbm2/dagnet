@@ -130,7 +130,7 @@ Pre-73n the runtime had three fixed-seed RNG constants scattered across the code
 
 The retirement is partial: `forecast_runtime.prepare_forecast_runtime_inputs` still names "Fixed-seed retirement" in comments and routes through `_request_scoped_key('subject_span_full_path_mc')` etc., but the legacy trajectory engine `compute_forecast_trajectory` retains a `_trajectory_fallback_draw_family_key` for callers that don't supply a key. That fallback derives `scenario_id` from the resolved model's `(alpha, beta, n_effective, src)` so two calls with matching resolved parameters reuse the same stream.
 
-[CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) does not flag the legacy fallback as a defensive-code violation — it is a documented bridge.
+[`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) does not flag the legacy fallback as a defensive-code violation — it is a documented bridge.
 
 ---
 

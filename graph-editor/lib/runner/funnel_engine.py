@@ -147,7 +147,7 @@ def compute_bars_e(
 def compute_bars_f(
     path_edges: list[dict[str, Any]],
     temporal_mode: str = 'window',
-    num_draws: int = 2000,
+    num_draws: Optional[int] = None,
     rng: Optional[np.random.Generator] = None,
     graph_preference: Optional[str] = None,
 ) -> FunnelStageBars:
@@ -160,7 +160,13 @@ def compute_bars_f(
     deterministic path product of per-edge posterior means so that the
     reported path probability matches Π(α/(α+β)) regardless of how
     skewed the predictive Beta is.
+
+    ``num_draws`` defaults to the request-scope
+    ``forecasting_settings.mc_draws`` when None.
     """
+    from .primitives import current_mc_draws
+    if num_draws is None:
+        num_draws = current_mc_draws()
     if rng is None:
         rng = np.random.default_rng(seed=42)
 
@@ -212,7 +218,7 @@ def compute_bars_f(
 def compute_bars_ef(
     cf_per_edge: list[dict[str, Any]],
     bar_e: list[float],
-    num_draws: int = 2000,
+    num_draws: Optional[int] = None,
     rng: Optional[np.random.Generator] = None,
 ) -> FunnelStageBars:
     """e+f mode: path product of CF-conditioned means for bars; moment-matched
@@ -235,7 +241,13 @@ def compute_bars_ef(
     aligned means is the principled derivation (see doc 52 §3.5).
     Historical (1−c)² weighting crushed predictive contribution to
     invisibility for any c > ~0.5.
+
+    ``num_draws`` defaults to the request-scope
+    ``forecasting_settings.mc_draws`` when None.
     """
+    from .primitives import current_mc_draws
+    if num_draws is None:
+        num_draws = current_mc_draws()
     if rng is None:
         rng = np.random.default_rng(seed=42)
 

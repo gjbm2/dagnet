@@ -23,6 +23,7 @@ edges:
     onset: 1.0
     mu: 2.303
     sigma: 0.5
+    latency_parameter: true
   drift10d10d-b-to-c:
     from: drift10d10d-b
     to: drift10d10d-c
@@ -30,6 +31,7 @@ edges:
     onset: 2.0
     mu: 2.303
     sigma: 0.5
+    latency_parameter: true
 simulation:
   mean_daily_traffic: 5000
   n_days: 100

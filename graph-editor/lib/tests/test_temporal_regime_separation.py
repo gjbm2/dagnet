@@ -34,6 +34,7 @@ from conftest import (
     load_candidate_regimes_by_mode,
     load_db_hashes_by_mode,
     load_graph_json,
+    _resolve_data_repo_dir,
     requires_db,
     requires_data_repo,
     requires_synth,
@@ -151,6 +152,46 @@ class TestCandidateRegimeStructure:
             assert any_window_cand and any_cohort_cand, (
                 f'Edge {edge_uuid}: must have separate candidates for '
                 f'window and cohort modes')
+
+    @requires_synth("synth-mirror-4step", enriched=True)
+    def test_synth_regimes_use_current_meta_hashes_not_suffix_matches(self):
+        """Synth candidate regimes must come from the graph's synth-meta
+        hash contract, not from DB param_id suffix discovery.
+
+        Regression: the helper used `param_id LIKE %edge_id%` and then
+        treated every discovered hash as an equivalent. On mirror-style
+        fixtures this admitted stale and sibling families (`parity`,
+        `slow`, `wide`) into one evidence read, breaking the count-rate
+        cancellation through non-latency edges.
+        """
+        repo = _resolve_data_repo_dir()
+        assert repo is not None
+        meta_path = repo / "graphs" / "synth-mirror-4step.synth-meta.json"
+        meta = json.loads(meta_path.read_text())
+        edge_hashes = meta["edge_hashes"]
+        graph = load_graph_json("synth-mirror-4step")
+        regimes = load_candidate_regimes_by_mode("synth-mirror-4step")
+
+        by_param = {
+            edge["p"]["id"]: (edge["uuid"], regimes.get(edge["uuid"], []))
+            for edge in graph.get("edges", [])
+            if isinstance(edge.get("p"), dict) and edge["p"].get("id")
+        }
+
+        for param_id, hashes in edge_hashes.items():
+            edge_uuid, candidates = by_param[param_id]
+            by_mode = {
+                candidate.get("temporal_mode"): candidate
+                for candidate in candidates
+            }
+            window = by_mode.get("window")
+            cohort = by_mode.get("cohort")
+            assert window is not None, f"{param_id}/{edge_uuid}: missing window regime"
+            assert cohort is not None, f"{param_id}/{edge_uuid}: missing cohort regime"
+            assert window["core_hash"] == hashes["window_hash"]
+            assert cohort["core_hash"] == hashes["cohort_hash"]
+            assert window.get("equivalent_hashes") == []
+            assert cohort.get("equivalent_hashes") == []
 
 
 # ---------------------------------------------------------------------------

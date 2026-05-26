@@ -64,6 +64,7 @@ edges:
     onset: 2.0
     mu: 2.0
     sigma: 0.50
+    latency_parameter: true
   b-to-c:
     from: b
     to: c
@@ -71,6 +72,7 @@ edges:
     onset: 1.5
     mu: 2.2
     sigma: 0.45
+    latency_parameter: true
   c-to-d:
     from: c
     to: d
@@ -78,3 +80,4 @@ edges:
     onset: 2.5
     mu: 1.8
     sigma: 0.50
+    latency_parameter: true

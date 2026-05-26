@@ -535,6 +535,8 @@ export interface ForecastingSettings {
   bayes_tune: number;
   bayes_chains: number;
   bayes_target_accept: number;
+  // Forecast Monte Carlo sampling
+  mc_draws: number;
 }
 
 /**
@@ -563,6 +565,14 @@ export const BAYES_DRAWS = 2000;                    // MCMC draws per chain
 export const BAYES_TUNE = 1000;                     // MCMC warmup per chain
 export const BAYES_CHAINS = 4;                      // number of MCMC chains
 export const BAYES_TARGET_ACCEPT = 0.90;            // NUTS target acceptance
+
+// ── Forecast Monte Carlo sampling ──
+// Single source of truth for the request-scope MC draw count S used by the
+// forecast / CF runtime (primitive substrate, span CDF MC, cohort sweep,
+// confidence bands, funnel sweep). Threaded to the Python backend via
+// forecasting_settings.mc_draws; the BE sets a request-scoped contextvar
+// and every engine site reads from it.
+export const MC_DRAWS = 1000;                       // request-scope S
 
 
 export function buildForecastingSettings(): ForecastingSettings {
@@ -599,6 +609,7 @@ export function buildForecastingSettings(): ForecastingSettings {
     bayes_tune: BAYES_TUNE,
     bayes_chains: BAYES_CHAINS,
     bayes_target_accept: BAYES_TARGET_ACCEPT,
+    mc_draws: MC_DRAWS,
   };
 }
 

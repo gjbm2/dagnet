@@ -66,6 +66,7 @@ edges:
     onset: 1.0
     mu: 1.5
     sigma: 0.4
+    latency_parameter: true
   synth-fanout-sparse-3-gate-to-fast:
     from: gate
     to: fast
@@ -73,6 +74,7 @@ edges:
     onset: 1.0
     mu: 1.0
     sigma: 0.3
+    latency_parameter: true
   synth-fanout-sparse-3-gate-to-slow:
     from: gate
     to: slow
@@ -80,6 +82,7 @@ edges:
     onset: 5.0
     mu: 2.0
     sigma: 0.5
+    latency_parameter: true
 nodes:
   anchor:
     start: true

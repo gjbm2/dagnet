@@ -264,19 +264,18 @@ def resolve_model_params(
         edge_sigma_sd = float(_src.get('sigma_sd') or 0.0)
         edge_onset_sd = float(_src.get('onset_sd') or 0.0)
         edge_onset_mu_corr = float(_src.get('onset_mu_corr') or 0.0)
-        # Doc 73b §3.9 (analytic dispersion discipline): until a
-        # principled analytic correlation model is designed and tested,
-        # treat analytic latency as having independent (mu, onset) — the
-        # same discipline §3.9 applies to predictive probability
-        # dispersion (no `alpha_pred` / `beta_pred` from analytic until
-        # an overdispersion model lands). Synth/generator-emitted
-        # `onset_mu_corr` values on analytic source are placeholders, not
-        # fitted from a joint distribution; propagating them produces
-        # spec-unjustified MC-vs-deterministic drift in cohort midpoints.
-        # Bayesian source carries kappa-aware joint posterior — its
-        # `onset_mu_corr` is principled and unaffected here.
-        if promoted_source == 'analytic':
-            edge_onset_mu_corr = 0.0
+        # §3.9 analytic dispersion deferral closed 20-May-26: the FE topo
+        # stats pass now emits a principled `onset_mu_corr` via the
+        # closed-form Fisher-information asymptotic correlation for the
+        # shifted lognormal (`-exp(-σ²/2) / √(σ²+1)`; see
+        # `statisticalEnhancementService.ts` and EPISTEMIC_DISPERSION_DESIGN).
+        # The previous force-to-zero existed because the upstream value
+        # was a -0.3 heuristic placeholder; with a real estimator emitting
+        # the same identifiability ridge an MCMC posterior recovers, the
+        # analytic and bayesian sources are on the same footing per I-25
+        # and the wipe is removed. This mirrors the §6 closure of the
+        # rate-side analytic predictive deferral (Pearson chi-squared
+        # overdispersion).
     else:
         # Fallback: posterior → flat promoted fields
         edge_mu = lat_posterior.get('mu_mean') or latency_block.get('mu') or 0.0

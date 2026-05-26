@@ -19,6 +19,14 @@ subcommand that modifies state.
 - **If no permission**: use `git diff`, `git status`, `git log` (read-only)
   to inspect. To undo your own code changes, use the **Edit** tool to reverse
   specific edits. **Ask the user** if unsure — never default to a git write.
+- **Carve-out (read-only `git stash`)**: `git stash list` and
+  `git stash show [...]` are allowed without consent. They never modify
+  state. The carve-out only applies when the entire command line is just
+  the bare invocation — any redirect (`>`), pipe (`|`), compound (`&&`,
+  `;`), command substitution (`` ` ``, `$(...)`), or quoting falls
+  through to the normal gate. Other stash subcommands (`push`, `pop`,
+  `apply`, `drop`, `clear`, `save`, `branch`, `store`, `create`) modify
+  state and remain gated.
 
 ### Gate 2: Destructive / data-loss operations
 

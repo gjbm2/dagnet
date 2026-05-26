@@ -15,7 +15,7 @@ This is the chart-evidence engine for `cohort_maturity_v3` and the row surface t
 
 **Branching by case is the recurring failure mode** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58). The row pipeline carries the worst of it — ~10 `if identity_carrier:` branches in the selected-Cohort reducer (audit H-5, partially retired May 2026 when the `_synthesize_identity_carrier_observed_surface` parallel pipeline was folded into the unified `_build_observed_span_evidence_surface` as a zero-edge degeneracy). These remaining branches are **debt to be retired gradually**, not precedent. Identity carrier is **data**, not a route — `composed_carrier = None`, reach=1, CDF=Dirac(0) — and the design target is one code path that degenerates algebraically.
 
-**The maintainer constantly polices these patterns and will revert new instances.** If existing code in this file seems to justify a fallback or a case-fork ("look, the surrounding code already does it"), you are looking at exactly the debt that's being retired. Match the substrate's discipline. The 21 findings in [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) — H-1 monotone-repair clamp at `:3587`, H-4 residual floor at `:5347`, H-5 pervasive identity-carrier branching, M-1 try/except swallows around `runtime.selected_y_prefix` — are all on the remediation list. None are precedent.
+**The maintainer constantly polices these patterns and will revert new instances.** Rules: [CF_ENGINE_DISCIPLINE.md](CF_ENGINE_DISCIPLINE.md). If existing code in this file seems to justify a fallback or a case-fork ("look, the surrounding code already does it"), you are looking at exactly the debt that's being retired. Match the substrate's discipline. The 21 findings in [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) — H-1 monotone-repair clamp at `:3587`, H-4 residual floor at `:5347`, H-5 pervasive identity-carrier branching, M-1 try/except swallows around `runtime.selected_y_prefix` — are all on the remediation list. None are precedent.
 
 When in doubt: **let X=0 produce NaN, let missing prefixes refuse cleanly, let downstream consumers see the absent state**. Algebraic degenerate is the contract. The seam invariant (§3 below) is what makes it work end-to-end.
 
@@ -70,7 +70,7 @@ When in doubt: **let X=0 produce NaN, let missing prefixes refuse cleanly, let d
 
 Identity-carrier mode (`population_root == denominator_node` — i.e. `window()` and `cohort(A=X)`) used to bypass steps 2-7 and read prefixes directly off `engine_cohorts.obs_x/obs_y` via a rescue branch in the reducer. Atom-3 stage 4 (May 2026) deleted that branch. **All modes — identity carrier and active — now run through the full pipeline (steps 1-8) and read prefixes from `SelectedAClockEvidence`.** When the candidate pool contains no `subject_from = pop_root` rows with `slice_family = WINDOW`, the prefix-construction layers (2-6) refuse and the reducer reports zero-prefix-from-prior (visible degradation, not silent rescue).
 
-**Known structural debt against this unified model** (`docs/current/cohort-maturity-evidence-coverage-design.md`, [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) H-5):
+**Known structural debt against this unified model** (`docs/current/cohort-maturity-evidence-coverage-design.md`, [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) H-5):
 
 - The reducer (`_selected_cohort_group_rate_draws`) still has ~10 `if identity_carrier:` branches for Pop D / Pop C arithmetic. These compute correct degenerate values but are case-forks against the AP58 contract; the target factoring expresses them as `composed_carrier=None ⇒ identity reach=1, Dirac arrival` flowing through one formula.
 
@@ -136,7 +136,7 @@ The terminal subject primitive's per-source-day rate-attributed cumulative count
 
 Single-hop is chain-of-length-1: the first primitive is also the terminal. Composition pattern uniform. §A.1 §159.
 
-Two evaluation modes coexist (`use_evidence_local_ledger=True` for identity carrier, deterministic rate push-forward; `False` for active, M_select-keyed propagation). The audit's H-1 monotone-repair clamp lives at `:3587` inside this builder — see [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md).
+Two evaluation modes coexist (`use_evidence_local_ledger=True` for identity carrier, deterministic rate push-forward; `False` for active, M_select-keyed propagation). The audit's H-1 monotone-repair clamp lives at `:3587` inside this builder — see [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md).
 
 ### 2.4 `SelectedAClockEvidence` — the cell surface
 
@@ -185,13 +185,14 @@ Notable code-level subtleties:
 
 ## 5. Row schema — three projection surfaces
 
-`_project_runtime_rows` emits one row per `τ ∈ [0, max_tau]` with three independent projection surfaces:
+`_project_runtime_rows` emits one row per `τ ∈ [0, max_tau]` with three independent projection surfaces. Terminology follows the frontier-conditioned chart-surface proposal, [Appendix B](../project-generalise/frontier-conditioned-chart-surface-proposal-21-May-26.md#appendix-b-standard-terminology-and-display-mapping) — **E, F, and E+F name display modes only; `ef_*` / `f_*` / overlay name internal surfaces**:
 
-| Row surface | Source | Use |
+| Row surface | Source | Display mapping |
 |---|---|---|
-| `midpoint`, `fan_*`, `fan_bands`, `projected_rate` | `_selected_cohort_group_rate_draws` | **E+F mode** — data-conditioned trajectory |
-| `model_midpoint`, `model_fan_*`, `model_bands` | `_composed_pair_per_tau_rate_draws` on `runtime.unconditioned_overlays['predictive']` | **F mode** — predictive (κ-inflated) overlay, wide model fan |
-| `model_curve_midpoint`, `model_curve_*`, `model_curve_bands` | `_composed_pair_per_tau_rate_draws` on `runtime.unconditioned_overlays['epistemic']` | Optional model-curve overlay (tight bands) |
+| `midpoint`, `fan_*`, `fan_bands`, `projected_rate` | `selected_projection.ef_rate_draws` (the spine's FC continuation surface, predictive operator basis) | **Forecast layer in E+F mode**. Prefix-pinned to strict evidence through each Cohort's frontier; predictive fan opens only after the frontier. Rendered in epochs B/C; suppressed in epoch A. |
+| `forecast_x`, `forecast_y` | `selected_projection.ef_forecast_x` / `ef_forecast_y` (future residual emitted directly by the FC continuation DP) | Active-carrier future-only residual count fields. No post-hoc subtraction of strict evidence from full model means. |
+| `model_midpoint`, `model_fan_*`, `model_bands` | `selected_projection.f_rate_draws` (the spine's unspliced query-conditioned model surface, epistemic operator basis) | **Conditioned model surface; F mode renders this**. |
+| `model_curve_midpoint`, `model_curve_*`, `model_curve_bands` | `_composed_pair_per_tau_rate_draws` on `runtime.unconditioned_overlays['epistemic']` | **Optional model overlay** — existing unconditioned model curve with epistemic bands. Not a display mode; opt-in via the display setting `show_model_curve` and rendered alongside the active mode. |
 
 Observed-evidence fields are separate from projection:
 
@@ -200,12 +201,12 @@ Observed-evidence fields are separate from projection:
 | `rate` | `Σy/Σx` from forward-filled `engine_cohorts` prefixes | `Σy/Σx` from `SelectedAClockEvidence.aggregate_by_tau` |
 | `rate_pure` | Same | Frozen at the A/B boundary: `sum_y / boundary_x` for `τ > tau_solid_max` |
 | `evidence_x`, `evidence_y` | From `engine_cohorts` | From selected cells (carrier-only X, rate-attributed Y) |
-| `evidence_x_coverage`, `evidence_y_coverage`, `coverage` | From per-cohort capped placement-share sums | Same algebra; subject placement via carrier backmap |
+| `coverage` | Simple Cohort applicability scalar for display opacity | Same |
 | `cohorts_covered_base`, `cohorts_covered_projected` | `n_cohorts` reporting observation at-or-before τ | Same |
 | `rate_blended` | `empirical × coverage + model_midpoint × (1 − coverage)` — uniform expression across A/B/C epochs | Same |
-| `forecast_y`, `forecast_x` | None (residual semantics only meaningful for active) | `projected_y − evidence_y` (future-only residual) |
+| `forecast_y`, `forecast_x` | None (residual semantics only meaningful for active) | `ef_forecast_y` / `ef_forecast_x` (future-only residual emitted directly by the FC continuation DP — no post-hoc subtraction from full model means) |
 
-The `rate_blended` formula is the one cross-cutting subtlety the row builder owns: the **applicable** denominator is per-τ (`Σ 1{tau_max_c ≥ τ}` over cohort_list), the **coverage** numerator is `n_mature` from the aggregate bucket, and the **empirical** input is `midpoint` from the reducer (NOT `rate` — see comment block at `_project_runtime_rows:5363-5412` for the algebraic rationale: window-mode `rate` plateaus at `subject_cdf(frontier) · span_p` because Pop C is empty in the data, which sits above `model_midpoint = subject_cdf(τ) · span_p` while it's still climbing; blending those two with `cov < 1` produces a downward step at `τ = tau_solid_max + 1`. The reducer's `midpoint` adds the Pop D residual and extends empirical onto the same `subject_cdf · span_p` trajectory the model lives on).
+The old `rate_blended` and terminal-coverage fields have been removed. E mode reads strict evidence; E+F reads the strict evidence layer plus the FC forecast layer (`ef_*`) per the display-mode mapping in §6.
 
 `p_infinity_mean`, `p_infinity_sd`, `p_infinity_sd_epistemic` come from `ResolvedCFRuntime.public_moments`. They are scalar subject-span moments — **not** a promise that the selected-cohort group trajectory converges numerically to the final row midpoint.
 
@@ -215,13 +216,26 @@ The `rate_blended` formula is the one cross-cutting subtlety the row builder own
 
 Three epochs run across τ:
 
-- **Epoch A** (`τ ≤ tau_solid_max`): every selected cohort is observed. `rate` is the solid empirical line. `midpoint`/`fan_*` agree with `rate` to particle-quantile noise; the FE filters them out of A so the solid line owns the epoch.
-- **Epoch B** (`tau_solid_max < τ ≤ tau_future_max`): some cohorts have aged past their `tau_observed` but the oldest cohort hasn't aged out yet. `rate` continues with forward-fill; `midpoint`/`fan_*` from the reducer extend through Pop D/Pop C; `rate_blended` mixes both by `coverage`.
-- **Epoch C** (`τ > tau_future_max`): every cohort has aged past `tau_max`. `rate` is `None`; only projection surfaces exist.
+- **Epoch A** (`τ ≤ tau_solid_max`): every selected cohort is observed. `rate` is the solid empirical line. `midpoint`/`fan_*` (the FC continuation `ef_*`) are prefix-pinned to strict evidence here by construction, so they coincide with `rate` to particle-quantile noise; the output layer suppresses the forecast layer in epoch A so the solid evidence line owns the epoch.
+- **Epoch B** (`tau_solid_max < τ ≤ tau_future_max`): some cohorts have aged past their `tau_observed` but the oldest cohort hasn't aged out yet. `rate` continues with forward-fill (dwindling cohort coverage); `midpoint`/`fan_*` from the FC continuation extend through the unresolved future as the predictive fan opens past each Cohort's frontier.
+- **Epoch C** (`τ > tau_future_max`): every cohort has aged past `tau_max`. `rate` is `None`; only the forecast layer (and the optional model overlay, if enabled) is rendered.
 
 `tau_solid_max` is `min(frontier_age)` across **selected** cohorts (the shallowest observed depth, not the youngest cohort's frontier — staleness varies per anchor). `tau_future_max` is `(sweep_to_d − anchor_from_d).days` — the oldest cohort's calendar age. Both are intentionally decoupled from per-cohort `data_retrieved_at` to preserve the `tau_solid_max ≤ tau_future_max` invariant the row builder and chart both rely on.
 
 When `selected_a_clock_evidence` is present with cells, `row_tau_solid_max` and `row_tau_future_max` are recomputed from the selected frontier bounds (`frontier_tau_bounds`). The frontier on the selected A-clock can differ from the frame-derived frontier.
+
+### 6.1 Display-mode epoch mapping
+
+Per the frontier-conditioned chart-surface proposal, [Appendix B](../project-generalise/frontier-conditioned-chart-surface-proposal-21-May-26.md#appendix-b-standard-terminology-and-display-mapping):
+
+| Display mode | Epoch A | Epoch B | Epoch C |
+|---|---|---|---|
+| **E mode** | strict evidence surface | strict evidence surface (cohort coverage dwindles) | no evidence layer |
+| **F mode** | conditioned model surface (`f_*`) | conditioned model surface (`f_*`) | conditioned model surface (`f_*`) |
+| **E+F mode** | evidence layer only (forecast layer suppressed in epoch A) | evidence layer + forecast layer (FC `ef_*`) | forecast layer only (FC `ef_*`) |
+| **Optional model overlay** | overlay if enabled | overlay if enabled | overlay if enabled |
+
+The FC surface (`ef_*`) is **generated across the full tau sweep regardless of display gating**. Epoch-A suppression of the forecast layer is an output-layer rendering choice, not a data gap. Every `ef_*` draw is pinned to strict evidence through each Cohort's frontier and continues only the unresolved future on the predictive operator basis, so prefix-pinning, continuity, and fan-opening are testable directly from the generated arrays.
 
 ---
 
@@ -286,6 +300,6 @@ Without `--diag` these are absent — the production payload is much smaller.
 - [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) — what produces the `ResolvedCFRuntime` this pipeline consumes.
 - [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) — runtime fields the row builder reads.
 - [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) — semantic contract, Pop C / Pop D / factorised vs gross-fitted.
-- [CF_DEFENSIVE_FINDINGS.md](CF_DEFENSIVE_FINDINGS.md) — known defensive-code violations in the row pipeline (monotone-repair clamp H-1; residual clamp H-4; identity-carrier branching H-5).
+- [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) — known defensive-code violations in the row pipeline (monotone-repair clamp H-1; residual clamp H-4; identity-carrier branching H-5).
 - [CF_REFACTOR_TRACKERS.md](CF_REFACTOR_TRACKERS.md) — the in-flight design trackers the code cites by `§`-number.
 - [FORECAST_RUNTIME_SEMANTIC_PSEUDOCODE.md](FORECAST_RUNTIME_SEMANTIC_PSEUDOCODE.md) §A.7–A.9 — semantic pseudo-code for the selected-cohort reduction and row projection.

@@ -1145,8 +1145,8 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
     },
     {
       key: 'show_model_curve',
-      label: 'Model curve',
-      shortLabel: 'Model',
+      label: 'Model overlay',
+      shortLabel: 'Overlay',
       type: 'checkbox',
       defaultValue: false,
       propsPanel: true,

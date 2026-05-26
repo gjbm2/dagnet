@@ -57,6 +57,7 @@ edges:
     onset: 0.0
     mu: 0.5
     sigma: 0.3
+    latency_parameter: true
 
   ft-gate-to-hub:
     from: ft-gate
@@ -65,6 +66,7 @@ edges:
     onset: 0.0
     mu: 0.0
     sigma: 0.0
+    latency_parameter: false
 
   ft-hub-to-target:
     from: ft-hub
@@ -73,6 +75,7 @@ edges:
     onset: 3.0
     mu: 2.5
     sigma: 0.7
+    latency_parameter: true
 
   ft-target-to-outcome:
     from: ft-target
@@ -81,6 +84,7 @@ edges:
     onset: 1.0
     mu: 1.2
     sigma: 0.4
+    latency_parameter: true
 
   ft-anchor-to-alt:
     from: ft-anchor
@@ -89,6 +93,7 @@ edges:
     onset: 0.0
     mu: 0.7
     sigma: 0.4
+    latency_parameter: true
 
   ft-alt-to-hub:
     from: ft-alt
@@ -97,6 +102,7 @@ edges:
     onset: 1.0
     mu: 1.5
     sigma: 0.5
+    latency_parameter: true
 
 simulation:
   mean_daily_traffic: 2000

@@ -100,6 +100,7 @@ entries:
       - "graph-editor/lib/runner/span_adapter.py"
       - "graph-editor/lib/runner/edge_binding_descriptor.py"
     required_reads:
+      - docs/current/codebase/CF_ENGINE_DISCIPLINE.md
       - docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md
       - docs/current/codebase/FORECAST_RUNTIME_ARCHITECTURE.md
       - docs/current/codebase/CF_PRIMITIVE_SUBSTRATE.md
@@ -110,11 +111,13 @@ entries:
       and row projection. This subsystem is delicate and complex, with
       subtle semantic invariants documented in the canonical trio plus
       the CF substrate / row pipeline docs. Required reading is the
-      load-bearing core: semantics (the rules and the canonical
-      "Implementation invariants" section), runtime (what the code
-      does and why), then the CF_PRIMITIVE_SUBSTRATE and CF_ROW_PIPELINE
-      docs that resolve the §A.*-style references peppering the code.
-      INVARIANTS I-45, I-46, I-47, I-48 are load-bearing for this scope.
+      load-bearing core: CF_ENGINE_DISCIPLINE (the engine-coding rules
+      — agents in this scope code FAR too defensively without it),
+      semantics (the rules and the canonical "Implementation invariants"
+      section), runtime (what the code does and why), then the
+      CF_PRIMITIVE_SUBSTRATE and CF_ROW_PIPELINE docs that resolve the
+      §A.*-style references peppering the code. INVARIANTS I-45, I-46,
+      I-47, I-48 are load-bearing for this scope.
 
       Topic-specific docs — consult when touching the relevant area,
       not required by the gate:
@@ -122,7 +125,8 @@ entries:
         - CF_HOLD_OUT_ENGINES.md — hold-out engine logic
         - CF_RESIDUAL_GUARD.md — residual guard logic
         - DRAW_FAMILY_KEYING.md — draw-family keying
-        - CF_DEFENSIVE_FINDINGS.md — investigation log
+        - ../project-generalise/cf-defensive-findings.md — tracker of
+          known defensive-code violations (debt being retired)
         - CF_REFACTOR_TRACKERS.md — refactor status / housekeeping
         - BE_RUNNER_CLUSTER.md — broader cluster placement context
         - STATS_SUBSYSTEMS.md — stats umbrella
@@ -133,6 +137,7 @@ entries:
     paths:
       - "graph-editor/lib/runner/**"
     required_reads:
+      - docs/current/codebase/CF_ENGINE_DISCIPLINE.md
       - docs/current/codebase/BE_RUNNER_CLUSTER.md
       - docs/current/codebase/STATS_SUBSYSTEMS.md
       - docs/current/codebase/FE_BE_STATS_PARALLELISM.md

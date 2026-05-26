@@ -670,8 +670,8 @@ def test_v3_empty_frames_window_mode_uses_latency_curve():
     assert rows, 'v3 returned no rows for empty-frame window fallback'
     by_tau = {row['tau_days']: row for row in rows}
     assert by_tau[0]['midpoint'] == pytest.approx(0.0, abs=1e-6)
-    assert by_tau[10]['evidence_x'] is None
-    assert by_tau[10]['evidence_y'] is None
+    assert by_tau[10]['evidence_x'] == 0.0
+    assert by_tau[10]['evidence_y'] == 0.0
     projection_basis = rows[0].get('_projection_basis') or []
     assert projection_basis
     assert projection_basis[0]['model_mass_source'] == 'unit_empty_frames_rate_basis'
@@ -721,11 +721,15 @@ def test_v3_empty_frames_window_mode_matches_truth_lognormal_curve():
     )
     graph = _build_single_edge_graph(
         p_mean=truth['p'],
-        alpha=truth['p'] * 1000.0,
-        beta=(1.0 - truth['p']) * 1000.0,
+        alpha=truth['p'] * 1_000_000.0,
+        beta=(1.0 - truth['p']) * 1_000_000.0,
+        p_sd=0.0,
         mu=truth['mu'],
         sigma=truth['sigma'],
         onset=truth['onset'],
+        mu_sd=0.0,
+        sigma_sd=0.0,
+        onset_sd=0.0,
         t95=_approx_shifted_lognormal_t95(
             onset=truth['onset'],
             mu=truth['mu'],
@@ -827,8 +831,8 @@ def test_v3_empty_frames_cohort_mode_preserves_upstream_carrier():
 
     window_by_tau = {row['tau_days']: row for row in window_rows}
     cohort_by_tau = {row['tau_days']: row for row in cohort_rows}
-    assert cohort_by_tau[12]['evidence_x'] is None
-    assert cohort_by_tau[12]['evidence_y'] is None
+    assert cohort_by_tau[12]['evidence_x'] == 0.0
+    assert cohort_by_tau[12]['evidence_y'] == 0.0
     projection_basis = cohort_rows[0].get('_projection_basis') or []
     assert projection_basis
     assert projection_basis[0]['model_mass_source'] == 'empty_frames_prior'
@@ -882,6 +886,8 @@ def test_v3_empty_frames_cohort_mode_matches_truth_fw_curve():
         upstream_sigma=upstream_truth['sigma'],
         upstream_onset=upstream_truth['onset'],
         target_p=target_truth['p'],
+        target_alpha=target_truth['p'] * 50.0,
+        target_beta=(1.0 - target_truth['p']) * 50.0,
         target_mu=target_truth['mu'],
         target_sigma=target_truth['sigma'],
         target_onset=target_truth['onset'],

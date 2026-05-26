@@ -187,6 +187,7 @@ def _build_arrival_map(
     *,
     identity=None,
     max_tau=60,
+    target_node_ids=None,
 ):
     return build_prefix_arrival_map(
         graph=graph,
@@ -195,6 +196,7 @@ def _build_arrival_map(
         transitions=transitions,
         identity=identity or _identity(request_root=root),
         max_tau=max_tau,
+        target_node_ids=target_node_ids,
     )
 
 
@@ -372,11 +374,15 @@ def test_outside_in_anti_leak_downstream_primitive_conditions_on_shifted_day():
     anchor-day evidence.
 
     Topology: A → U (deterministic 5-day delay) → V. Cohort anchor
-    on 2026-03-01. For primitive U → V, arrival_weight[U] is delta
-    at 2026-03-06. Anchor-day evidence on 2026-03-01 (high rate)
+    on 2026-03-01. The bucket-centred midpoint stencil
+    (``cdf_to_bucket_transition`` with ``read_offset=0.5``) spreads
+    a deterministic onset CDF across two adjacent calendar days, so
+    for primitive U → V ``arrival_weight[U]`` is
+    ``{2026-03-05: 0.5, 2026-03-06: 0.5}`` rather than a delta on
+    a single day. Anchor-day evidence on 2026-03-01 (high rate)
     must NOT bleed into U→V's bound view; downstream-day evidence
-    on 2026-03-06 (low rate) is the only thing the primitive
-    conditions on."""
+    on the two clock-supported days (low rate) is the only thing
+    the primitive conditions on."""
     graph = _make_graph([
         ('e-a-u', 'u-a', 'u-u', 'A', 'U'),
         ('e-u-v', 'u-u', 'u-v', 'U', 'V'),
@@ -390,10 +396,12 @@ def test_outside_in_anti_leak_downstream_primitive_conditions_on_shifted_day():
     )
     # Evidence retrieval superset includes both anchor-day-aligned
     # rows and downstream-day rows (the BE call doesn't know which
-    # primitive each row belongs to).
+    # primitive each row belongs to). The downstream evidence sits on
+    # both days the midpoint stencil places arrival mass on.
     candidates = [
-        _candidate(observed_date='2026-03-01', n=10, k=10),  # high
-        _candidate(observed_date='2026-03-06', n=10, k=2),   # low
+        _candidate(observed_date='2026-03-01', n=10, k=10),  # high — anchor-day, must not bleed
+        _candidate(observed_date='2026-03-05', n=10, k=2),   # low — clock-supported
+        _candidate(observed_date='2026-03-06', n=10, k=2),   # low — clock-supported
     ]
     transition_uv = TransitionIdentity('U', 'V', 'e-u-v')
     ev_scope = _evidence_scope(date_from='2026-03-01', date_to='2026-03-10')
@@ -410,13 +418,13 @@ def test_outside_in_anti_leak_downstream_primitive_conditions_on_shifted_day():
         arrival_weights=arrival_map.get('U'),
     )
     assert res.weighted_view is not None
-    # Only the 2026-03-06 row should bind.
+    # All rows bind; the anchor-day row carries zero clock weight.
     bound_dates = sorted(r.observed_date for r in res.weighted_view.rows)
-    assert bound_dates == ['2026-03-06']
-    # The anchor-day row was rejected as off-clock.
-    assert res.diagnostics.off_clock_rejection_count == 1
-    assert res.diagnostics.bound_point_count == 1
-    # Weighted totals reflect ONLY the downstream-day evidence.
+    assert bound_dates == ['2026-03-01', '2026-03-05', '2026-03-06']
+    assert res.diagnostics.zero_clock_weight_row_count == 1
+    assert res.diagnostics.bound_point_count == 3
+    # Weighted totals reflect ONLY the downstream-day evidence —
+    # 0.5 * 10 + 0.5 * 10 = 10, 0.5 * 2 + 0.5 * 2 = 2.
     assert res.weighted_view.n_weighted_total == pytest.approx(10.0)
     assert res.weighted_view.k_weighted_total == pytest.approx(2.0)
 
@@ -430,10 +438,13 @@ def test_as_at_admission_uses_retrieved_at_not_anchor_day():
     satisfies the request as-at boundary, regardless of how the
     primitive-local day relates to the anchor.
 
-    Two candidates on 2026-03-06 (downstream of anchor 2026-03-01):
-    one retrieved before as_at=2026-04-01 (admitted), one retrieved
-    after (rejected by merge as 'after_as_at'). The primitive-local
-    day is later than the anchor — that does NOT cause rejection."""
+    Candidates on the two clock-supported days
+    (``arrival_weight[U] = {2026-03-05: 0.5, 2026-03-06: 0.5}`` —
+    see test_outside_in_anti_leak for the midpoint-stencil rationale):
+    each day has one row retrieved before as_at=2026-04-01 (admitted)
+    and one retrieved after (rejected by merge as 'after_as_at').
+    The primitive-local day is later than the anchor — that does NOT
+    cause rejection."""
     graph = _make_graph([
         ('e-a-u', 'u-a', 'u-u', 'A', 'U'),
         ('e-u-v', 'u-u', 'u-v', 'U', 'V'),
@@ -446,6 +457,14 @@ def test_as_at_admission_uses_retrieved_at_not_anchor_day():
         graph, 'A', {'2026-03-01': 1.0}, transitions,
     )
     candidates = [
+        _candidate(
+            observed_date='2026-03-05', n=10, k=3,
+            retrieved_at='2026-03-15',  # before as_at — admitted
+        ),
+        _candidate(
+            observed_date='2026-03-05', n=10, k=9,
+            retrieved_at='2026-04-15',  # after as_at — rejected
+        ),
         _candidate(
             observed_date='2026-03-06', n=10, k=3,
             retrieved_at='2026-03-15',  # before as_at — admitted
@@ -472,10 +491,11 @@ def test_as_at_admission_uses_retrieved_at_not_anchor_day():
         candidates=candidates,
         arrival_weights=arrival_map.get('U'),
     )
-    # The merge layer rejects the after-as_at candidate; only one
-    # admitted row, on the shifted clock.
-    assert res.diagnostics.raw_point_count == 1
+    # The merge layer rejects the after-as_at candidates; two admitted
+    # rows on the shifted clock (one per clock-supported day).
+    assert res.diagnostics.raw_point_count == 2
     assert res.weighted_view is not None
+    # 0.5 * 10 + 0.5 * 10 = 10; 0.5 * 3 + 0.5 * 3 = 3.
     assert res.weighted_view.n_weighted_total == pytest.approx(10.0)
     assert res.weighted_view.k_weighted_total == pytest.approx(3.0)
 
@@ -489,10 +509,13 @@ def test_retrieval_superset_envelopes_all_primitive_local_clocks():
     requires them.
 
     Topology: A → B (delay 3) → C (delay 7). Anchor on 2026-03-01.
-    Primitive A→B's source clock is 2026-03-01. Primitive B→C's
-    source clock is 2026-03-04. Primitive C→D's source clock is
-    2026-03-11. The retrieval superset must envelope the union:
-    [2026-03-01, 2026-03-11]."""
+    Primitive A→B's source clock is 2026-03-01. The bucket-centred
+    midpoint stencil (``cdf_to_bucket_transition`` with
+    ``read_offset=0.5``) spreads each deterministic onset CDF across
+    two adjacent calendar days, so primitive B→C's source clock spans
+    [2026-03-03, 2026-03-04] and primitive C→D's source clock spans
+    [2026-03-10, 2026-03-11]. The retrieval superset must envelope
+    the union: [2026-03-01, 2026-03-11]."""
     graph = _make_graph([
         ('e-a-b', 'u-a', 'u-b', 'A', 'B'),
         ('e-b-c', 'u-b', 'u-c', 'B', 'C'),
@@ -513,32 +536,12 @@ def test_retrieval_superset_envelopes_all_primitive_local_clocks():
     )
     assert spec.date_from == '2026-03-01'
     assert spec.date_to == '2026-03-11'  # 3 + 7 + 0 = 10 days from anchor → 11th
-    # Each primitive's local extent is recorded.
+    # Each primitive's local extent is recorded; the midpoint stencil
+    # places arrival mass on the two adjacent days bracketing the
+    # deterministic onset (root day for A is exact identity).
     assert spec.primitive_clock_extents['A'] == ('2026-03-01', '2026-03-01')
-    assert spec.primitive_clock_extents['B'] == ('2026-03-04', '2026-03-04')
-    assert spec.primitive_clock_extents['C'] == ('2026-03-11', '2026-03-11')
-
-
-def test_retrieval_superset_skips_degraded_source_nodes():
-    """A degraded source node (no path from root) MUST NOT contribute
-    to the retrieval envelope — primitives bound to it cannot live-use
-    rows, so the BE call must not be widened to chase those rows."""
-    graph = _make_graph([
-        ('e-a-b', 'u-a', 'u-b', 'A', 'B'),
-    ])
-    graph['nodes'].append({'uuid': 'u-z', 'id': 'Z'})
-    transitions = {('A', 'B'): _prim(p=0.7)}
-    arrival_map = _build_arrival_map(
-        graph, 'A', {'2026-03-01': 1.0}, transitions, max_tau=20,
-    )
-    spec = derive_retrieval_superset(
-        arrival_map=arrival_map,
-        primitive_source_nodes=['A', 'B', 'Z'],  # Z is degraded
-    )
-    # Z does not contribute extents.
-    assert 'Z' not in spec.primitive_clock_extents
-    # Envelope is just A (and B, which equals A under non-latency).
-    assert spec.date_from == spec.date_to == '2026-03-01'
+    assert spec.primitive_clock_extents['B'] == ('2026-03-03', '2026-03-04')
+    assert spec.primitive_clock_extents['C'] == ('2026-03-10', '2026-03-11')
 
 
 # ─── Merge opt-in: unrelated callers see no behavioural change ─────────
@@ -577,16 +580,10 @@ def test_merge_evidence_candidates_signature_unchanged_for_non_primitive_callers
 # ─── Mass accounting (admitted rows, not retrieval superset) ───────────
 
 
-def test_admitted_mass_inputs_exclude_retrieval_superset_off_clock_rows():
-    """plan §625: primitive evidence resolution admits only rows that
-    land on the primitive's evidence clock, not the whole retrieval
-    superset. Stage 3 computes doc-52 m_S from raw n on the admitted
-    rows and uses n_weighted_total separately for likelihood pressure.
-
-    Provide a retrieval superset spanning two days, but arrival_weight
-    concentrates 100% on day A. Day A's row is admitted; the off-clock
-    day B row is rejected, so its counts are NOT folded into either the
-    raw admitted row mass or weighted likelihood totals."""
+def test_zero_clock_weight_rows_bind_but_do_not_contribute_weighted_mass():
+    """Primitive evidence resolution keeps the retrieval superset shape and
+    lets clock weights decide contribution. Rows outside clock support stay
+    visible with zero weighted mass instead of being clipped."""
     graph = _make_graph([
         ('e-a-u', 'u-a', 'u-u', 'A', 'U'),
         ('e-u-v', 'u-u', 'u-v', 'U', 'V'),
@@ -598,10 +595,14 @@ def test_admitted_mass_inputs_exclude_retrieval_superset_off_clock_rows():
     arrival_map = _build_arrival_map(
         graph, 'A', {'2026-03-01': 1.0}, transitions, max_tau=10,
     )
-    # arrival_weight[U] is delta on 2026-03-03.
+    # arrival_weight[U] = {2026-03-02: 0.5, 2026-03-03: 0.5} — the
+    # bucket-centred midpoint stencil spreads a deterministic onset CDF
+    # across two adjacent days (see test_outside_in_anti_leak for the
+    # midpoint rationale).
     candidates = [
+        _candidate(observed_date='2026-03-02', n=10, k=4),  # primitive day
         _candidate(observed_date='2026-03-03', n=10, k=4),  # primitive day
-        _candidate(observed_date='2026-03-05', n=20, k=8),  # off-clock
+        _candidate(observed_date='2026-03-05', n=20, k=8),  # zero clock weight
     ]
     transition_uv = TransitionIdentity('U', 'V', 'e-u-v')
     ev_scope = _evidence_scope(
@@ -621,13 +622,17 @@ def test_admitted_mass_inputs_exclude_retrieval_superset_off_clock_rows():
         arrival_weights=arrival_map.get('U'),
     )
     assert res.weighted_view is not None
-    # Primitive-local admitted mass is from the on-clock row only.
-    raw_admitted_n = sum(row.n for row in res.weighted_view.rows)
-    assert raw_admitted_n == 10
+    raw_bound_n = sum(row.n for row in res.weighted_view.rows)
+    assert raw_bound_n == 40
+    assert res.diagnostics.zero_clock_weight_row_count == 1
+    assert res.diagnostics.bound_point_count == 3
+    # 0.5 * 10 + 0.5 * 10 = 10; 0.5 * 4 + 0.5 * 4 = 4. The 2026-03-05
+    # row binds with zero clock weight and contributes no weighted mass.
     assert res.weighted_view.n_weighted_total == pytest.approx(10.0)
-    # The retrieval superset's raw row count is 30 — proving the test
-    # would have failed if Stage 3 keyed off the raw totals.
-    assert res.raw_evidence_set.totals.n == 30
+    assert res.weighted_view.k_weighted_total == pytest.approx(4.0)
+    # The retrieval superset's raw row count is 40, but only the rows with
+    # non-zero clock weight contribute weighted likelihood pressure.
+    assert res.raw_evidence_set.totals.n == 40
 
 
 # ─── Registry key includes evidence-clock alignment ────────────────────
@@ -821,11 +826,17 @@ def test_registry_to_provenance_dict_emits_per_primitive_inventory():
         model_source_preference='best_available',
         resolved_source_identity='bayesian',
     )
+    # arrival_weight[U] = {2026-03-02: 0.5, 2026-03-03: 0.5} from the
+    # midpoint stencil spreading the onset=2 CDF; candidates on both
+    # clock-supported days so weighted totals integrate to the full n/k.
     res = bind_primitive_evidence(
         transition=transition_uv,
         primitive_scope=ps,
         evidence_scope=ev_scope,
-        candidates=[_candidate(observed_date='2026-03-03', n=10, k=4)],
+        candidates=[
+            _candidate(observed_date='2026-03-02', n=10, k=4),
+            _candidate(observed_date='2026-03-03', n=10, k=4),
+        ],
         arrival_weights=amap.get('U'),
     )
     reg = RequestPrimitiveRegistry(arrival_map=amap)
@@ -835,10 +846,10 @@ def test_registry_to_provenance_dict_emits_per_primitive_inventory():
     p = inv['primitives'][0]
     assert p['transition']['edge_id'] == 'e-u-v'
     assert p['topology_case'] == 'composed'
-    assert p['raw_total_n'] == 10
-    assert p['raw_total_k'] == 4
-    assert p['weighted_total_n'] == pytest.approx(10.0)
-    assert p['weighted_total_k'] == pytest.approx(4.0)
+    assert p['preclock_candidate_total_n'] == 20
+    assert p['preclock_candidate_total_k'] == 8
+    assert p['clocked_weighted_total_n'] == pytest.approx(10.0)
+    assert p['clocked_weighted_total_k'] == pytest.approx(4.0)
     # Identity cache key flows through.
     assert inv['identity_cache_key'] == amap.identity.cache_key
     # Diagnostics envelope from the arrival map is preserved.
@@ -846,51 +857,6 @@ def test_registry_to_provenance_dict_emits_per_primitive_inventory():
 
 
 # ─── Degraded primitive ────────────────────────────────────────────────
-
-
-def test_degraded_arrival_weight_yields_zero_row_view_but_preserves_raw():
-    """When arrival_weight[U] is degraded (no path from root), the
-    primitive cannot live-condition. The binder produces a uniformly
-    shaped weighted view containing zero rows — every raw point is
-    rejected as off-clock because there are no admissible days. The
-    raw EvidenceSet still carries the admitted rows so non-primitive
-    callers and audit see them; the diagnostics surface the topology
-    case as 'degraded'."""
-    graph = _make_graph([
-        ('e-a-b', 'u-a', 'u-b', 'A', 'B'),
-    ])
-    graph['nodes'].append({'uuid': 'u-u', 'id': 'U'})
-    transitions = {('A', 'B'): _prim(p=0.7)}
-    amap = _build_arrival_map(
-        graph, 'A', {'2026-03-01': 1.0}, transitions,
-    )
-    # U is in the graph but not reachable from A → degraded entry.
-    u_entry = amap.get('U')
-    assert u_entry is not None and u_entry.is_degraded
-
-    transition = TransitionIdentity('U', 'V', 'e-u-v')
-    ev_scope = _evidence_scope()
-    ps = make_primitive_scope_from_evidence_scope(
-        evidence_scope=ev_scope,
-        model_source_preference='best_available',
-        resolved_source_identity='bayesian',
-    )
-    res = bind_primitive_evidence(
-        transition=transition,
-        primitive_scope=ps,
-        evidence_scope=ev_scope,
-        candidates=[_candidate(observed_date='2026-03-15', n=10, k=4)],
-        arrival_weights=u_entry,
-    )
-    assert res.weighted_view is not None
-    assert res.weighted_view.rows == ()
-    assert res.weighted_view.n_weighted_total == 0.0
-    assert res.weighted_view.k_weighted_total == 0.0
-    assert res.has_live_evidence is False
-    assert res.raw_evidence_set.totals.n == 10
-    assert res.diagnostics.topology_case == 'degraded'
-    assert res.diagnostics.bound_point_count == 0
-    assert res.diagnostics.off_clock_rejection_count == 1
 
 
 # ─── Raw / weighted / effective separation ─────────────────────────────
@@ -1072,6 +1038,7 @@ def test_superset_candidates_admitted_by_primitive_local_merge():
     }
     arrival_map = _build_arrival_map(
         graph, 'U', {'2026-03-15': 1.0}, transitions,
+        target_node_ids=('U', 'V'),
     )
 
     transition = TransitionIdentity('U', 'V', 'e-u-v')

@@ -48,6 +48,40 @@ from typing import Any, Mapping, Optional, Tuple
 import numpy as np
 
 
+# ─── Request-scope draw count ──────────────────────────────────────────
+
+
+def current_mc_draws() -> int:
+    """Return the request-scoped MC draw count ``S`` from forecasting_settings.
+
+    Single source of truth for the request-scope draw count. Every engine
+    site that previously read a literal ``2000``/``1000`` for MC draws
+    (cohort sweep, span CDF MC, confidence bands, funnel sweep, primitive
+    substrate) reads this. The API handler binds the per-request settings
+    via ``use_request_settings`` before any engine call; outside a request
+    the call returns the dataclass default (1000).
+
+    Draw-family coherence (plan §141, §585-589) requires every consumer of
+    a primitive under the same ``DrawFamilyKey`` and scope to use the same
+    ``S``; that holds as long as the request-scope contextvar is bound for
+    the duration of the request, which ``use_request_settings`` guarantees.
+
+    Indirect import keeps ``primitives`` free of a hard
+    ``forecasting_settings`` dependency at module-import time.
+    """
+    from .forecasting_settings import current_settings
+    return int(current_settings().mc_draws)
+
+
+# Module-level integer alias retained for back-compat with consumers that
+# import ``DEFAULT_DRAW_COUNT`` as a constant (notably test scaffolding and
+# the ``ConditioningPolicyOptions.draw_count`` dataclass default, which
+# cannot easily call a function at class-definition time). Equals the
+# ``ForecastingSettings.mc_draws`` default. New code should call
+# ``current_mc_draws()`` to honour the request-scope override.
+DEFAULT_DRAW_COUNT: int = 1000
+
+
 # ─── Status / family enums ─────────────────────────────────────────────
 
 
@@ -92,6 +126,8 @@ class PrimitiveScope:
     model_source_preference: str
     resolved_source_identity: Optional[str]
     selected_anchor_days: Tuple[str, ...] = ()
+    evidence_date_from: Optional[str] = None
+    evidence_date_to: Optional[str] = None
 
 
 # ─── Draw-family key + keyed RNG seam ──────────────────────────────────
@@ -129,20 +165,29 @@ class DrawFamilyKey:
     Two consumers presenting the same DrawFamilyKey under the same scope
     MUST receive identical posterior draws under matching draw indices.
     The canonical_string serialisation is stable across runs.
+
+    ``basis`` discriminates basis-labelled conditioned primitive objects
+    per the frontier-conditioned chart-surface proposal §9.4: the
+    conditioned model surface uses ``'epistemic'`` and the FC surface
+    uses ``'predictive'``. The canonical_string omits ``basis`` when it
+    equals the implicit default ``'epistemic'``, so existing seed
+    identities for default callers are preserved across the change.
     """
     transition_identity: TransitionIdentity
     scope: PrimitiveScope
     draw_count: int
     scenario_seed: int
+    basis: str = 'epistemic'
 
     def canonical_string(self) -> str:
-        # v2 (Atom 2): scenario_id and scenario_seed dropped — they are
-        # caller-context labels, not part of the conditioned-posterior
-        # identity. The result-cache key already binds priors and bound
-        # evidence; identical math across scenarios should share draws.
+        # v2 (73n Atom 2): scenario_id and scenario_seed dropped — they
+        # are caller-context labels, not part of the conditioned-
+        # posterior identity. The result-cache key already binds priors
+        # and bound evidence; identical math across scenarios should
+        # share draws.
         ti = self.transition_identity
         sc = self.scope
-        return "|".join((
+        parts = [
             "73n.draw_family_key.v2",
             f"src={ti.source_node}",
             f"dst={ti.destination_node}",
@@ -157,7 +202,10 @@ class DrawFamilyKey:
             f"resolved_source={sc.resolved_source_identity or ''}",
             f"anchor_days={','.join(sc.selected_anchor_days)}",
             f"S={self.draw_count}",
-        ))
+        ]
+        if self.basis != 'epistemic':
+            parts.append(f"basis={self.basis}")
+        return "|".join(parts)
 
     @property
     def digest(self) -> str:
@@ -370,22 +418,6 @@ class ConditionedTransitionPrimitive:
     prior_source: Optional[str]
     skipped_evidence_summary: Mapping[str, Any] = field(default_factory=dict)
     notes: Tuple[str, ...] = ()
-    # Phase 6 §4.7 row-presence mask, shape (S, T_p). None means
-    # "F-mode unconditioned overlay" — composer defaults to all-ones.
-    # CONDITIONED paths populate the per-(draw, age) presence array; a
-    # CONDITIONED path with zero admitted rows MUST set this to an
-    # explicit all-zeros array (not None) so the composer does not
-    # silently claim full observation.
-    observation_mask_draws: Optional[np.ndarray] = None
-    # Source-day-specific row-presence masks, keyed by observed_date
-    # (YYYY-MM-DD). This is the load-bearing Phase 6 §4.7 surface:
-    # row presence is per (edge, source_day, age), not age-only. The
-    # aggregate `observation_mask_draws` remains for provenance and for
-    # legacy/manual tests that do not need source-day discrimination.
-    observation_mask_draws_by_source_day: Mapping[str, np.ndarray] = field(
-        default_factory=dict
-    )
-
     def probability_draws(self) -> np.ndarray:
         if self.probability_posterior is None or \
                 self.probability_posterior.draws is None:

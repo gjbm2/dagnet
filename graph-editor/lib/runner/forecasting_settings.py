@@ -6,13 +6,22 @@ The frontend sends them explicitly in API requests. Python defines defaults here
 tests and documentation, but the frontend-supplied values are authoritative at runtime.
 
 See analysis-forecasting.md §4.5 for the architectural decision.
+
+Request-scoped reader:
+``current_settings()`` returns the ``ForecastingSettings`` bound for the
+in-flight request. The API handler (``api_handlers.py``) sets the context
+via ``use_request_settings(settings)`` at request entry; the engine reads
+``current_settings().mc_draws`` (and any future setting) without threading
+the settings object through every function signature.
 """
 
+import contextvars
 import hashlib
 import json
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 
 @dataclass
@@ -133,6 +142,46 @@ class ForecastingSettings:
 
     bayes_target_accept: float = 0.90
     """NUTS target acceptance rate. Higher = more conservative but slower."""
+
+    # ── Forecast Monte Carlo sampling ─────────────────────────
+
+    mc_draws: float = 1000.0
+    """Request-scope MC draw count S used by the forecast / CF runtime
+    (primitive substrate, span CDF MC, cohort sweep, confidence bands,
+    funnel sweep). Draw-family coherence requires every consumer of a
+    primitive under the same DrawFamilyKey to use the same S."""
+
+
+# ── Request-scoped settings context ────────────────────────────
+
+_request_settings_var: contextvars.ContextVar[Optional['ForecastingSettings']] = (
+    contextvars.ContextVar('forecasting_settings', default=None)
+)
+
+
+def current_settings() -> ForecastingSettings:
+    """Return the request-scoped settings, or a default-constructed instance.
+
+    The API handler binds this via ``use_request_settings`` at request entry.
+    Engine call sites read ``current_settings().mc_draws`` (and any other
+    setting) without needing the settings object plumbed through their
+    signatures. Tests can override per-call via ``use_request_settings``.
+    """
+    s = _request_settings_var.get()
+    if s is None:
+        return ForecastingSettings()
+    return s
+
+
+@contextmanager
+def use_request_settings(settings: ForecastingSettings) -> Iterator[None]:
+    """Bind ``settings`` as the request-scoped settings for the duration of
+    the ``with`` block. Use at the API handler's request entry."""
+    token = _request_settings_var.set(settings)
+    try:
+        yield
+    finally:
+        _request_settings_var.reset(token)
 
 
 def settings_from_dict(d: Optional[Dict[str, Any]]) -> ForecastingSettings:

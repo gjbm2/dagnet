@@ -490,7 +490,11 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
     expect(edge.p.latency.completeness_stdev).not.toBeCloseTo(0.05, 5);
   });
 
-  it('applyConditionedForecastToGraph projects CF evidence n/k while preserving evidence.mean', () => {
+  it('applyConditionedForecastToGraph projects CF evidence n/k and derives evidence.mean from the counts', () => {
+    // The fixture seeds a deliberately-wrong prior evidence.mean (0.5) that
+    // disagrees with CF's counts (48/120 = 0.4). The write port re-derives
+    // mean from the merged n/k, so the stale prior must NOT survive — this
+    // is the invariant that prevents a fresh-n/k-over-stale-mean collapse.
     const graph = latencyGraph();
     const results: ConditionedForecastScenarioResult[] = [
       {
@@ -512,7 +516,8 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
     const edge = updated.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
     expect(edge.p.evidence.n).toBe(120);
     expect(edge.p.evidence.k).toBe(48);
-    expect(edge.p.evidence.mean).toBeCloseTo(0.5, 5);
+    expect(edge.p.evidence.mean).toBeCloseTo(0.4, 5);
+    expect(edge.p.evidence.stdev).toBeCloseTo(Math.sqrt((0.4 * 0.6) / 120), 5);
   });
 
   it('buildConditionedForecastGraphSnapshot engorges a clone without dirtying the live graph', () => {
@@ -569,7 +574,7 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
     expect(edge.p.stdev_pred).toBeCloseTo(0.05, 5);  // p_sd → p.stdev_pred
     expect(edge.p.evidence.n).toBe(120);
     expect(edge.p.evidence.k).toBe(48);
-    expect(edge.p.evidence.mean).toBeCloseTo(0.5, 5);
+    expect(edge.p.evidence.mean).toBeCloseTo(0.4, 5);  // derived from 48/120, not the seeded prior
   });
 
   it('CF fast path: does NOT leak p_mean into p.forecast.mean or model_vars[analytic].probability.mean', async () => {

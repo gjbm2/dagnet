@@ -60,12 +60,17 @@ def _per_primitive_evidence_scope(
 ) -> EvidenceScope:
     """Evidence scope on the primitive source clock."""
     days = sorted(arrival_weights.weights.keys())
+    date_from = primitive_scope.evidence_date_from or primitive_scope.date_from
+    date_to = primitive_scope.evidence_date_to or primitive_scope.date_to
+    if days:
+        date_from = min(str(date_from or days[0]), days[0])
+        date_to = max(str(date_to or days[-1]), days[-1])
     return EvidenceScope(
         role=EvidenceRole.WINDOW_SUBJECT_HELPER,
         subject_from=transition.source_node,
         subject_to=transition.destination_node,
-        date_from=days[0],
-        date_to=days[-1],
+        date_from=date_from,
+        date_to=date_to,
         as_at=primitive_scope.as_at,
         scenario_id=primitive_scope.scenario_id,
     )
@@ -87,6 +92,7 @@ def prepare_primitive(
     options: ConditioningPolicyOptions,
     prior_source: Optional[str],
     request_candidates: Sequence[Any],
+    dispersion_basis: str = 'epistemic',
 ) -> _PreparedPrimitive:
     return _prepare_conditioned_primitive(
         transition=transition,
@@ -97,6 +103,7 @@ def prepare_primitive(
         options=options,
         prior_source=prior_source,
         request_candidates=request_candidates,
+        dispersion_basis=dispersion_basis,
     )
 
 
@@ -110,8 +117,13 @@ def _prepare_conditioned_primitive(
     options: ConditioningPolicyOptions,
     prior_source: Optional[str],
     request_candidates: Sequence[EvidenceCandidate],
+    dispersion_basis: str = 'epistemic',
 ) -> _PreparedPrimitive:
-    """Bind request candidates and condition one primitive."""
+    """Bind request candidates and condition one primitive.
+
+    ``dispersion_basis`` is forwarded to ``condition_primitive`` —
+    'epistemic' for the model surface, 'predictive' for FC.
+    """
     evidence_scope = _per_primitive_evidence_scope(
         transition=transition,
         primitive_scope=primitive_scope,
@@ -132,6 +144,7 @@ def _prepare_conditioned_primitive(
         scenario_seed=scenario_seed,
         options=options,
         prior_source=prior_source,
+        dispersion_basis=dispersion_basis,
     )
     return _PreparedPrimitive(resolution=resolution, primitive=primitive)
 
@@ -306,6 +319,8 @@ class ResolvedRuntimeReadoutResult:
     skip_reason: Optional[str]
     composed_subject: Optional[ComposedPrimitiveSpan]
     composed_carrier: Optional[ComposedPrimitiveSpan]
+    composed_subject_predictive: Optional[ComposedPrimitiveSpan]
+    composed_carrier_predictive: Optional[ComposedPrimitiveSpan]
     p_mean_primitive: Optional[float]
     p_sd_primitive: Optional[float]
     p_sd_epistemic_primitive: Optional[float]
@@ -320,6 +335,13 @@ class ResolvedRuntimeReadoutResult:
     unconditioned_overlays: Mapping[
         str, ComposedUnconditionedOverlay
     ] = field(default_factory=dict)
+    # Empirical evidence operator spans (Phase 6 §4.9). Composed sibling
+    # of the conditioned spans above — same admitted rows, same arrival
+    # weighting, same DAG DP — but the per-edge kernel is Δ(k_emp/n_emp)
+    # rather than p × Δcdf. The row reducer reads from both operator
+    # families and routes row fields to the appropriate one (§5.6).
+    composed_empirical_carrier: Optional[ComposedPrimitiveSpan] = None
+    composed_empirical_subject: Optional[ComposedPrimitiveSpan] = None
 
 def _build_resolved_runtime_prefix_arrival_identity(
     *,
@@ -451,6 +473,8 @@ def compute_resolved_runtime_readout(
         skip_reason=None,
         composed_subject=spans.composed_subject,
         composed_carrier=spans.composed_carrier,
+        composed_subject_predictive=spans.composed_subject_predictive,
+        composed_carrier_predictive=spans.composed_carrier_predictive,
         p_mean_primitive=p_mean,
         p_sd_primitive=p_sd,
         p_sd_epistemic_primitive=p_sd_epi,
@@ -461,6 +485,8 @@ def compute_resolved_runtime_readout(
         carrier_span_role=dict(carrier_diag),
         subject_span_role=dict(subject_diag),
         unconditioned_overlays=spans.overlays,
+        composed_empirical_carrier=spans.composed_empirical_carrier,
+        composed_empirical_subject=spans.composed_empirical_subject,
     )
 
 

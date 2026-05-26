@@ -43,6 +43,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.4
+    latency_parameter: true
   stress-bg-thin-s102-gate-to-path-a:
     from: gate
     to: path-a
@@ -50,6 +51,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.4
+    latency_parameter: true
   stress-bg-thin-s102-gate-to-path-b:
     from: gate
     to: path-b
@@ -57,6 +59,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.4
+    latency_parameter: true
   stress-bg-thin-s102-path-a-to-outcome:
     from: path-a
     to: outcome
@@ -64,6 +67,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.4
+    latency_parameter: true
   stress-bg-thin-s102-path-b-to-outcome:
     from: path-b
     to: outcome
@@ -71,6 +75,7 @@ edges:
     onset: 1.0
     mu: 2.0
     sigma: 0.4
+    latency_parameter: true
 nodes:
   anchor:
     start: true
