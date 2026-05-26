@@ -27,6 +27,7 @@ from evidence_merge import (
 from runner.evidence_adapters import (
     bayes_file_evidence_to_candidates,
     bayes_parameter_file_evidence_to_candidates,
+    classify_contextual_slice,
     reconstructed_asat_to_candidates,
 )
 
@@ -60,6 +61,50 @@ def _scope(
 
 
 # ─── Adapter classifies window vs cohort vs context-qualified slices ──
+
+
+def test_shared_classifier_treats_context_prefixed_window_as_window():
+    classification = classify_contextual_slice(
+        "context(channel:paid).window(1-Apr-26:4-Apr-26)"
+    )
+
+    assert classification.family == SliceFamily.WINDOW
+    assert classification.cohort_anchor is None
+    assert classification.context_key == "channel"
+    assert classification.context_selector == "context(channel:paid)"
+    assert classification.temporal_slice == "window(1-Apr-26:4-Apr-26)"
+
+
+def test_shared_classifier_treats_context_prefixed_cohort_as_cohort():
+    classification = classify_contextual_slice(
+        "context(channel:paid).cohort(simple-a, 1-Apr-26:4-Apr-26)"
+    )
+
+    assert classification.family == SliceFamily.COHORT
+    assert classification.cohort_anchor == "simple-a"
+    assert classification.context_key == "channel"
+    assert classification.context_selector == "context(channel:paid)"
+    assert classification.temporal_slice == "cohort(simple-a, 1-Apr-26:4-Apr-26)"
+
+
+def test_shared_classifier_preserves_multiple_context_selectors():
+    classification = classify_contextual_slice(
+        "context(channel:paid).context(device:mobile).window(1-Apr-26:4-Apr-26)"
+    )
+
+    assert classification.family == SliceFamily.WINDOW
+    assert classification.context_key == "channel"
+    assert classification.context_selector == (
+        "context(channel:paid).context(device:mobile)"
+    )
+
+
+def test_shared_classifier_keeps_context_only_shape_unsupported():
+    classification = classify_contextual_slice("context(channel:paid)")
+
+    assert classification.family == SliceFamily.CONTEXT
+    assert classification.context_key == "channel"
+    assert classification.context_selector == "context(channel:paid)"
 
 
 def test_adapter_classifies_window_section_as_window_family():
@@ -117,11 +162,11 @@ def test_adapter_extracts_cohort_anchor_from_slice_dsl():
     assert all(c.coordinate.temporal_basis == TemporalBasis.ANCHOR_DAY for c in candidates)
 
 
-def test_adapter_marks_context_qualified_slices_as_context_family():
+def test_adapter_keeps_context_qualified_cohort_as_cohort_family_with_selector():
     bayes_evidence = {
         "cohort": [
             {
-                "sliceDSL": "cohort(1-Apr-26:4-Apr-26).context(channel:paid)",
+                "sliceDSL": "context(channel:paid).cohort(1-Apr-26:4-Apr-26)",
                 "dates": ["2026-04-01"],
                 "n_daily": [99],
                 "k_daily": [99],
@@ -132,7 +177,32 @@ def test_adapter_marks_context_qualified_slices_as_context_family():
         bayes_evidence, scope=_scope()
     )
     assert len(candidates) == 1
-    assert candidates[0].identity.slice_family == SliceFamily.CONTEXT
+    assert candidates[0].identity.slice_family == SliceFamily.COHORT
+    assert candidates[0].identity.context_key == "channel"
+    assert candidates[0].identity.context_selector == "context(channel:paid)"
+
+
+def test_adapter_keeps_context_qualified_window_as_window_family_with_selector():
+    rows = [
+        {
+            "anchor_day": "2026-04-01",
+            "slice_key": "context(channel:paid).window(1-Apr-26:4-Apr-26)",
+            "core_hash": "hash-context",
+            "retrieved_at": datetime(2026, 4, 2),
+            "a": 100,
+            "x": 80,
+            "y": 40,
+        }
+    ]
+    candidates = reconstructed_asat_to_candidates(
+        rows,
+        scope=_scope(as_at=None),
+        asat_materialised=False,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].identity.slice_family == SliceFamily.WINDOW
+    assert candidates[0].identity.context_key == "channel"
+    assert candidates[0].identity.context_selector == "context(channel:paid)"
 
 
 # ─── Adapter handles missing/malformed input gracefully ───────────────
@@ -219,13 +289,13 @@ def test_adapter_q4_window_subject_helper_under_wp8_off():
 
     - window file rows on days 1-4 (n=10,20,30,40, k=1,2,3,4)
     - cohort file rows on days 1-4 (n=10,20,30,40, k=1,2,3,4) — wrong role
-    - cohort.context(channel:paid) on days 1,3 — unsupported_context
+    - cohort.context(channel:paid) on days 1,3 — wrong role
     - snapshot covered days = {2026-04-02, 2026-04-04}
 
     Expected: only window rows on days 1 and 3 are admitted.
     Totals: n=40 (10+30), k=4 (1+3). Two days reported as covered.
-    Two cohort entries are skipped as wrong_role (one per day each).
-    The context-qualified entry contributes two unsupported_context skips.
+    Two bare cohort entries are skipped as wrong_role (one per day each).
+    The context-qualified cohort entry contributes two more wrong_role skips.
     """
     bayes_evidence = {
         "window": [
@@ -289,12 +359,11 @@ def test_adapter_q4_window_subject_helper_under_wp8_off():
         scope, candidates, snapshot_covered_observations=covered
     )
 
-    # Only window days 1 and 3 are admitted (4 cohort + 2 context skipped, 2 covered)
+    # Only window days 1 and 3 are admitted (4 cohort + 2 context-cohort wrong role, 2 covered)
     assert merged.totals.n == 40  # 10 + 30
     assert merged.totals.k == 4  # 1 + 3
     reasons = dict(merged.provenance.skipped_counts_by_reason)
-    assert reasons.get("wrong_role") == 4
-    assert reasons.get("unsupported_context") == 2
+    assert reasons.get("wrong_role") == 6
     assert reasons.get("covered_by_snapshot") == 2
 
 
@@ -483,10 +552,9 @@ def test_bayes_pf_adapter_phase2_provenance_is_complete():
     assert c.identity.anchor == "simple-a"
 
 
-def test_bayes_pf_adapter_skips_context_qualified_cohort():
-    """Design §Bayes Binder Tests #6: existing MECE/context behaviour
-    unchanged. Context-qualified entries flow through as CONTEXT family
-    so the merge skips them as `unsupported_context` for Stage-1 roles.
+def test_bayes_pf_adapter_keeps_context_qualified_cohort_family():
+    """Context-qualified entries keep their temporal family and carry
+    context metadata; a non-MECE aggregate scope rejects them as unsafe.
     """
     values = [
         {
@@ -502,12 +570,14 @@ def test_bayes_pf_adapter_skips_context_qualified_cohort():
         values, scope=scope, edge_topology=_FakeEdge()
     )
     assert len(candidates) == 1
-    assert candidates[0].identity.slice_family == SliceFamily.CONTEXT
+    assert candidates[0].identity.slice_family == SliceFamily.COHORT
+    assert candidates[0].identity.context_key == "channel"
+    assert candidates[0].identity.context_selector == "context(channel:google)"
     merged = merge_evidence_candidates(scope, candidates)
     assert merged.totals.n == 0
     assert merged.totals.k == 0
     reasons = dict(merged.provenance.skipped_counts_by_reason)
-    assert reasons.get("unsupported_context") == 1
+    assert reasons.get("unsafe_mece_aggregation") == 1
 
 
 def test_bayes_pf_adapter_handles_empty_and_malformed_inputs():
@@ -534,7 +604,7 @@ def test_bayes_pf_adapter_emits_documented_q4_fixture_phase2_supplement():
     """Phase 2 supplement contract: under role `BAYES_PHASE2_COHORT`,
     the typed merge admits cohort daily points that are NOT covered by
     snapshot, skipping window rows (wrong role) and context-qualified
-    rows (unsupported context). This was originally the byte-equality
+    rows (unsafe MECE aggregation). This was originally the byte-equality
     target against the now-retired `merge_file_evidence_for_role`.
     """
     from evidence_merge import normalise_iso_date
@@ -604,7 +674,7 @@ def test_bayes_pf_adapter_emits_documented_q4_fixture_phase2_supplement():
     assert typed.totals.k == 16  # 1 + 5 + 3 + 7
     reasons = dict(typed.provenance.skipped_counts_by_reason)
     assert reasons.get("wrong_role") == 1  # window row
-    assert reasons.get("unsupported_context") == 1
+    assert reasons.get("unsafe_mece_aggregation") == 1
     assert reasons.get("covered_by_snapshot") == 3  # 2 cohort-a + 1 cohort-b
 
 
@@ -733,10 +803,9 @@ def test_reconstructed_asat_adapter_skips_unknown_slice_keys():
     assert reconstructed_asat_to_candidates(rows, scope=scope) == []
 
 
-def test_reconstructed_asat_adapter_marks_context_qualified_rows_as_context():
-    """Context-qualified slice_keys must produce CONTEXT-family candidates
-    so the merge skips them as `unsupported_context` for Stage-1 roles
-    (mirrors the file-side adapter's behaviour).
+def test_reconstructed_asat_adapter_keeps_context_qualified_window_family():
+    """Context-qualified slice_keys keep their temporal family and carry
+    context metadata (mirrors the file-side adapter's behaviour).
     """
     rows = [
         _virtual_snapshot_row(
@@ -748,7 +817,9 @@ def test_reconstructed_asat_adapter_marks_context_qualified_rows_as_context():
     scope = _scope(role=EvidenceRole.WINDOW_SUBJECT_HELPER)
     candidates = reconstructed_asat_to_candidates(rows, scope=scope)
     assert len(candidates) == 1
-    assert candidates[0].identity.slice_family == SliceFamily.CONTEXT
+    assert candidates[0].identity.slice_family == SliceFamily.WINDOW
+    assert candidates[0].identity.context_key == "channel"
+    assert candidates[0].identity.context_selector == "context(channel:google)"
 
 
 def test_reconstructed_asat_adapter_handles_datetime_retrieved_at():

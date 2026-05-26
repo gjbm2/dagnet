@@ -446,13 +446,16 @@ export async function computeIndependentDimensions(
  * filters the candidate list to only hashes whose key-set includes the
  * queried dimension."
  *
- * - Scenario with `context(channel:google)` → keep only regimes with `channel` in key-set
- * - Scenario with no context → keep only bare (uncontexted) regimes (`context_keys = []`)
- * - Scenario with `context(channel:google).context(device:mobile)` → keep only
- *   regimes whose key-set is exactly `['channel', 'device']`
+ * - Scenario with `context(channel:google)` → keep regimes whose key-set
+ *   contains `channel`, exact before supersets.
+ * - Scenario with no context → keep the full ordered regime ladder, bare
+ *   first, then increasingly contexted regimes for explicit BE MECE aggregation.
+ * - Scenario with `context(channel:google).context(device:mobile)` → keep
+ *   regimes whose key-set contains both dimensions, exact before supersets.
  *
- * If filtering produces an empty list for an edge, there's no data for that
- * scenario's context — the analysis degrades gracefully.
+ * If filtering produces an empty list for an edge, there is no plausible
+ * regime for that scenario's context. Callers must not fall back to the
+ * full inventory because that reintroduces unsafe regimes.
  */
 export async function filterCandidatesByContext(
   allRegimes: Record<string, CandidateRegime[]>,
@@ -463,14 +466,23 @@ export async function filterCandidatesByContext(
 
   const parsed = parseConstraints(effectiveQueryDsl);
   const queryKeys = extractContextKeysFromConstraints(parsed).sort();
-  const queryKeySet = queryKeys.join('||');
 
   const filtered: Record<string, CandidateRegime[]> = {};
   for (const [edgeId, regimes] of Object.entries(allRegimes)) {
-    const matching = regimes.filter((r) => {
-      const regimeKeys = (r.context_keys || []).sort();
-      return regimeKeys.join('||') === queryKeySet;
-    });
+    const matching = regimes
+      .filter((r) => {
+        const regimeKeys = (r.context_keys || []).sort();
+        if (queryKeys.length === 0) {
+          return true;
+        }
+        return queryKeys.every(key => regimeKeys.includes(key));
+      })
+      .sort((a, b) => {
+        const aKeys = (a.context_keys || []).length;
+        const bKeys = (b.context_keys || []).length;
+        if (aKeys !== bKeys) return aKeys - bKeys;
+        return (a.core_hash || '').localeCompare(b.core_hash || '');
+      });
     if (matching.length > 0) {
       filtered[edgeId] = matching;
     }

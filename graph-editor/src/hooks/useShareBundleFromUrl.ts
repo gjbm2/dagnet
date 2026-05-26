@@ -461,11 +461,9 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
                 if (Object.keys(fullRegimeInventory).length > 0) {
                   try {
                     const filtered = await filterCandidatesByContext(fullRegimeInventory, effectiveQueryDsl);
-                    (sg as any).candidate_regimes_by_edge = Object.keys(filtered).length > 0
-                      ? filtered
-                      : fullRegimeInventory;
+                    (sg as any).candidate_regimes_by_edge = filtered;
                   } catch {
-                    (sg as any).candidate_regimes_by_edge = fullRegimeInventory;
+                    (sg as any).candidate_regimes_by_edge = {};
                   }
                 }
               } catch (err) {

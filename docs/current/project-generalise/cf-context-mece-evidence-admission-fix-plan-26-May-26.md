@@ -9,14 +9,14 @@
 
 <!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
 
-- [ ] Stage 1 — Model Context As Evidence Metadata
-- [ ] Stage 2 — Extract A Shared Context / Slice Classifier
-- [ ] Stage 3 — Port Bayes MECE Admission Semantics To `EvidenceSet`
-- [ ] Stage 4 — Thread Context Scope From FE Request To Primitive Binding
-- [ ] Stage 5 — Replace Blanket `unsupported_context`
-- [ ] Stage 6 — Align Candidate-Regime Filtering With Admission
-- [ ] Stage 7 — Preserve The Single Evidence Pool
-- [ ] Stage 8 — Tests And Test Repairs
+- [x] Stage 1 — Model Context As Evidence Metadata — completed 26-May-26
+- [x] Stage 2 — Extract A Shared Context / Slice Classifier — completed 26-May-26
+- [x] Stage 3 — Port Bayes MECE Admission Semantics To `EvidenceSet` — completed 26-May-26
+- [x] Stage 4 — Thread Context Scope From FE Request To Primitive Binding — completed 26-May-26
+- [x] Stage 5 — Replace Blanket `unsupported_context` — completed 26-May-26
+- [x] Stage 6 — Align Candidate-Regime Filtering With Admission — completed 26-May-26
+- [x] Stage 7 — Preserve The Single Evidence Pool — completed 26-May-26
+- [x] Stage 8 — Tests And Test Repairs — completed 26-May-26
 
 ## Executive Summary
 
@@ -263,7 +263,7 @@ Required test categories:
 - Adapter test proving `context(...).cohort(...)` is temporal family `cohort` with context metadata.
 - Merge test proving an exact context query admits matching rows.
 - Merge test proving wrong context value is rejected.
-- Merge test proving uncontexted MECE aggregation admits rows only when the dimension is MECE.
+- Merge test proving uncontexted MECE aggregation admits rows only when the dimension is MECE.  
 - Merge test proving non-MECE aggregation refuses rows.
 - Shared merge vs Bayes oracle tests for MECE rows, bare precedence, non-MECE skip, cross-dimension guard, and regime-per-date partitioning.
 - BE CF integration test for `synth-context-solo-mixed` context-qualified asat query returning non-zero evidence and provenance.

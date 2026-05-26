@@ -812,6 +812,9 @@ def build_carrier_superset_candidates_by_edge(
     sweep_to: str,
     as_at: Optional[str],
     scenario_id: str,
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
+    mece_dimensions: Sequence[str] = (),
 ) -> Dict[str, Tuple[Any, ...]]:
     """Translate fetched superset rows for active carrier primitives."""
     return build_superset_candidates_by_edge(
@@ -823,6 +826,9 @@ def build_carrier_superset_candidates_by_edge(
         sweep_to=sweep_to,
         as_at=as_at,
         scenario_id=scenario_id,
+        context_key=context_key,
+        context_selector=context_selector,
+        mece_dimensions=mece_dimensions,
         is_carrier=True,
     )
 
@@ -837,6 +843,9 @@ def build_superset_candidates_by_edge(
     sweep_to: str,
     as_at: Optional[str],
     scenario_id: str,
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
+    mece_dimensions: Sequence[str] = (),
     is_carrier: bool = False,
 ) -> Dict[str, Tuple[Any, ...]]:
     """Translate fetched evidence-superset rows into candidates by edge.
@@ -869,6 +878,9 @@ def build_superset_candidates_by_edge(
         as_at=as_at,
         scenario_id=scenario_id,
         anchor_node_id=None,
+        context_key=context_key,
+        context_selector=context_selector,
+        mece_dimensions=tuple(mece_dimensions or ()),
     )
     if not descriptors:
         return {}
@@ -1379,6 +1391,9 @@ def _runtime_scope(
     resolved_source: Optional[str],
     evidence_date_from: Optional[str] = None,
     evidence_date_to: Optional[str] = None,
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
+    mece_dimensions: Sequence[str] = (),
 ):
     from .primitives import (
         PrimitiveScope as _PrimitiveScope,
@@ -1396,7 +1411,9 @@ def _runtime_scope(
             date_from=str(date_from or ''),
             date_to=str(date_to or date_from or ''),
             as_at=as_at,
-            context_key=None,
+            context_key=context_key,
+            context_selector=context_selector,
+            mece_dimensions=tuple(mece_dimensions or ()),
             regime_key=None,
             model_source_preference='best_available',
             resolved_source_identity=resolved_source,
@@ -1449,6 +1466,9 @@ def _build_span_resolutions(
     resolution_class: Any,
     mark_target: bool,
     envelope_plan: Optional[Any] = None,
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
+    mece_dimensions: Sequence[str] = (),
 ) -> tuple[Optional[list], Optional[str]]:
     from .span_kernel import _build_span_topology
 
@@ -1504,6 +1524,9 @@ def _build_span_resolutions(
             resolved_source=getattr(edge_resolved, 'source', None),
             evidence_date_from=scope_date_from,
             evidence_date_to=scope_date_to,
+            context_key=context_key,
+            context_selector=context_selector,
+            mece_dimensions=tuple(mece_dimensions or ()),
         )
         kwargs = dict(
             transition=transition,
@@ -1535,6 +1558,9 @@ def build_resolved_cf_runtime(
     unconditioned_overlay_bases: Sequence[str] = ('predictive',),
     evidence_candidates: Optional[List[Any]] = None,
     envelope_plan: Optional[Any] = None,
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
+    mece_dimensions: Sequence[str] = (),
 ) -> Optional[ResolvedCFRuntime]:
     """Build the primitive-backed runtime object for row/scalar projection.
 
@@ -1583,6 +1609,9 @@ def build_resolved_cf_runtime(
         resolution_class=SpanEdgeResolution,
         mark_target=True,
         envelope_plan=envelope_plan,
+        context_key=context_key,
+        context_selector=context_selector,
+        mece_dimensions=tuple(mece_dimensions or ()),
     )
 
     carrier_resolutions = []
@@ -1602,6 +1631,9 @@ def build_resolved_cf_runtime(
             resolution_class=CarrierEdgeResolution,
             mark_target=False,
             envelope_plan=envelope_plan,
+            context_key=context_key,
+            context_selector=context_selector,
+            mece_dimensions=tuple(mece_dimensions or ()),
         )
 
     # Two-clocks split (per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`
@@ -6006,6 +6038,9 @@ def compute_cohort_maturity_rows_v3(
     show_model_curve: bool = False,
     emit_diagnostics: bool = False,
     envelope_plan: Optional[Any] = None,
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
+    mece_dimensions: Sequence[str] = (),
 ) -> List[Dict[str, Any]]:
     """Compute per-tau rows for the cohort_maturity v3 chart.
 
@@ -6110,6 +6145,9 @@ def compute_cohort_maturity_rows_v3(
             ('predictive', 'epistemic') if show_model_curve else ('predictive',)
         ),
         envelope_plan=envelope_plan,
+        context_key=context_key,
+        context_selector=context_selector,
+        mece_dimensions=tuple(mece_dimensions or ()),
     )
     if runtime is None:
         return []

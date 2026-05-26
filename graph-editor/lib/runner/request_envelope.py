@@ -276,6 +276,8 @@ def _fingerprint(
     anchor_from: _date,
     anchor_to: _date,
     graph_preference: Optional[str],
+    context_key: Optional[str],
+    context_selector: Optional[str],
 ) -> str:
     return "|".join(
         (
@@ -287,6 +289,8 @@ def _fingerprint(
             anchor_from.isoformat(),
             anchor_to.isoformat(),
             str(graph_preference or "best_available"),
+            str(context_key or ""),
+            str(context_selector or ""),
         )
     )
 
@@ -306,6 +310,8 @@ def build_request_envelope_plan(
     graph_preference: Optional[str] = None,
     as_at: Optional[str] = None,
     scenario_id: Optional[str] = None,
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
     max_tau: int = 400,
 ) -> RequestEnvelopePlan:
     """Build the per-request envelope plan for every parameterised edge.
@@ -420,6 +426,8 @@ def build_request_envelope_plan(
         anchor_from=anchor_from,
         anchor_to=anchor_to,
         graph_preference=graph_preference,
+        context_key=context_key,
+        context_selector=context_selector,
     )
 
     # Carrier arrival map rooted at A on the SELECTED anchor range only.
@@ -442,7 +450,8 @@ def build_request_envelope_plan(
         carrier_identity = PrefixArrivalIdentity(
             scenario_id=str(scenario_id or ""),
             request_root=str(anchor_node_id),
-            context_key=None,
+            context_key=context_key,
+            context_selector=context_selector,
             regime_key=None,
             as_at=as_at,
             model_source_preference=str(graph_preference or "best_available"),
@@ -513,7 +522,8 @@ def build_request_envelope_plan(
         subject_identity = PrefixArrivalIdentity(
             scenario_id=str(scenario_id or ""),
             request_root=str(query_from_node),
-            context_key=None,
+            context_key=context_key,
+            context_selector=context_selector,
             regime_key=None,
             as_at=as_at,
             model_source_preference=str(graph_preference or "best_available"),

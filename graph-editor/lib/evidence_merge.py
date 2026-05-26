@@ -88,6 +88,8 @@ SKIP_REASONS = frozenset(
         "missing_retrieved_at",
         "after_as_at",
         "after_retrieved_at",
+        "unsafe_mece_aggregation",
+        "bare_aggregate_precedence",
         "covered_by_snapshot",
         "covered_by_reconstructed",
         "superseded_by_later_retrieval",
@@ -117,6 +119,7 @@ class EvidenceIdentity:
     context_key: Optional[str]
     regime_key: Optional[str]
     population_identity: Optional[str]
+    context_selector: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +151,8 @@ class EvidenceScope:
     scenario_id: Optional[str] = None
     anchor: Optional[str] = None
     context_key: Optional[str] = None
+    context_selector: Optional[str] = None
+    mece_dimensions: Sequence[str] = ()
     regime_key: Optional[str] = None
     population_universe_key: Optional[str] = None
     selected_anchor_days: Sequence[str] = ()
@@ -199,6 +204,9 @@ class EvidenceProvenance:
     skipped_counts_by_reason: Mapping[str, int]
     included_counts_by_source: Mapping[SourceKind, int]
     asat_materialised_present: bool
+    included_context_selectors: tuple[str, ...] = ()
+    skipped_context_selectors_by_reason: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    selected_regime_kind_by_retrieved_date: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -249,6 +257,14 @@ def evidence_set_to_response_provenance(
             f.value for f in prov.selected_snapshot_families
         ],
         "skipped_counts_by_reason": dict(prov.skipped_counts_by_reason),
+        "included_context_selectors": list(prov.included_context_selectors),
+        "skipped_context_selectors_by_reason": {
+            reason: list(selectors)
+            for reason, selectors in prov.skipped_context_selectors_by_reason.items()
+        },
+        "selected_regime_kind_by_retrieved_date": dict(
+            prov.selected_regime_kind_by_retrieved_date
+        ),
         "asat_materialised_present": prov.asat_materialised_present,
     }
 
@@ -258,6 +274,7 @@ def evidence_set_to_response_provenance(
 
 _DDMMMYY_RE = re.compile(r"^\d{1,2}-[A-Za-z]{3}-\d{2,4}$")
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CONTEXT_SELECTOR_RE = re.compile(r"context\(([^)]*)\)")
 
 
 def normalise_iso_date(raw: Any) -> Optional[str]:
@@ -314,6 +331,7 @@ def derive_population_identity(
     date_to: str,
     selected_anchor_days: Optional[Sequence[str]] = None,
     context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
     regime_key: Optional[str] = None,
     as_at: Optional[str] = None,
     population_universe_key: Optional[str] = None,
@@ -341,6 +359,7 @@ def derive_population_identity(
         ("date_to", date_to),
         ("anchor_days", "|".join(sorted(selected_anchor_days or ()))),
         ("context_key", context_key or ""),
+        ("context_selector", context_selector or ""),
         ("regime_key", regime_key or ""),
         ("as_at", as_at or ""),
         ("universe", population_universe_key or ""),
@@ -364,6 +383,8 @@ def _scope_key(scope: EvidenceScope) -> str:
         ("as_at", scope.as_at or ""),
         ("scenario_id", scope.scenario_id or ""),
         ("context_key", scope.context_key or ""),
+        ("context_selector", scope.context_selector or ""),
+        ("mece_dimensions", "|".join(sorted(scope.mece_dimensions or ()))),
         ("regime_key", scope.regime_key or ""),
         ("pop_universe", scope.population_universe_key or ""),
         ("anchor_days", "|".join(sorted(scope.selected_anchor_days or ()))),
@@ -396,6 +417,7 @@ def evidence_dedupe_key(identity: EvidenceIdentity) -> tuple:
         identity.anchor,
         identity.slice_family,
         identity.context_key,
+        identity.context_selector,
         identity.regime_key,
         identity.population_identity,
     )
@@ -441,11 +463,22 @@ def _validate_candidate(
     if c.n <= 0:
         return "non_positive_n"
 
-    # Context: a context() slice family is unsupported under any Stage 1
-    # role; otherwise context_key on candidate must equal scope context_key.
+    # Context is an evidence identity axis, not a temporal slice family.
+    # Context-only rows are still unsupported, but context-qualified
+    # window/cohort rows compare by exact selector and dimension metadata.
     if c.identity.slice_family == SliceFamily.CONTEXT:
         return "unsupported_context"
-    if c.identity.context_key != scope.context_key:
+    scope_selectors = _context_selector_tuple(scope.context_selector)
+    candidate_selectors = _context_selector_tuple(c.identity.context_selector)
+    if scope_selectors:
+        if not set(scope_selectors).issubset(set(candidate_selectors)):
+            return "context_mismatch"
+    elif c.identity.context_selector is not None:
+        # Aggregate scopes decide later whether this context dimension is
+        # MECE-safe. Do not report a value mismatch just because the scope
+        # is intentionally uncontexted.
+        pass
+    elif c.identity.context_key != scope.context_key:
         return "context_mismatch"
 
     # Regime
@@ -493,6 +526,113 @@ def _validate_candidate(
     return None
 
 
+def _context_selector_tuple(selector: Optional[str]) -> tuple[str, ...]:
+    if not selector:
+        return ()
+    return tuple(
+        f"context({match.group(1).strip()})"
+        for match in _CONTEXT_SELECTOR_RE.finditer(selector)
+        if match.group(1).strip()
+    )
+
+
+def _context_selector_key(selector: str) -> str:
+    inner = selector.removeprefix("context(").removesuffix(")")
+    return inner.split(":", 1)[0].strip()
+
+
+def _context_selector_string(selectors: Sequence[str]) -> Optional[str]:
+    clean = tuple(selectors)
+    return ".".join(clean) if clean else None
+
+
+def _context_key_string(selectors: Sequence[str]) -> Optional[str]:
+    keys = [_context_selector_key(selector) for selector in selectors]
+    return "||".join(keys) if keys else None
+
+
+def _context_reduced_candidate(
+    c: EvidenceCandidate,
+    *,
+    retained_selectors: Sequence[str],
+) -> EvidenceCandidate:
+    retained = tuple(retained_selectors)
+    identity = EvidenceIdentity(
+        role=c.identity.role,
+        subject_from=c.identity.subject_from,
+        subject_to=c.identity.subject_to,
+        anchor=c.identity.anchor,
+        slice_family=c.identity.slice_family,
+        context_key=_context_key_string(retained),
+        regime_key=c.identity.regime_key,
+        population_identity=c.identity.population_identity,
+        context_selector=_context_selector_string(retained),
+    )
+    provenance = dict(c.provenance)
+    provenance["aggregated_context_selector"] = c.identity.context_selector
+    provenance["aggregated_context_key"] = c.identity.context_key
+    return EvidenceCandidate(
+        source=c.source,
+        identity=identity,
+        coordinate=c.coordinate,
+        n=c.n,
+        k=c.k,
+        provenance=provenance,
+    )
+
+
+def _context_aggregate_slot(
+    c: EvidenceCandidate,
+    *,
+    retained_selectors: Sequence[str] = (),
+) -> tuple:
+    identity = _context_reduced_candidate(
+        c,
+        retained_selectors=retained_selectors,
+    ).identity
+    return (
+        _dedupe_key(identity),
+        c.coordinate.observed_date,
+        c.coordinate.retrieved_at,
+        bool(c.coordinate.asat_materialised),
+    )
+
+
+def _is_context_aggregate(c: EvidenceCandidate) -> bool:
+    return c.provenance.get("aggregated_context_selector") is not None
+
+
+def _sum_context_aggregate_group(group: Sequence[EvidenceCandidate]) -> EvidenceCandidate:
+    first = group[0]
+    provenance = dict(first.provenance)
+    provenance["aggregated_context_selectors"] = tuple(
+        c.provenance.get("aggregated_context_selector")
+        for c in group
+        if c.provenance.get("aggregated_context_selector") is not None
+    )
+    return EvidenceCandidate(
+        source=first.source,
+        identity=first.identity,
+        coordinate=first.coordinate,
+        n=sum(c.n for c in group),
+        k=sum(c.k for c in group),
+        provenance=provenance,
+    )
+
+
+def _candidate_context_selectors(c: EvidenceCandidate) -> tuple[str, ...]:
+    aggregate = c.provenance.get("aggregated_context_selectors")
+    if isinstance(aggregate, (list, tuple)):
+        return tuple(str(v) for v in aggregate if v)
+    single_aggregate = c.provenance.get("aggregated_context_selector")
+    if single_aggregate:
+        return (str(single_aggregate),)
+    direct = c.identity.context_selector
+    if direct:
+        return (direct,)
+    return ()
+
+
 # ─── Public entry point ────────────────────────────────────────────────
 
 
@@ -525,17 +665,57 @@ def merge_evidence_candidates(
     covered = snapshot_covered_observations or set()
 
     # Step 1a: scope-level admission + caller-supplied snapshot coverage
+    mece_dimensions = set(scope.mece_dimensions or ())
+    scope_selectors = _context_selector_tuple(scope.context_selector)
+    bare_slots = {
+        _context_aggregate_slot(c)
+        for c in candidates
+        if c.identity.context_selector is None
+    }
+    aggregate_first_extra_keyset: dict[tuple, tuple[str, ...]] = {}
     for c in candidates:
         reason = _validate_candidate(c, scope)
         if reason is not None:
             skipped.append(SkippedCandidate(c, reason))
             continue
-        if c.source != SourceKind.SNAPSHOT and (
-            (_dedupe_key(c.identity), c.coordinate.observed_date) in covered
+        candidate_for_merge = c
+        candidate_selectors = _context_selector_tuple(c.identity.context_selector)
+        extra_selectors = tuple(
+            selector
+            for selector in candidate_selectors
+            if selector not in set(scope_selectors)
+        )
+        if extra_selectors:
+            extra_keys = tuple(_context_selector_key(selector) for selector in extra_selectors)
+            if any(key not in mece_dimensions for key in extra_keys):
+                skipped.append(SkippedCandidate(c, "unsafe_mece_aggregation"))
+                continue
+            aggregate_slot = _context_aggregate_slot(
+                c,
+                retained_selectors=scope_selectors,
+            )
+            if not scope_selectors and aggregate_slot in bare_slots:
+                skipped.append(SkippedCandidate(c, "bare_aggregate_precedence"))
+                continue
+            first_extra_keyset = aggregate_first_extra_keyset.get(aggregate_slot)
+            if first_extra_keyset is None:
+                aggregate_first_extra_keyset[aggregate_slot] = tuple(sorted(extra_keys))
+            elif first_extra_keyset != tuple(sorted(extra_keys)):
+                skipped.append(SkippedCandidate(c, "unsafe_mece_aggregation"))
+                continue
+            candidate_for_merge = _context_reduced_candidate(
+                c,
+                retained_selectors=scope_selectors,
+            )
+        if candidate_for_merge.source != SourceKind.SNAPSHOT and (
+            (
+                _dedupe_key(candidate_for_merge.identity),
+                candidate_for_merge.coordinate.observed_date,
+            ) in covered
         ):
-            skipped.append(SkippedCandidate(c, "covered_by_snapshot"))
+            skipped.append(SkippedCandidate(candidate_for_merge, "covered_by_snapshot"))
             continue
-        admitted.append(c)
+        admitted.append(candidate_for_merge)
 
     # Step 1b: RECONSTRUCTED coverage. A reconstructed-as-at row materialises
     # the as-at boundary at its `(identity, observed_date)` and is
@@ -581,16 +761,25 @@ def merge_evidence_candidates(
         non_snapshots = [c for c in group if c.source != SourceKind.SNAPSHOT]
 
         if snapshots:
-            winner = snapshots[0]
-            for loser in snapshots[1:]:
-                skipped.append(SkippedCandidate(loser, "exact_duplicate"))
+            if len(snapshots) > 1 and all(_is_context_aggregate(c) for c in snapshots):
+                winner = _sum_context_aggregate_group(snapshots)
+            else:
+                winner = snapshots[0]
+                for loser in snapshots[1:]:
+                    skipped.append(SkippedCandidate(loser, "exact_duplicate"))
             for ns in non_snapshots:
                 skipped.append(SkippedCandidate(ns, "covered_by_snapshot"))
             points.append(EvidencePoint(winner))
         else:
-            winner = non_snapshots[0]
-            for loser in non_snapshots[1:]:
-                skipped.append(SkippedCandidate(loser, "exact_duplicate"))
+            if (
+                len(non_snapshots) > 1
+                and all(_is_context_aggregate(c) for c in non_snapshots)
+            ):
+                winner = _sum_context_aggregate_group(non_snapshots)
+            else:
+                winner = non_snapshots[0]
+                for loser in non_snapshots[1:]:
+                    skipped.append(SkippedCandidate(loser, "exact_duplicate"))
             points.append(EvidencePoint(winner))
 
     # Step 6: totals + provenance
@@ -612,8 +801,26 @@ def merge_evidence_candidates(
     }
 
     skipped_counts: dict[str, int] = defaultdict(int)
+    skipped_context_selectors: dict[str, set[str]] = defaultdict(set)
     for s in skipped:
         skipped_counts[s.reason] += 1
+        for selector in _candidate_context_selectors(s.candidate):
+            skipped_context_selectors[s.reason].add(selector)
+    included_context_selectors = tuple(sorted({
+        selector
+        for p in points
+        for selector in _candidate_context_selectors(p.candidate)
+    }))
+    selected_regime_kind_by_date: dict[str, str] = {}
+    for p in points:
+        retrieved = p.candidate.coordinate.retrieved_at
+        if not retrieved:
+            continue
+        date_key = str(retrieved)[:10]
+        has_context = bool(_candidate_context_selectors(p.candidate))
+        selected_regime_kind_by_date[date_key] = (
+            "mece_partition" if has_context else "uncontexted"
+        )
 
     selected_families = tuple(
         sorted({p.candidate.identity.slice_family for p in points}, key=lambda f: f.value)
@@ -639,6 +846,13 @@ def merge_evidence_candidates(
         skipped_counts_by_reason=dict(skipped_counts),
         included_counts_by_source={src: by_source_count[src] for src in SourceKind},
         asat_materialised_present=asat_materialised_present,
+        included_context_selectors=included_context_selectors,
+        skipped_context_selectors_by_reason={
+            reason: tuple(sorted(selectors))
+            for reason, selectors in skipped_context_selectors.items()
+            if selectors
+        },
+        selected_regime_kind_by_retrieved_date=selected_regime_kind_by_date,
     )
 
     return EvidenceSet(

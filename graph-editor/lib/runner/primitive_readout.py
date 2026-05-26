@@ -73,6 +73,10 @@ def _per_primitive_evidence_scope(
         date_to=date_to,
         as_at=primitive_scope.as_at,
         scenario_id=primitive_scope.scenario_id,
+        context_key=primitive_scope.context_key,
+        context_selector=primitive_scope.context_selector,
+        mece_dimensions=primitive_scope.mece_dimensions,
+        regime_key=primitive_scope.regime_key,
     )
 
 
@@ -366,6 +370,7 @@ def _build_resolved_runtime_prefix_arrival_identity(
         scenario_id=primitive_scope.scenario_id,
         request_root=request_root,
         context_key=primitive_scope.context_key,
+        context_selector=primitive_scope.context_selector,
         regime_key=primitive_scope.regime_key,
         as_at=primitive_scope.as_at,
         model_source_preference=primitive_scope.model_source_preference,

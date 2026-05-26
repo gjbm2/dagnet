@@ -11,7 +11,7 @@
  * @vitest-environment node
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildCandidateRegimesByEdge, computeMeceDimensions } from '../candidateRegimeService';
+import { buildCandidateRegimesByEdge, computeMeceDimensions, filterCandidatesByContext } from '../candidateRegimeService';
 import { contextRegistry } from '../contextRegistry';
 
 vi.mock('../fetchPlanBuilderService', () => ({
@@ -180,5 +180,48 @@ describe('buildCandidateRegimesByEdge', () => {
     expect(cohorts).toHaveLength(2);
     expect(cohorts.map(r => r.cohort_anchor).sort()).toEqual(['landing', 'signup']);
     expect(new Set(cohorts.map(r => r.core_hash)).size).toBe(2);
+  });
+});
+
+describe('filterCandidatesByContext', () => {
+  const regimes = {
+    'edge-uuid-1': [
+      { core_hash: 'h-bare', equivalent_hashes: [], context_keys: [] },
+      { core_hash: 'h-channel', equivalent_hashes: [], context_keys: ['channel'] },
+      { core_hash: 'h-device', equivalent_hashes: [], context_keys: ['device'] },
+      { core_hash: 'h-channel-device', equivalent_hashes: [], context_keys: ['channel', 'device'] },
+    ],
+  };
+
+  it('keeps the full ordered ladder for uncontexted aggregate queries', async () => {
+    const filtered = await filterCandidatesByContext(regimes, 'window(-90d:)');
+
+    expect(filtered['edge-uuid-1'].map(r => r.core_hash)).toEqual([
+      'h-bare',
+      'h-channel',
+      'h-device',
+      'h-channel-device',
+    ]);
+  });
+
+  it('keeps exact context regimes before reducible supersets', async () => {
+    const filtered = await filterCandidatesByContext(
+      regimes,
+      'context(channel:google).window(-90d:)',
+    );
+
+    expect(filtered['edge-uuid-1'].map(r => r.core_hash)).toEqual([
+      'h-channel',
+      'h-channel-device',
+    ]);
+  });
+
+  it('does not fall back to unrelated regimes when no context can satisfy the query', async () => {
+    const filtered = await filterCandidatesByContext(
+      regimes,
+      'context(geo:uk).window(-90d:)',
+    );
+
+    expect(filtered).toEqual({});
   });
 });

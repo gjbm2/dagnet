@@ -80,6 +80,7 @@ class PrefixArrivalIdentity:
     as_at: Optional[str]
     model_source_preference: str
     parameter_fingerprint: str
+    context_selector: Optional[str] = None
 
     def canonical_string(self) -> str:
         # v2 (Atom 2): scenario_id dropped — caller-context label, not
@@ -88,6 +89,7 @@ class PrefixArrivalIdentity:
             "73n.prefix_arrival_identity.v3.bucket_transition",
             f"root={self.request_root}",
             f"context={self.context_key or ''}",
+            f"context_selector={self.context_selector or ''}",
             f"regime={self.regime_key or ''}",
             f"as_at={self.as_at or ''}",
             f"source_pref={self.model_source_preference}",

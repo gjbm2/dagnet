@@ -25,7 +25,9 @@ materialised dict/row shapes that callers obtain via their own paths.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from evidence_merge import (
@@ -39,6 +41,94 @@ from evidence_merge import (
     normalise_iso_date,
     parse_cohort_anchor_from_slice,
 )
+
+_CONTEXT_RE = re.compile(r"context\(([^)]*)\)")
+
+
+@dataclass(frozen=True)
+class SliceClassification:
+    family: SliceFamily
+    cohort_anchor: Optional[str]
+    context_key: Optional[str]
+    context_selector: Optional[str]
+    temporal_slice: str
+
+
+def _extract_context_selector(slice_dsl: str) -> Optional[str]:
+    if not isinstance(slice_dsl, str):
+        return None
+    selectors = [
+        f"context({match.group(1).strip()})"
+        for match in _CONTEXT_RE.finditer(slice_dsl)
+        if match.group(1).strip()
+    ]
+    if not selectors:
+        return None
+    return ".".join(selectors)
+
+
+def _context_key_from_selector(selector: Optional[str]) -> Optional[str]:
+    if not selector:
+        return None
+    inner = selector.removeprefix("context(").removesuffix(")")
+    return inner.split(":", 1)[0].strip() or None
+
+
+def _slice_without_context(slice_dsl: str) -> str:
+    if not isinstance(slice_dsl, str):
+        return ""
+    stripped = _CONTEXT_RE.sub("", slice_dsl)
+    return stripped.replace("..", ".").strip(".")
+
+
+def classify_contextual_slice(
+    slice_dsl: str,
+    *,
+    section_hint: Optional[str] = None,
+) -> SliceClassification:
+    """Classify temporal family first and context as orthogonal metadata.
+
+    This mirrors the Bayes binder's rule: context-prefixed window/cohort
+    rows are still temporal window/cohort observations, not a context
+    family. `section_hint` is used only when the DSL itself lacks an
+    explicit temporal clause, matching the existing engorged evidence
+    dict shape.
+    """
+    context_selector = _extract_context_selector(slice_dsl)
+    context_key = _context_key_from_selector(context_selector)
+    temporal_slice = _slice_without_context(slice_dsl)
+
+    if "window(" in temporal_slice or section_hint == "window":
+        return SliceClassification(
+            family=SliceFamily.WINDOW,
+            cohort_anchor=None,
+            context_key=context_key,
+            context_selector=context_selector,
+            temporal_slice=temporal_slice,
+        )
+    if "cohort(" in temporal_slice or section_hint == "cohort":
+        return SliceClassification(
+            family=SliceFamily.COHORT,
+            cohort_anchor=parse_cohort_anchor_from_slice(temporal_slice),
+            context_key=context_key,
+            context_selector=context_selector,
+            temporal_slice=temporal_slice,
+        )
+    if context_selector:
+        return SliceClassification(
+            family=SliceFamily.CONTEXT,
+            cohort_anchor=None,
+            context_key=context_key,
+            context_selector=context_selector,
+            temporal_slice=temporal_slice,
+        )
+    return SliceClassification(
+        family=SliceFamily.UNKNOWN,
+        cohort_anchor=None,
+        context_key=None,
+        context_selector=None,
+        temporal_slice=temporal_slice,
+    )
 
 
 def _entry_retrieved_at(entry: Mapping[str, Any]) -> Optional[str]:
@@ -58,42 +148,33 @@ def _entry_retrieved_at(entry: Mapping[str, Any]) -> Optional[str]:
 
 def _classify_slice(
     section: str, slice_dsl: str
-) -> tuple[SliceFamily, Optional[str]]:
+) -> tuple[SliceFamily, Optional[str], Optional[str]]:
     """Determine slice family and (cohort) anchor from section + DSL.
 
-    Returns `(slice_family, cohort_anchor_or_None)`.
-
-    A `.context(...)` qualifier on the DSL forces `SliceFamily.CONTEXT`
-    so the merge skips it as `unsupported_context` for Stage 1 roles.
-    The legacy helper used `"context(" in slice_dsl` for the same intent.
+    Returns `(slice_family, cohort_anchor_or_None, context_selector_or_None)`.
     """
-    if isinstance(slice_dsl, str) and "context(" in slice_dsl:
-        return SliceFamily.CONTEXT, None
-    if section == "window":
-        return SliceFamily.WINDOW, None
-    if section == "cohort":
-        return SliceFamily.COHORT, parse_cohort_anchor_from_slice(slice_dsl)
-    return SliceFamily.UNKNOWN, None
+    classification = classify_contextual_slice(slice_dsl, section_hint=section)
+    return (
+        classification.family,
+        classification.cohort_anchor,
+        classification.context_selector,
+    )
 
 
 def _classify_slice_from_dsl(
     slice_dsl: str,
-) -> tuple[SliceFamily, Optional[str]]:
+) -> tuple[SliceFamily, Optional[str], Optional[str]]:
     """Classify a parameter-file `values[]` entry purely from its sliceDSL.
 
-    Mirrors the legacy `_slice_matches_role` precedence in
-    `file_evidence_supplement.py`: context() qualification dominates,
-    then window(), then cohort().
+    Context metadata is orthogonal: temporal family is detected from
+    window()/cohort(), and the exact context selector is carried separately.
     """
-    if not isinstance(slice_dsl, str):
-        return SliceFamily.UNKNOWN, None
-    if "context(" in slice_dsl:
-        return SliceFamily.CONTEXT, None
-    if "window(" in slice_dsl:
-        return SliceFamily.WINDOW, None
-    if "cohort(" in slice_dsl:
-        return SliceFamily.COHORT, parse_cohort_anchor_from_slice(slice_dsl)
-    return SliceFamily.UNKNOWN, None
+    classification = classify_contextual_slice(slice_dsl)
+    return (
+        classification.family,
+        classification.cohort_anchor,
+        classification.context_selector,
+    )
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -181,7 +262,8 @@ def bayes_file_evidence_to_candidates(
             if not isinstance(entry, Mapping):
                 continue
             slice_dsl = str(entry.get("sliceDSL") or "")
-            slice_family, cohort_anchor = _classify_slice(section, slice_dsl)
+            slice_family, cohort_anchor, context_selector = _classify_slice(section, slice_dsl)
+            context_key = _context_key_from_selector(context_selector)
             n_daily = entry.get("n_daily") or []
             k_daily = entry.get("k_daily") or []
             dates = entry.get("dates") or []
@@ -228,7 +310,8 @@ def bayes_file_evidence_to_candidates(
                     subject_to=scope.subject_to,
                     anchor=cohort_anchor if slice_family == SliceFamily.COHORT else None,
                     slice_family=slice_family,
-                    context_key=scope.context_key,
+                    context_key=context_key,
+                    context_selector=context_selector,
                     regime_key=scope.regime_key,
                     population_identity=scope.scope_population_identity,
                 )
@@ -310,9 +393,10 @@ def bayes_parameter_file_evidence_to_candidates(
         if not isinstance(entry, Mapping):
             continue
         slice_dsl = str(entry.get("sliceDSL") or "")
-        slice_family, cohort_anchor = _classify_slice_from_dsl(slice_dsl)
+        slice_family, cohort_anchor, context_selector = _classify_slice_from_dsl(slice_dsl)
         if slice_family == SliceFamily.UNKNOWN:
             continue
+        context_key = _context_key_from_selector(context_selector)
         n_daily = entry.get("n_daily") or []
         k_daily = entry.get("k_daily") or []
         dates = entry.get("dates") or []
@@ -370,7 +454,8 @@ def bayes_parameter_file_evidence_to_candidates(
                 subject_to=scope.subject_to,
                 anchor=cohort_anchor if slice_family == SliceFamily.COHORT else None,
                 slice_family=slice_family,
-                context_key=scope.context_key,
+                context_key=context_key,
+                context_selector=context_selector,
                 regime_key=scope.regime_key,
                 population_identity=scope.scope_population_identity,
             )
@@ -400,15 +485,8 @@ def _classify_slice_key(slice_key: str) -> tuple[SliceFamily, Optional[str]]:
     `"window(-90d:)"` or `"cohort(simple-a, 1-Apr-26:5-Apr-26)"`, with
     optional `.context(...)` qualification for context-tagged rows.
     """
-    if not isinstance(slice_key, str):
-        return SliceFamily.UNKNOWN, None
-    if "context(" in slice_key:
-        return SliceFamily.CONTEXT, None
-    if "window(" in slice_key:
-        return SliceFamily.WINDOW, None
-    if "cohort(" in slice_key:
-        return SliceFamily.COHORT, parse_cohort_anchor_from_slice(slice_key)
-    return SliceFamily.UNKNOWN, None
+    classification = classify_contextual_slice(slice_key)
+    return classification.family, classification.cohort_anchor
 
 
 def _row_retrieved_at(row: Mapping[str, Any]) -> Optional[str]:
@@ -496,6 +574,8 @@ def reconstructed_asat_to_candidates(
         slice_family, cohort_anchor = _classify_slice_key(slice_key)
         if slice_family == SliceFamily.UNKNOWN:
             continue
+        context_selector = _extract_context_selector(slice_key)
+        context_key = _context_key_from_selector(context_selector)
         observed = normalise_iso_date(row.get("anchor_day"))
         if not observed:
             continue
@@ -525,7 +605,8 @@ def reconstructed_asat_to_candidates(
             subject_to=scope.subject_to,
             anchor=cohort_anchor if slice_family == SliceFamily.COHORT else None,
             slice_family=slice_family,
-            context_key=scope.context_key,
+            context_key=context_key,
+            context_selector=context_selector,
             regime_key=scope.regime_key,
             population_identity=scope.scope_population_identity,
         )

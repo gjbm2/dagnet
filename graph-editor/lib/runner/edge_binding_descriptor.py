@@ -53,6 +53,9 @@ class PrimitiveEdgeBindingDescriptor:
     scenario_id: Optional[str]
     anchor_node_id: Optional[str]
     edge_dict: Mapping[str, Any]
+    context_key: Optional[str] = None
+    context_selector: Optional[str] = None
+    mece_dimensions: Sequence[str] = ()
 
 
 def _evidence_scope_for(d: PrimitiveEdgeBindingDescriptor) -> EvidenceScope:
@@ -65,6 +68,9 @@ def _evidence_scope_for(d: PrimitiveEdgeBindingDescriptor) -> EvidenceScope:
         as_at=d.as_at,
         scenario_id=d.scenario_id,
         anchor=d.anchor_node_id,
+        context_key=d.context_key,
+        context_selector=d.context_selector,
+        mece_dimensions=tuple(d.mece_dimensions or ()),
     )
 
 
@@ -111,6 +117,9 @@ def enumerate_per_edge_descriptors(
     as_at: Optional[str],
     scenario_id: Optional[str],
     anchor_node_id: Optional[str],
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
+    mece_dimensions: Sequence[str] = (),
     role: EvidenceRole = EvidenceRole.WINDOW_SUBJECT_HELPER,
 ) -> List[PrimitiveEdgeBindingDescriptor]:
     """Walk a single span topology (subject `X -> end` or carrier
@@ -159,6 +168,9 @@ def enumerate_per_edge_descriptors(
                 as_at=as_at,
                 scenario_id=scenario_id,
                 anchor_node_id=anchor_node_id,
+                context_key=context_key,
+                context_selector=context_selector,
+                mece_dimensions=tuple(mece_dimensions or ()),
                 edge_dict=edge_dict,
             )
         )

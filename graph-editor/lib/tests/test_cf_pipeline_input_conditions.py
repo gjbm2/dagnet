@@ -51,7 +51,10 @@ from evidence_merge import (
     TemporalBasis,
 )
 
-from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
+from runner.cohort_forecast_v3 import (
+    _aggregate_request_candidates,
+    compute_cohort_maturity_rows_v3,
+)
 from runner.request_envelope import build_request_envelope_plan
 
 
@@ -283,6 +286,65 @@ def _window_candidates(
                 k=y,
             ))
     return candidates
+
+
+def test_context_candidates_still_use_single_request_evidence_pool():
+    """Stage 7: context must not introduce a parallel evidence branch.
+
+    Target, non-target subject, and carrier candidate feeds are caller
+    conveniences only. They must flatten into one canonical request pool
+    before primitive-local binding applies context/MECE admission rules.
+    """
+    target_identity = EvidenceIdentity(
+        role=EvidenceRole.WINDOW_SUBJECT_HELPER,
+        subject_from='node-x',
+        subject_to='node-y',
+        anchor=None,
+        slice_family=SliceFamily.WINDOW,
+        context_key='channel',
+        regime_key=None,
+        population_identity=None,
+        context_selector='context(channel:google)',
+    )
+    carrier_identity = EvidenceIdentity(
+        role=EvidenceRole.WINDOW_SUBJECT_HELPER,
+        subject_from='node-a',
+        subject_to='node-x',
+        anchor=None,
+        slice_family=SliceFamily.WINDOW,
+        context_key='channel',
+        regime_key=None,
+        population_identity=None,
+        context_selector='context(channel:google)',
+    )
+    target = _candidate(
+        source=SourceKind.SNAPSHOT,
+        identity=target_identity,
+        observed_date='2026-01-01',
+        retrieved_at='2026-01-10',
+        n=100,
+        k=40,
+    )
+    carrier = _candidate(
+        source=SourceKind.SNAPSHOT,
+        identity=carrier_identity,
+        observed_date='2026-01-01',
+        retrieved_at='2026-01-10',
+        n=120,
+        k=100,
+    )
+
+    pool = _aggregate_request_candidates(
+        target_candidates=[target],
+        per_edge_subject_candidates={'e-target': (target,)},
+        per_edge_upstream_candidates={'e-carrier': (carrier,)},
+    )
+
+    assert pool == [target, carrier]
+    assert {
+        c.identity.context_selector
+        for c in pool
+    } == {'context(channel:google)'}
 
 
 # ─── Row helpers ─────────────────────────────────────────────────────

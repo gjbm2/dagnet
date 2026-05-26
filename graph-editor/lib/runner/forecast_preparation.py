@@ -44,6 +44,44 @@ class ForecastPreparation:
     envelope_plan: Optional[Any] = None
 
 
+@dataclass(frozen=True)
+class ForecastContextScope:
+    context_key: Optional[str] = None
+    context_selector: Optional[str] = None
+    mece_dimensions: tuple[str, ...] = ()
+
+
+def extract_forecast_context_scope(
+    effective_query_dsl: str,
+    *,
+    mece_dimensions: Optional[List[str]] = None,
+) -> ForecastContextScope:
+    """Extract exact context scope from the scenario effective DSL.
+
+    Graph-level pinned DSL decides candidate-regime discovery upstream; this
+    function reads only the scenario's effective DSL because it defines the
+    current request scope.
+    """
+    from query_dsl import parse_query
+
+    if not effective_query_dsl:
+        return ForecastContextScope(
+            mece_dimensions=tuple(mece_dimensions or ()),
+        )
+    parsed = parse_query(effective_query_dsl or "")
+    context_key = None
+    context_selector = None
+    if len(parsed.context) == 1 and not parsed.context_any:
+        ctx = parsed.context[0]
+        context_key = ctx.key
+        context_selector = f"context({ctx.key}:{ctx.value})"
+    return ForecastContextScope(
+        context_key=context_key,
+        context_selector=context_selector,
+        mece_dimensions=tuple(mece_dimensions or ()),
+    )
+
+
 def apply_temporal_regime_selection(
     rows: List[Dict[str, Any]],
     subj: Dict[str, Any],
@@ -510,6 +548,7 @@ def prepare_forecast_subject_group(
     envelope_plan: Optional[Any] = None,
     as_at: Optional[str] = None,
     scenario_id: Optional[str] = None,
+    context_scope: Optional[ForecastContextScope] = None,
 ) -> ForecastPreparation:
     """Build the shared subject/frame bundle for one forecast query path.
 
@@ -587,6 +626,12 @@ def prepare_forecast_subject_group(
                 graph_preference=graph_data.get("model_source_preference"),
                 as_at=as_at,
                 scenario_id=scenario_id,
+                context_key=(
+                    context_scope.context_key if context_scope is not None else None
+                ),
+                context_selector=(
+                    context_scope.context_selector if context_scope is not None else None
+                ),
             )
         except Exception as _env_exc:
             print(

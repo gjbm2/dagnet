@@ -686,8 +686,8 @@ export async function prepareAnalysisComputeInputs(
       }
 
       // Filter the full inventory to this scenario's context dimensions (doc 30 §4.1).
-      // If filtering produces empty results for all edges, fall back to the full
-      // inventory — the BE's regime selection will pick the best available match.
+      // Do not fall back to the full inventory when the filtered result is empty:
+      // that reintroduces regimes the BE cannot safely answer for this scope.
       let candidateRegimesByEdge: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> | undefined;
       if (Object.keys(fullRegimeInventory).length > 0) {
         try {
@@ -696,11 +696,9 @@ export async function prepareAnalysisComputeInputs(
             fullRegimeInventory,
             scenario.effective_query_dsl,
           );
-          candidateRegimesByEdge = Object.keys(filtered).length > 0
-            ? filtered
-            : fullRegimeInventory;
+          candidateRegimesByEdge = filtered;
         } catch {
-          candidateRegimesByEdge = fullRegimeInventory;
+          candidateRegimesByEdge = {};
         }
       }
 

@@ -236,7 +236,7 @@ export async function runConditionedForecast(
         // Filter by the temporal portion only — context() lives on the
         // temporal side, not the subject side.
         const filtered = await filterCandidatesByContext(fullInventory, resolvedTemporalDsl);
-        candidateRegimesByEdge = Object.keys(filtered).length > 0 ? filtered : fullInventory;
+        candidateRegimesByEdge = filtered;
       }
     } catch (err: any) {
       console.warn('[conditionedForecast] Failed to build candidate regimes:', err?.message);

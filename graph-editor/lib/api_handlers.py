@@ -1601,6 +1601,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
     import math
     from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
     from runner.forecast_preparation import (
+        extract_forecast_context_scope,
         prepare_forecast_subject_group,
         resolve_forecast_subjects,
     )
@@ -1637,6 +1638,10 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         temporal_dsl = scenario.get('effective_query_dsl', '')
         query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
         is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
+        context_scope = extract_forecast_context_scope(
+            temporal_dsl,
+            mece_dimensions=data.get('mece_dimensions') or [],
+        )
 
         from runner.forecast_runtime import parse_asat_from_dsl as _parse_asat_for_envelope
         _envelope_as_at = _parse_asat_for_envelope(temporal_dsl)
@@ -1647,6 +1652,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             log_prefix='[v3]',
             as_at=_envelope_as_at,
             scenario_id=scenario_id,
+            context_scope=context_scope,
         )
         query_from_node = preparation.query_from_node or None
         query_to_node = preparation.query_to_node or None
@@ -1774,6 +1780,9 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 sweep_to=sweep_to_final,
                 as_at=parse_asat_from_dsl(temporal_dsl),
                 scenario_id=scenario_id,
+                context_key=context_scope.context_key,
+                context_selector=context_scope.context_selector,
+                mece_dimensions=context_scope.mece_dimensions,
             )
             # Non-target subject edges (X → end).
             _stage_subject_per_edge_candidates = build_superset_candidates_by_edge(
@@ -1785,6 +1794,9 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 sweep_to=sweep_to_final,
                 as_at=parse_asat_from_dsl(temporal_dsl),
                 scenario_id=scenario_id,
+                context_key=context_scope.context_key,
+                context_selector=context_scope.context_selector,
+                mece_dimensions=context_scope.mece_dimensions,
             )
             maturity_rows = compute_cohort_maturity_rows_v3(
                 frames=composed_frames,
@@ -1809,6 +1821,9 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 show_model_curve=bool(display_settings.get('show_model_curve')),
                 emit_diagnostics=_emit_diagnostics,
                 envelope_plan=preparation.envelope_plan,
+                context_key=context_scope.context_key,
+                context_selector=context_scope.context_selector,
+                mece_dimensions=context_scope.mece_dimensions,
             )
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
@@ -2004,6 +2019,7 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
     import numpy as _np
     from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
     from runner.forecast_preparation import (
+        extract_forecast_context_scope,
         prepare_forecast_subject_group,
         resolve_forecast_subjects,
     )
@@ -2068,6 +2084,10 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
 
         query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
         is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
+        context_scope = extract_forecast_context_scope(
+            temporal_dsl,
+            mece_dimensions=data.get('mece_dimensions') or [],
+        )
 
         edge_results: List[Dict[str, Any]] = []
         skipped_edges: List[Dict[str, Any]] = []
@@ -2086,6 +2106,7 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                 log_prefix='[forecast]',
                 as_at=_cf_envelope_as_at,
                 scenario_id=scenario_id,
+                context_scope=context_scope,
             )
             query_from_node = preparation.query_from_node or None
             query_to_node = preparation.query_to_node or None
@@ -2218,6 +2239,9 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                     sweep_to=sweep_to_final,
                     as_at=parse_asat_from_dsl(temporal_dsl),
                     scenario_id=scenario_id,
+                    context_key=context_scope.context_key,
+                    context_selector=context_scope.context_selector,
+                    mece_dimensions=context_scope.mece_dimensions,
                 )
                 # Non-target subject edges (X→end). Walk X→end and
                 # populate evidence per edge from the topo cache.
@@ -2230,6 +2254,9 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                     sweep_to=sweep_to_final,
                     as_at=parse_asat_from_dsl(temporal_dsl),
                     scenario_id=scenario_id,
+                    context_key=context_scope.context_key,
+                    context_selector=context_scope.context_selector,
+                    mece_dimensions=context_scope.mece_dimensions,
                 )
                 maturity_rows = compute_cohort_maturity_rows_v3(
                     frames=composed_frames,
@@ -2251,6 +2278,9 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                     per_edge_results_by_uuid=all_per_edge_results,
                     emit_diagnostics=_emit_diagnostics,
                     envelope_plan=preparation.envelope_plan,
+                    context_key=context_scope.context_key,
+                    context_selector=context_scope.context_selector,
+                    mece_dimensions=context_scope.mece_dimensions,
                 )
 
                 if maturity_rows:

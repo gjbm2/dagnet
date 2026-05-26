@@ -128,6 +128,8 @@ class PrimitiveScope:
     selected_anchor_days: Tuple[str, ...] = ()
     evidence_date_from: Optional[str] = None
     evidence_date_to: Optional[str] = None
+    context_selector: Optional[str] = None
+    mece_dimensions: Tuple[str, ...] = ()
 
 
 # ─── Draw-family key + keyed RNG seam ──────────────────────────────────
@@ -197,6 +199,8 @@ class DrawFamilyKey:
             f"date_to={sc.date_to}",
             f"as_at={sc.as_at or ''}",
             f"context={sc.context_key or ''}",
+            f"context_selector={sc.context_selector or ''}",
+            f"mece_dimensions={','.join(sorted(sc.mece_dimensions or ()))}",
             f"regime={sc.regime_key or ''}",
             f"source_pref={sc.model_source_preference}",
             f"resolved_source={sc.resolved_source_identity or ''}",
@@ -502,6 +506,8 @@ class ConditionedTransitionPrimitive:
                 "date_to": sc.date_to,
                 "as_at": sc.as_at,
                 "context_key": sc.context_key,
+                "context_selector": sc.context_selector,
+                "mece_dimensions": list(sc.mece_dimensions),
                 "regime_key": sc.regime_key,
                 "model_source_preference": sc.model_source_preference,
                 "resolved_source_identity": sc.resolved_source_identity,

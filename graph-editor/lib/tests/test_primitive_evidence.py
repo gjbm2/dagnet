@@ -961,6 +961,52 @@ def test_superset_candidates_admitted_for_non_target_subject_edge():
     assert [c.k for c in candidates] == [8]
 
 
+def test_effective_dsl_context_scope_parser_uses_exact_context_and_mece_dimensions():
+    from runner.forecast_preparation import extract_forecast_context_scope
+
+    scope = extract_forecast_context_scope(
+        "context(channel:google).window(1-Apr-26:4-Apr-26).asat(15-Apr-26)",
+        mece_dimensions=["channel"],
+    )
+
+    assert scope.context_key == "channel"
+    assert scope.context_selector == "context(channel:google)"
+    assert scope.mece_dimensions == ("channel",)
+
+
+def test_edge_descriptor_threads_context_scope_to_evidence_scope():
+    from runner.edge_binding_descriptor import (
+        _evidence_scope_for,
+        enumerate_per_edge_descriptors,
+    )
+
+    graph = _make_graph([
+        ('e-x-u', 'u-X', 'u-U', 'X', 'U'),
+    ])
+
+    descriptors = enumerate_per_edge_descriptors(
+        graph=graph,
+        from_node='X',
+        to_node='U',
+        is_carrier=False,
+        target_edge_uuid=None,
+        anchor_from='2026-03-01',
+        sweep_to='2026-03-31',
+        as_at=None,
+        scenario_id='scn-1',
+        anchor_node_id=None,
+        context_key='channel',
+        context_selector='context(channel:google)',
+        mece_dimensions=('channel',),
+    )
+
+    assert len(descriptors) == 1
+    scope = _evidence_scope_for(descriptors[0])
+    assert scope.context_key == 'channel'
+    assert scope.context_selector == 'context(channel:google)'
+    assert scope.mece_dimensions == ('channel',)
+
+
 def test_descriptor_does_not_read_graph_side_evidence_sources():
     """The selected A-clock candidate translator must stay behind the
     evidence-superset interface."""

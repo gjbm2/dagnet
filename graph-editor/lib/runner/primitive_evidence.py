@@ -465,6 +465,15 @@ class RequestPrimitiveRegistry:
                         res.diagnostics.zero_clock_weight_row_count,
                     'skipped_counts_by_reason':
                         dict(res.weighted_view.skipped_counts_by_reason),
+                    'included_context_selectors':
+                        list(res.raw_evidence_set.provenance.included_context_selectors),
+                    'skipped_context_selectors_by_reason': {
+                        reason: list(selectors)
+                        for reason, selectors in
+                        res.raw_evidence_set.provenance.skipped_context_selectors_by_reason.items()
+                    },
+                    'selected_regime_kind_by_retrieved_date':
+                        dict(res.raw_evidence_set.provenance.selected_regime_kind_by_retrieved_date),
                 }
                 for key, res in self._entries.items()
             ],
@@ -568,6 +577,8 @@ def make_primitive_scope_from_evidence_scope(
         date_to=evidence_scope.date_to,
         as_at=evidence_scope.as_at,
         context_key=evidence_scope.context_key,
+        context_selector=evidence_scope.context_selector,
+        mece_dimensions=tuple(evidence_scope.mece_dimensions or ()),
         regime_key=evidence_scope.regime_key,
         model_source_preference=model_source_preference,
         resolved_source_identity=resolved_source_identity,

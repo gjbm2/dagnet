@@ -48,6 +48,8 @@ def _window_scope(
     date_to: str = "2026-01-31",
     as_at: str | None = "2026-02-01",
     context_key: str | None = None,
+    context_selector: str | None = None,
+    mece_dimensions: tuple[str, ...] = (),
     regime_key: str | None = None,
     scenario_id: str | None = "scn-1",
     role: EvidenceRole = EvidenceRole.WINDOW_SUBJECT_HELPER,
@@ -62,6 +64,8 @@ def _window_scope(
         scenario_id=scenario_id,
         anchor=None,
         context_key=context_key,
+        context_selector=context_selector,
+        mece_dimensions=mece_dimensions,
         regime_key=regime_key,
     )
 
@@ -101,6 +105,7 @@ def _make_candidate(
     subject_to: str = "D",
     anchor: str | None = None,
     context_key: str | None = None,
+    context_selector: str | None = None,
     regime_key: str | None = None,
     population_identity: str | None = None,
     retrieved_at: str | None = "2026-02-01",
@@ -115,6 +120,7 @@ def _make_candidate(
         anchor=anchor,
         slice_family=slice_family,
         context_key=context_key,
+        context_selector=context_selector,
         regime_key=regime_key,
         population_identity=population_identity,
     )
@@ -173,6 +179,197 @@ def _cohort_file(anchor: str, date: str, n: int, k: int, **kw) -> EvidenceCandid
 
 def _skip_reasons(merged) -> dict[str, int]:
     return dict(merged.provenance.skipped_counts_by_reason)
+
+
+def test_exact_context_selector_admits_matching_context_window_rows():
+    scope = _window_scope(
+        context_key="channel",
+        context_selector="context(channel:paid)",
+    )
+    matching = _window_snapshot(
+        "2026-01-05",
+        80,
+        32,
+        context_key="channel",
+        context_selector="context(channel:paid)",
+    )
+    wrong_value = _window_snapshot(
+        "2026-01-06",
+        70,
+        21,
+        context_key="channel",
+        context_selector="context(channel:organic)",
+    )
+
+    merged = merge_evidence_candidates(scope, [matching, wrong_value])
+
+    assert merged.totals.n == 80
+    assert merged.totals.k == 32
+    assert _skip_reasons(merged) == {"context_mismatch": 1}
+    assert merged.provenance.included_context_selectors == ("context(channel:paid)",)
+    assert merged.provenance.skipped_context_selectors_by_reason == {
+        "context_mismatch": ("context(channel:organic)",)
+    }
+
+
+def test_aggregate_scope_sums_mece_context_window_rows():
+    scope = _window_scope(mece_dimensions=("channel",))
+    candidates = [
+        _window_snapshot(
+            "2026-01-05",
+            80,
+            32,
+            context_key="channel",
+            context_selector="context(channel:paid)",
+        ),
+        _window_snapshot(
+            "2026-01-05",
+            70,
+            21,
+            context_key="channel",
+            context_selector="context(channel:organic)",
+        ),
+    ]
+
+    merged = merge_evidence_candidates(scope, candidates)
+
+    assert merged.totals.n == 150
+    assert merged.totals.k == 53
+    assert _skip_reasons(merged) == {}
+    assert {p.candidate.identity.context_selector for p in merged.points} == {None}
+    assert merged.provenance.included_context_selectors == (
+        "context(channel:organic)",
+        "context(channel:paid)",
+    )
+    assert merged.provenance.selected_regime_kind_by_retrieved_date == {
+        "2026-02-01": "mece_partition",
+    }
+
+
+def test_bare_aggregate_row_takes_precedence_over_mece_context_rows():
+    scope = _window_scope(mece_dimensions=("channel",))
+    bare = _window_snapshot("2026-01-05", 151, 54)
+    context = _window_snapshot(
+        "2026-01-05",
+        80,
+        32,
+        context_key="channel",
+        context_selector="context(channel:paid)",
+    )
+
+    merged = merge_evidence_candidates(scope, [context, bare])
+
+    assert merged.totals.n == 151
+    assert merged.totals.k == 54
+    assert _skip_reasons(merged) == {"bare_aggregate_precedence": 1}
+    assert merged.provenance.skipped_context_selectors_by_reason == {
+        "bare_aggregate_precedence": ("context(channel:paid)",)
+    }
+
+
+def test_aggregate_scope_refuses_non_mece_context_rows():
+    scope = _window_scope(mece_dimensions=("channel",))
+    candidate = _window_snapshot(
+        "2026-01-05",
+        80,
+        32,
+        context_key="device",
+        context_selector="context(device:mobile)",
+    )
+
+    merged = merge_evidence_candidates(scope, [candidate])
+
+    assert merged.totals.n == 0
+    assert merged.totals.k == 0
+    assert _skip_reasons(merged) == {"unsafe_mece_aggregation": 1}
+    assert merged.provenance.skipped_context_selectors_by_reason == {
+        "unsafe_mece_aggregation": ("context(device:mobile)",)
+    }
+
+
+def test_aggregate_scope_refuses_second_mece_dimension_for_same_coordinate():
+    scope = _window_scope(mece_dimensions=("channel", "device"))
+    candidates = [
+        _window_snapshot(
+            "2026-01-05",
+            80,
+            32,
+            context_key="channel",
+            context_selector="context(channel:paid)",
+        ),
+        _window_snapshot(
+            "2026-01-05",
+            60,
+            24,
+            context_key="device",
+            context_selector="context(device:mobile)",
+        ),
+    ]
+
+    merged = merge_evidence_candidates(scope, candidates)
+
+    assert merged.totals.n == 80
+    assert merged.totals.k == 32
+    assert _skip_reasons(merged) == {"unsafe_mece_aggregation": 1}
+
+
+def test_exact_context_scope_reduces_mece_superset_rows():
+    scope = _window_scope(
+        context_key="channel",
+        context_selector="context(channel:paid)",
+        mece_dimensions=("device",),
+    )
+    candidates = [
+        _window_snapshot(
+            "2026-01-05",
+            40,
+            16,
+            context_key="channel||device",
+            context_selector="context(channel:paid).context(device:mobile)",
+        ),
+        _window_snapshot(
+            "2026-01-05",
+            60,
+            24,
+            context_key="channel||device",
+            context_selector="context(channel:paid).context(device:desktop)",
+        ),
+    ]
+
+    merged = merge_evidence_candidates(scope, candidates)
+
+    assert merged.totals.n == 100
+    assert merged.totals.k == 40
+    assert _skip_reasons(merged) == {}
+    assert {
+        p.candidate.identity.context_selector
+        for p in merged.points
+    } == {"context(channel:paid)"}
+    assert merged.provenance.included_context_selectors == (
+        "context(channel:paid).context(device:desktop)",
+        "context(channel:paid).context(device:mobile)",
+    )
+
+
+def test_exact_context_scope_refuses_non_mece_superset_rows():
+    scope = _window_scope(
+        context_key="channel",
+        context_selector="context(channel:paid)",
+        mece_dimensions=(),
+    )
+    candidate = _window_snapshot(
+        "2026-01-05",
+        40,
+        16,
+        context_key="channel||device",
+        context_selector="context(channel:paid).context(device:mobile)",
+    )
+
+    merged = merge_evidence_candidates(scope, [candidate])
+
+    assert merged.totals.n == 0
+    assert merged.totals.k == 0
+    assert _skip_reasons(merged) == {"unsafe_mece_aggregation": 1}
 
 
 # ─── Test 1: snapshot/file overlap by day ───────────────────────────────
@@ -484,6 +681,7 @@ def test_context_qualified_row_is_skipped_under_window_role():
             n=99,
             k=99,
             context_key="ctx-x",
+            context_selector="context(ctx-x:value)",
         ),
         _window_file("2026-01-05", n=10, k=4),
     ]
@@ -492,6 +690,9 @@ def test_context_qualified_row_is_skipped_under_window_role():
     assert merged.totals.n == 10
     reasons = _skip_reasons(merged)
     assert reasons.get("unsupported_context") == 1
+    assert merged.provenance.skipped_context_selectors_by_reason == {
+        "unsupported_context": ("context(ctx-x:value)",)
+    }
 
 
 # ─── Test 12: skipped rows always carry a reason ───────────────────────
@@ -674,6 +875,42 @@ def test_response_provenance_block_has_documented_shape():
     assert block["skipped_counts_by_reason"].get("after_as_at", 0) >= 1
     assert block["skipped_counts_by_reason"].get("wrong_role", 0) >= 1
     assert block["asat_materialised_present"] is False
+    assert block["included_context_selectors"] == []
+    assert block["skipped_context_selectors_by_reason"] == {}
+    assert block["selected_regime_kind_by_retrieved_date"] == {
+        "2026-01-10": "uncontexted",
+        "2026-01-11": "uncontexted",
+    }
+
+
+def test_response_provenance_names_included_and_skipped_contexts():
+    scope = _window_scope(
+        context_key="channel",
+        context_selector="context(channel:paid)",
+    )
+    candidates = [
+        _window_snapshot(
+            "2026-01-05",
+            n=20,
+            k=8,
+            context_key="channel",
+            context_selector="context(channel:paid)",
+        ),
+        _window_snapshot(
+            "2026-01-06",
+            n=10,
+            k=4,
+            context_key="channel",
+            context_selector="context(channel:organic)",
+        ),
+    ]
+    merged = merge_evidence_candidates(scope, candidates)
+    block = evidence_set_to_response_provenance(merged)
+
+    assert block["included_context_selectors"] == ["context(channel:paid)"]
+    assert block["skipped_context_selectors_by_reason"] == {
+        "context_mismatch": ["context(channel:organic)"],
+    }
 
 
 def test_response_provenance_block_marks_asat_materialised_when_present():

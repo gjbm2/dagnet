@@ -199,6 +199,41 @@ def _analyse_cohort_maturity(graph: str, dsl: str) -> dict[str, Any]:
     return json.loads(result.stdout[idx:])
 
 
+def _analyse_conditioned_forecast(graph: str, dsl: str) -> dict[str, Any]:
+    """Run conditioned_forecast analyse with diagnostics enabled."""
+    args = [
+        "--graph", _DATA_REPO_PATH or "",
+        "--name", graph,
+        "--query", dsl,
+        "--type", "conditioned_forecast",
+        "--no-cache", "--no-snapshot-cache",
+        "--diagnostic",
+        "--format", "json",
+    ]
+    client = get_default_client() if _DATA_REPO_PATH else None
+    if client is not None:
+        try:
+            return client.call_json("analyse", args)
+        except DaemonError as exc:
+            raise AssertionError(
+                f"daemon conditioned_forecast failed for {graph} / {dsl!r} "
+                f"(exit {exc.exit_code}): {exc}\nstderr:\n{exc.stderr[-2000:]}"
+            )
+
+    cmd = ["bash", str(_ANALYSE_SH), graph, dsl,
+           "--type", "conditioned_forecast", "--no-cache",
+           "--no-snapshot-cache", "--diagnostic", "--format", "json"]
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            cwd=str(_REPO_ROOT), timeout=300)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"analyse.sh conditioned_forecast exited {result.returncode} "
+            f"for {graph} / {dsl!r}\nstderr:\n{result.stderr[-2000:]}"
+        )
+    idx = result.stdout.find("{")
+    return json.loads(result.stdout[idx:])
+
+
 def _scalar(payload: dict[str, Any], key: str) -> Optional[Any]:
     """Read e.EDGE.p.X from a flat param-pack payload."""
     return payload.get(key)
@@ -293,6 +328,15 @@ def mixed_asat_epoch2_pp() -> dict[str, Any]:
 def mixed_ctx_asat_epoch2_pp() -> dict[str, Any]:
     _ensure_synth_ready(GRAPH_MIXED, enriched=True, check_fe_parity=False)
     return _param_pack(
+        GRAPH_MIXED,
+        f"context(synth-channel:google).{MIXED_WINDOW}.asat({MIXED_ASAT_EPOCH2})",
+    )
+
+
+@pytest.fixture(scope="module")
+def mixed_ctx_asat_epoch2_cf() -> dict[str, Any]:
+    _ensure_synth_ready(GRAPH_MIXED, enriched=True, check_fe_parity=False)
+    return _analyse_conditioned_forecast(
         GRAPH_MIXED,
         f"context(synth-channel:google).{MIXED_WINDOW}.asat({MIXED_ASAT_EPOCH2})",
     )
@@ -520,6 +564,47 @@ class TestAsatMixedEpoch:
             pytest.fail(
                 "evidence.k=0 for context-qualified asat. Hash family mismatch — "
                 "bare sig can't find contexted rows."
+            )
+
+    def test_t8b_conditioned_forecast_context_asat_has_evidence_and_provenance(
+        self, mixed_ctx_asat_epoch2_cf,
+    ) -> None:
+        scenarios = mixed_ctx_asat_epoch2_cf.get("scenarios") or []
+        if not scenarios:
+            pytest.fail("conditioned_forecast returned no scenarios")
+        edges = scenarios[0].get("edges") or []
+        edge = next(
+            (
+                e for e in edges
+                if e.get("edge_uuid") == EDGE_MIXED
+                or (
+                    e.get("from_node") == "synth-context-solo-mixed-anchor"
+                    and e.get("to_node") == "synth-context-solo-mixed-target"
+                )
+            ),
+            None,
+        )
+        if edge is None:
+            pytest.fail(f"conditioned_forecast missing edge {EDGE_MIXED}")
+        if not edge.get("evidence_n") or not edge.get("evidence_k"):
+            pytest.fail(
+                f"context-qualified conditioned_forecast returned empty evidence: {edge!r}"
+            )
+
+        provenance_payload = {
+            "diagnostics": mixed_ctx_asat_epoch2_cf.get("_diagnostics") or {},
+            "edge_runtime_provenance": edge.get("runtime_provenance") or {},
+            "edge_evidence_provenance": edge.get("evidence_provenance") or {},
+        }
+        diag_text = json.dumps(provenance_payload, sort_keys=True)
+        if "context(synth-channel:google)" not in diag_text:
+            pytest.fail(
+                "conditioned_forecast diagnostics did not name admitted "
+                "context evidence for synth-channel:google"
+            )
+        if "unsupported_context" in diag_text and "context_mismatch" not in diag_text:
+            pytest.fail(
+                "conditioned_forecast diagnostics still report only unsupported_context"
             )
 
 
