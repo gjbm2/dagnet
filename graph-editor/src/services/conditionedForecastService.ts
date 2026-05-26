@@ -228,10 +228,19 @@ export async function runConditionedForecast(
 
   // Build candidate regimes for regime selection on the BE
   let candidateRegimesByEdge: Record<string, any[]> = {};
+  let meceDimensions: string[] = [];
   if (ws) {
     try {
-      const { buildCandidateRegimesByEdge, filterCandidatesByContext } = await import('./candidateRegimeService');
-      const fullInventory = await buildCandidateRegimesByEdge(graph, ws);
+      const {
+        buildCandidateRegimesByEdge,
+        computeMeceDimensions,
+        filterCandidatesByContext,
+      } = await import('./candidateRegimeService');
+      const [fullInventory, computedMeceDimensions] = await Promise.all([
+        buildCandidateRegimesByEdge(graph, ws),
+        computeMeceDimensions(graph, ws),
+      ]);
+      meceDimensions = computedMeceDimensions;
       if (Object.keys(fullInventory).length > 0) {
         // Filter by the temporal portion only — context() lives on the
         // temporal side, not the subject side.
@@ -251,6 +260,7 @@ export async function runConditionedForecast(
       effective_query_dsl: resolvedTemporalDsl,
       candidate_regimes_by_edge: candidateRegimesByEdge,
     }],
+    ...(meceDimensions.length ? { mece_dimensions: meceDimensions } : {}),
   };
 
   const url = `${PYTHON_API_BASE}/api/forecast/conditioned`;

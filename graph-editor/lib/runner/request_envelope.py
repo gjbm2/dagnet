@@ -279,20 +279,24 @@ def _fingerprint(
     context_key: Optional[str],
     context_selector: Optional[str],
 ) -> str:
-    return "|".join(
-        (
-            "request_envelope.v1",
-            "window" if is_window else "cohort",
-            str(query_from_node),
-            str(query_to_node),
-            str(anchor_node_id or ""),
-            anchor_from.isoformat(),
-            anchor_to.isoformat(),
-            str(graph_preference or "best_available"),
-            str(context_key or ""),
-            str(context_selector or ""),
-        )
-    )
+    parts = [
+        "request_envelope.v1",
+        "window" if is_window else "cohort",
+        str(query_from_node),
+        str(query_to_node),
+        str(anchor_node_id or ""),
+        anchor_from.isoformat(),
+        anchor_to.isoformat(),
+        str(graph_preference or "best_available"),
+    ]
+    # Preserve legacy arrival-map identity for uncontexted requests.
+    # Context fields only enter the fingerprint when they actually slice
+    # the request's evidence/prior scope.
+    if context_key:
+        parts.append(str(context_key))
+    if context_selector:
+        parts.append(str(context_selector))
+    return "|".join(parts)
 
 
 # ─── Public API ────────────────────────────────────────────────────────

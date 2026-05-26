@@ -2128,6 +2128,7 @@ export class GraphComputeClient {
     }>;
     analyticsDsl?: string;
     displaySettings?: Record<string, unknown>;
+    meceDimensions?: string[];
     forecastingSettings?: Record<string, unknown>;
   }): Promise<AnalysisResponse> {
     const diagnosticsRequested = !!(globalThis as any).__dagnetDiagnostics;
@@ -2155,6 +2156,7 @@ export class GraphComputeClient {
         candidate_regimes_by_edge: s.candidate_regimes_by_edge ?? {},
         ...(s.analytics_dsl ? { analytics_dsl: s.analytics_dsl } : {}),
       })),
+      ...(args.meceDimensions?.length ? { mece_dimensions: args.meceDimensions } : {}),
       ...(args.displaySettings ? { display_settings: args.displaySettings } : {}),
       forecasting_settings: {
         ...buildForecastingSettings(),

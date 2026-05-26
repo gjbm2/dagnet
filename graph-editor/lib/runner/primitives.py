@@ -199,14 +199,18 @@ class DrawFamilyKey:
             f"date_to={sc.date_to}",
             f"as_at={sc.as_at or ''}",
             f"context={sc.context_key or ''}",
-            f"context_selector={sc.context_selector or ''}",
-            f"mece_dimensions={','.join(sorted(sc.mece_dimensions or ()))}",
             f"regime={sc.regime_key or ''}",
             f"source_pref={sc.model_source_preference}",
             f"resolved_source={sc.resolved_source_identity or ''}",
             f"anchor_days={','.join(sc.selected_anchor_days)}",
             f"S={self.draw_count}",
         ]
+        # Preserve legacy draw identity for uncontexted requests. Context
+        # selectors only enter the key when they actually slice evidence.
+        if sc.context_selector:
+            parts.append(f"context_selector={sc.context_selector}")
+        if sc.mece_dimensions:
+            parts.append(f"mece_dimensions={','.join(sorted(sc.mece_dimensions))}")
         if self.basis != 'epistemic':
             parts.append(f"basis={self.basis}")
         return "|".join(parts)

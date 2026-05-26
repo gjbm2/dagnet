@@ -896,6 +896,7 @@ async function runBackendAnalysis(
       })),
       analyticsDsl: prepared.analyticsDsl,
       displaySettings: prepared.displaySettings,
+      meceDimensions: prepared.meceDimensions,
       forecastingSettings: prepared.forecastingSettings,
     });
   }
