@@ -508,6 +508,47 @@ describe('buildCohortMaturityEChartsOption', () => {
     // midpoint series only present when model curve data provides it
   });
 
+  it('suppresses the E+F evidence line in epoch C while the forecast line continues', () => {
+    // Regression: the BE spine forward-fills strict `rate` to the end of
+    // the horizon, so `rate` is non-null in epoch C (tau > tau_future_max).
+    // The evidence layer must still be bounded at tau_future_max — GLOSSARY
+    // epoch mapping / CF_ROW_PIPELINE §6: epoch C renders the forecast layer
+    // only, no evidence. A `!== null` guard alone does not suppress it
+    // because the frozen rate is non-null; the tau_future_max bound does.
+    const frozenIntoEpochC = {
+      ...COHORT_MATURITY_RESULT,
+      data: [
+        { scenario_id: 'current', subject_id: 'edge1', tau_days: 0,  rate: 0.10, midpoint: 0.10, tau_solid_max: 10, tau_future_max: 20, boundary_date: '2025-10-01' },
+        { scenario_id: 'current', subject_id: 'edge1', tau_days: 10, rate: 0.35, midpoint: 0.36, tau_solid_max: 10, tau_future_max: 20, boundary_date: '2025-10-01' },
+        { scenario_id: 'current', subject_id: 'edge1', tau_days: 15, rate: 0.40, midpoint: 0.45, tau_solid_max: 10, tau_future_max: 20, boundary_date: '2025-10-01' },
+        { scenario_id: 'current', subject_id: 'edge1', tau_days: 20, rate: 0.40, midpoint: 0.50, tau_solid_max: 10, tau_future_max: 20, boundary_date: '2025-10-01' },
+        // Epoch C (tau > 20): rate frozen-forward-filled (non-null), the
+        // forecast midpoint still advancing.
+        { scenario_id: 'current', subject_id: 'edge1', tau_days: 25, rate: 0.40, midpoint: 0.55, tau_solid_max: 10, tau_future_max: 20, boundary_date: '2025-10-01' },
+        { scenario_id: 'current', subject_id: 'edge1', tau_days: 30, rate: 0.40, midpoint: 0.60, tau_solid_max: 10, tau_future_max: 20, boundary_date: '2025-10-01' },
+      ],
+    };
+
+    const option = buildCohortMaturityEChartsOption(frozenIntoEpochC, {}, {
+      visibleScenarioIds: ['current'],
+      scenarioVisibilityModes: { current: 'f+e' },
+    });
+
+    const dashed = option.series.find((s: any) => s.id === 'current::dashedEvidence');
+    expect(dashed).toBeTruthy();
+    const dashedTaus = dashed.data.map((d: any) => d.value[0]);
+    // Evidence line present through epoch B, absent in epoch C.
+    expect(Math.max(...dashedTaus)).toBeLessThanOrEqual(20);
+    expect(dashedTaus).not.toContain(25);
+    expect(dashedTaus).not.toContain(30);
+
+    // The forecast (midpoint) line is NOT bounded — it carries epoch C.
+    const midpoint = option.series.find((s: any) => s.id === 'current::midpoint');
+    expect(midpoint).toBeTruthy();
+    const midpointTaus = midpoint.data.map((d: any) => d.value[0]);
+    expect(Math.max(...midpointTaus)).toBeGreaterThan(20);
+  });
+
   it('should render forecast-only in f mode (shading only when no model data)', () => {
     const option = buildCohortMaturityEChartsOption(COHORT_MATURITY_RESULT, {}, {
       visibleScenarioIds: ['current'],

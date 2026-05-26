@@ -289,7 +289,11 @@ describe('parity: computeEdgeLatencyStats (full pipeline)', () => {
     expect(result.mu_sd).toBeCloseTo(0.041856495821805284, 9);
     expect(result.sigma_sd).toBeCloseTo(0.029648303064642403, 9);
     expect(result.onset_sd).toBeCloseTo(0.2, 9);
-    expect(result.onset_mu_corr).toBeCloseTo(-0.3, 9);
+    // onset_mu_corr is an FE-side σ-dependent closed form (the shifted-lognormal
+    // onset↔μ identifiability-ridge correlation), not a BE-pinned value — the BE
+    // derives it empirically from MCMC samples. It replaced the old -0.3 heuristic
+    // placeholder; for sigma≈1.01077 the closed form evaluates to ≈ -0.42199.
+    expect(result.onset_mu_corr).toBeCloseTo(-0.42198608596174625, 9);
   });
 });
 

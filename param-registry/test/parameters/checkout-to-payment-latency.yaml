@@ -114,7 +114,7 @@ values:
       - '1-Dec-25'
     
     n_daily: [51, 58, 62, 55, 49, 54, 56]
-    k_daily: [32, 38, 42, 36, 28, 35, 34]
+    k_daily: [32, 38, 42, 36, 28, 35, 54]
     
     # Forecast (mature baseline p∞)
     forecast: 0.745

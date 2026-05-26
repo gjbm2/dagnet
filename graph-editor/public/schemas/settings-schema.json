@@ -236,6 +236,22 @@
           "minimum": 100,
           "maximum": 50000,
           "default": 1000
+        },
+        "SNAPSHOT_OBSERVATION_T95_MULTIPLIER": {
+          "type": "number",
+          "title": "Snapshot Observation t95 Multiplier",
+          "description": "Multiplier applied to an edge's t95 maturity horizon to size the snapshot fetch/refresh observation window.\n\nt95 remains the modelling maturity horizon; this multiplier extends the window over which cohort-maturity evidence keeps observing late-tail conversions, so 'mostly mature' is not prematurely treated as 'fully observed'.\n\nIndicative values:\n- 1.0: observe exactly to t95 (no extension)\n- 2.0: standard (default)\n- 3.0+: very conservative; observes deeper into the tail at the cost of longer fetch windows.",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 2.0
+        },
+        "SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER": {
+          "type": "number",
+          "title": "Snapshot Observation Path t95 Multiplier",
+          "description": "Multiplier applied to an edge's path_t95 (multi-hop arrival) maturity horizon to size the snapshot fetch/refresh observation window for path-conditioned evidence.\n\npath_t95 remains the modelling maturity horizon; this multiplier extends the observation window so late-tail path conversions keep being observed instead of being treated as fully mature.\n\nIndicative values:\n- 1.0: observe exactly to path_t95 (no extension)\n- 1.5: standard (default)\n- 2.0+: more conservative; observes deeper into the path tail at the cost of longer fetch windows.",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 1.5
         }
       },
       "required": [

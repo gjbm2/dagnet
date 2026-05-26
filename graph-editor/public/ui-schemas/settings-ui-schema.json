@@ -21,6 +21,8 @@
             "RECENCY_HALF_LIFE_DAYS",
             "LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE",
             "DEFAULT_T95_DAYS",
+            "SNAPSHOT_OBSERVATION_T95_MULTIPLIER",
+            "SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER",
             "FORECAST_BLEND_LAMBDA",
             "LATENCY_BLEND_COMPLETENESS_POWER",
             "ANCHOR_DELAY_BLEND_K_CONVERSIONS"
@@ -90,6 +92,12 @@
     },
     "DEFAULT_T95_DAYS": {
       "ui:help": "Fallback horizon when no edge-specific t95 is available.\n\n7–21 (typical funnels) · 30 (conservative default) · 60–90 (very conservative)."
+    },
+    "SNAPSHOT_OBSERVATION_T95_MULTIPLIER": {
+      "ui:help": "Extends the snapshot observation window beyond t95 so late-tail conversions keep being observed.\n\n1.0 (no extension) · 2.0 (standard) · 3.0+ (conservative, longer fetches)."
+    },
+    "SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER": {
+      "ui:help": "Extends the snapshot observation window beyond path_t95 for path-conditioned evidence.\n\n1.0 (no extension) · 1.5 (standard) · 2.0+ (conservative, longer fetches)."
     },
     "FORECAST_BLEND_LAMBDA": {
       "ui:help": "Prior strength for forecast/evidence blending.\n\n0.05–0.20 (typical) · 0.20–0.50 (conservative) · 0 (raw evidence, no prior)."

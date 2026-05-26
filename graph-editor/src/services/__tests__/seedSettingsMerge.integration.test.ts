@@ -453,7 +453,11 @@ describe('settings schema ↔ defaults alignment', () => {
   beforeEach(async () => {
     const fs = await import('fs');
     const path = await import('path');
-    const yamlMod = await import('js-yaml');
+    // importActual bypasses the module-level vi.mock('js-yaml') above, which
+    // otherwise returns a hardcoded FULL_DEFAULTS and defeats this block's
+    // intent (its comment below says "no mocks"). We need the REAL parser so
+    // the alignment is checked against the actual settings.yaml on disk.
+    const yamlMod = await vi.importActual<typeof import('js-yaml')>('js-yaml');
 
     const root = path.resolve(__dirname, '../../..');
 

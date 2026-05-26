@@ -525,13 +525,14 @@ export function buildCohortMaturityEChartsOption(
     if (mode === 'f+e') {
       // E+F mode emits two distinct curves:
       //
-      //   E line   — TEMP DIAGNOSTIC: raw selected evidence `rate`.
-      //              Do not read `rate_blended` here while coverage/frontier
-      //              semantics are under investigation; otherwise bad
-      //              coverage can replace evidence display with model values.
-      //              Split visually at tau_solid_max, but keep rendering
-      //              wherever evidence exists so epoch-boundary drift is
-      //              visible instead of silently censoring the curve.
+      //   E line   — strict selected evidence `rate`, split visually at
+      //              tau_solid_max (solid in epoch A, dashed in epoch B)
+      //              and bounded at tau_future_max so the evidence layer
+      //              is absent in epoch C, where only the forecast layer
+      //              remains (GLOSSARY epoch mapping; CF_ROW_PIPELINE §6).
+      //              Mirrors the E-mode bound below. Do not read
+      //              `rate_blended` here — bad coverage can replace the
+      //              evidence display with model values.
       //
       //   E+F curve — `midpoint` (per-cohort calibrated E+F surface).
       //              Drawn across all epochs so epoch-A variation is visible.
@@ -540,7 +541,7 @@ export function buildCohortMaturityEChartsOption(
         .filter(p => p.tauDays <= sSolidMax && p.baseRate !== null)
         .map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
       const dashedPts = points
-        .filter(p => p.tauDays >= sSolidMax && p.baseRate !== null)
+        .filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax && p.baseRate !== null)
         .map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
 
       const realSolidCount = solidPts.filter(p => p.value[1] !== null).length;

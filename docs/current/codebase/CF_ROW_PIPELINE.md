@@ -198,13 +198,14 @@ Observed-evidence fields are separate from projection:
 
 | Field | Identity carrier | Active carrier |
 |---|---|---|
-| `rate` | `Σy/Σx` from forward-filled `engine_cohorts` prefixes | `Σy/Σx` from `SelectedAClockEvidence.aggregate_by_tau` |
-| `rate_pure` | Same | Frozen at the A/B boundary: `sum_y / boundary_x` for `τ > tau_solid_max` |
-| `evidence_x`, `evidence_y` | From `engine_cohorts` | From selected cells (carrier-only X, rate-attributed Y) |
+| `rate` | `selected_projection.rate_strict` = `evidence_y_strict / evidence_x_strict` — strict empirical `Σy/Σx`, per-Cohort forward-filled through each Cohort's `tau_max` | Same |
+| `rate_pure` | Alias of `rate`. The pre-spine "frozen at the A/B boundary `sum_y / boundary_x`" semantic was retired at the spine cutover; the row builder sets `rate_pure = rate` | Same |
+| `evidence_x`, `evidence_y` | `selected_projection.evidence_x_strict` / `evidence_y_strict` (Σ-applicable strict empirical cumulatives) | Same |
 | `coverage` | Simple Cohort applicability scalar for display opacity | Same |
 | `cohorts_covered_base`, `cohorts_covered_projected` | `n_cohorts` reporting observation at-or-before τ | Same |
-| `rate_blended` | `empirical × coverage + model_midpoint × (1 − coverage)` — uniform expression across A/B/C epochs | Same |
 | `forecast_y`, `forecast_x` | None (residual semantics only meaningful for active) | `ef_forecast_y` / `ef_forecast_x` (future-only residual emitted directly by the FC continuation DP — no post-hoc subtraction from full model means) |
+
+**Source-of-truth note (post-spine cutover).** Production row evidence/rate fields (`rate`, `rate_pure`, `evidence_x`, `evidence_y`) are emitted by `model_span_spine.project_selected_cohort_rows` — the empirical spine `selected_projection` — **not** by `SelectedAClockEvidence.aggregate_by_tau`. The row builder reads them unconditionally for both identity and active carrier (`cohort_forecast_v3.py:5349-5352`; see the `_row_evidence_source` diagnostic note alongside). `aggregate_by_tau` survives only as a shadow-plan diagnostic surface (`_build_generalised_evidence_shadow_plans`). `rate_strict` / `evidence_*_strict` are per-Cohort forward-filled through each Cohort's `tau_max`, so they are **non-null across the full horizon including epoch C** — epoch-C evidence suppression is an FE display choice (§6), not a `None` in the payload.
 
 The old `rate_blended` and terminal-coverage fields have been removed. E mode reads strict evidence; E+F reads the strict evidence layer plus the FC forecast layer (`ef_*`) per the display-mode mapping in §6.
 
@@ -218,7 +219,7 @@ Three epochs run across τ:
 
 - **Epoch A** (`τ ≤ tau_solid_max`): every selected cohort is observed. `rate` is the solid empirical line. `midpoint`/`fan_*` (the FC continuation `ef_*`) are prefix-pinned to strict evidence here by construction, so they coincide with `rate` to particle-quantile noise; the output layer suppresses the forecast layer in epoch A so the solid evidence line owns the epoch.
 - **Epoch B** (`tau_solid_max < τ ≤ tau_future_max`): some cohorts have aged past their `tau_observed` but the oldest cohort hasn't aged out yet. `rate` continues with forward-fill (dwindling cohort coverage); `midpoint`/`fan_*` from the FC continuation extend through the unresolved future as the predictive fan opens past each Cohort's frontier.
-- **Epoch C** (`τ > tau_future_max`): every cohort has aged past `tau_max`. `rate` is `None`; only the forecast layer (and the optional model overlay, if enabled) is rendered.
+- **Epoch C** (`τ > tau_future_max`): every cohort has aged past `tau_max`. The BE still emits `rate` / `evidence_*` here — the spine forward-fills each Cohort's strict cumulative past its `tau_max`, so the values are **frozen, not `None`**. The **FE** suppresses the evidence layer past `tau_future_max` so only the forecast layer (and the optional model overlay, if enabled) renders. Evidence-layer epoch-C suppression is the display-side mirror of epoch-A forecast suppression — see §6.1.
 
 `tau_solid_max` is `min(frontier_age)` across **selected** cohorts (the shallowest observed depth, not the youngest cohort's frontier — staleness varies per anchor). `tau_future_max` is `(sweep_to_d − anchor_from_d).days` — the oldest cohort's calendar age. Both are intentionally decoupled from per-cohort `data_retrieved_at` to preserve the `tau_solid_max ≤ tau_future_max` invariant the row builder and chart both rely on.
 
@@ -236,6 +237,8 @@ Per the frontier-conditioned chart-surface proposal, [Appendix B](../project-gen
 | **Optional model overlay** | overlay if enabled | overlay if enabled | overlay if enabled |
 
 The FC surface (`ef_*`) is **generated across the full tau sweep regardless of display gating**. Epoch-A suppression of the forecast layer is an output-layer rendering choice, not a data gap. Every `ef_*` draw is pinned to strict evidence through each Cohort's frontier and continues only the unresolved future on the predictive operator basis, so prefix-pinning, continuity, and fan-opening are testable directly from the generated arrays.
+
+Symmetrically, the strict evidence surface (`rate` / `evidence_*`) is generated across the full sweep too — the spine forward-fills each Cohort's strict cumulative past its `tau_max`, so the values are non-null in epoch C. The evidence layer's **absence** in epoch C is the same output-layer choice: the FE bounds the evidence series at `tau_future_max` (`cohortComparisonBuilders.ts` — both the E-mode `ratePure` segment and the E+F dashed evidence segment filter `tauDays ≤ sFutureMax`). A `!== null` guard alone would not suppress it, because the frozen evidence is non-null.
 
 ---
 
