@@ -5141,10 +5141,94 @@ def _runtime_completeness(
     return float(weighted_per_draw.mean()), float(weighted_per_draw.std())
 
 
+def _anchor_day_key(anchor_day: Any) -> str:
+    """Canonical ``YYYY-MM-DD`` key for a selected-Cohort anchor day."""
+    return (
+        anchor_day.isoformat() if hasattr(anchor_day, 'isoformat')
+        else str(anchor_day or '')[:10]
+    )
+
+
+@dataclass(frozen=True)
+class SelectedRetrievalFrontier:
+    """Per-anchor selected retrieval frontier τ for the selected Cohort set.
+
+    Behaviour-preserving replacement for the frontier surface that used to
+    be read off ``SelectedAClockEvidence`` via
+    ``frontier_tau_bounds(use_retrieval_frontier=True)`` and
+    ``prefixes_for_cohorts(...).frontier_age``. Those were thin wrappers
+    that turned **one** query-wide ``analysis_observation_frontier_date``
+    into per-anchor τ (``_observation_frontier`` preference 1). The
+    frontier date itself (``_analysis_observation_frontier_date``) is
+    computed directly from the admitted ``evidence_superset_rows`` and is
+    independent of any deleted legacy authority, so this surface owns no
+    new arithmetic — it is the same date mapped to each anchor's age.
+
+    ``paired_frontier_by_anchor[anchor_key]`` = ``(frontier_date − anchor).days``
+    for every selected Cohort that carries real frame observations (i.e.
+    not the empty-frames ``tau_observed = -1`` sentinel — those have no
+    observation support, matching the legacy "no cells → excluded" gate).
+    ``bounds`` is ``(min, max)`` of those τ — the row epoch boundaries.
+    Both are empty / ``None`` when no admitted-evidence frontier exists
+    (``frontier_date`` is ``None``); callers then keep their frame-derived
+    fallbacks. This is **not** a per-row ``retrieved_at`` support trace —
+    that would change today's snapshot_date / data_retrieved_at /
+    retrieved_at query-wide frontier semantics.
+    """
+
+    paired_frontier_by_anchor: Mapping[str, int]
+    bounds: Optional[Tuple[int, int]]
+
+
+def _build_selected_retrieval_frontier(
+    *,
+    analysis_observation_frontier_date: Optional[str],
+    cohort_list: Sequence[Mapping[str, Any]],
+) -> SelectedRetrievalFrontier:
+    """Map the one query-wide frontier date to per-anchor τ.
+
+    Reproduces ``SelectedAClockEvidence._observation_frontier`` preference
+    1: ``(frontier_date − anchor).days``. Empty-frames sentinel cohorts
+    (``tau_observed == -1``) carry no observation support and contribute
+    no frontier — matching the legacy "anchor has no cells → excluded
+    from frontier_tau_bounds" gate.
+    """
+    if not analysis_observation_frontier_date:
+        return SelectedRetrievalFrontier(paired_frontier_by_anchor={}, bounds=None)
+    try:
+        frontier_d = _date.fromisoformat(
+            str(analysis_observation_frontier_date)[:10],
+        )
+    except (TypeError, ValueError):
+        return SelectedRetrievalFrontier(paired_frontier_by_anchor={}, bounds=None)
+    per_anchor: Dict[str, int] = {}
+    for ci in cohort_list:
+        tau_obs = ci.get('tau_observed') if isinstance(ci, Mapping) else None
+        if isinstance(tau_obs, (int, float)) and int(tau_obs) < 0:
+            continue
+        anchor_key = _anchor_day_key(
+            ci.get('anchor_day') if isinstance(ci, Mapping) else None,
+        )
+        try:
+            anchor_d = _date.fromisoformat(anchor_key)
+        except (TypeError, ValueError):
+            continue
+        per_anchor[anchor_key] = (frontier_d - anchor_d).days
+    bounds = (
+        (min(per_anchor.values()), max(per_anchor.values()))
+        if per_anchor else None
+    )
+    return SelectedRetrievalFrontier(
+        paired_frontier_by_anchor=per_anchor,
+        bounds=bounds,
+    )
+
+
 def _build_selected_cohort_inputs(
     engine_cohorts: Sequence[Any],
     cohort_list: Sequence[Mapping[str, Any]],
     n_by_anchor: Mapping[str, float],
+    retrieval_frontier_by_anchor: Mapping[str, int],
 ) -> Sequence[Mapping[str, Any]]:
     """Perimeter shape for the row reducer (Phase 6 §5.2).
 
@@ -5195,14 +5279,28 @@ def _build_selected_cohort_inputs(
             (ci.get('tau_max') if isinstance(ci, Mapping) else None)
             or 0,
         )
-        tau_obs_raw = (
+        # Per-Cohort frontier f_c. The selected retrieval frontier (one
+        # query-wide analysis observation date mapped to this anchor's
+        # age) is authoritative when present. The frame-derived
+        # cohort_list['tau_observed'] is NOT used as the frontier here:
+        # frame composition drops per-Cohort retrieval provenance and
+        # collapses to 0 for multi-hop window(), which would prefix-pin
+        # FC continuation to the wrong frontier. The empty-frames
+        # sentinel (-1) carries no observation and is preserved so the
+        # spine projects from the unit prior.
+        frame_tau_obs = (
             ci.get('tau_observed') if isinstance(ci, Mapping) else None
         )
-        tau_obs_int = (
-            int(tau_obs_raw)
-            if isinstance(tau_obs_raw, (int, float))
-            else tau_max_int
-        )
+        if isinstance(frame_tau_obs, (int, float)) and int(frame_tau_obs) < 0:
+            tau_obs_int = -1
+        else:
+            frontier_tau = retrieval_frontier_by_anchor.get(anchor_day_key)
+            if frontier_tau is not None:
+                tau_obs_int = min(max(int(frontier_tau), 0), tau_max_int)
+            elif isinstance(frame_tau_obs, (int, float)):
+                tau_obs_int = int(frame_tau_obs)
+            else:
+                tau_obs_int = tau_max_int
         inputs.append({
             'anchor_day': anchor_day_key,
             'N_anchor': n_anchor,
@@ -5226,6 +5324,7 @@ def _project_runtime_rows(
     band_level: float,
     n_by_anchor: Optional[Mapping[str, float]] = None,
     selected_a_clock_evidence: Optional[SelectedAClockEvidence] = None,
+    selected_retrieval_frontier: Optional[SelectedRetrievalFrontier] = None,
     projection_bases: Optional[Sequence[SelectedCohortProjectionBasis]] = None,
     cohort_list: Optional[Sequence[Mapping[str, Any]]] = None,
     emit_diagnostics: bool = False,
@@ -5278,6 +5377,11 @@ def _project_runtime_rows(
         engine_cohorts,
         cohort_list or [],
         n_by_anchor or {},
+        (
+            selected_retrieval_frontier.paired_frontier_by_anchor
+            if selected_retrieval_frontier is not None
+            else {}
+        ),
     )
     # FC plan §9.4 / §9.5: the FC shadow surface reads the
     # predictive-basis CONDITIONED spans
@@ -6296,50 +6400,40 @@ def compute_cohort_maturity_rows_v3(
         emit_diagnostics=emit_diagnostics,
     )
 
+    # Selected retrieval frontier: the one query-wide analysis observation
+    # date mapped to per-anchor τ. Behaviour-preserving replacement for the
+    # SelectedAClockEvidence frontier wrappers (frontier_tau_bounds /
+    # prefixes_for_cohorts(use_retrieval_frontier=True)), which were thin
+    # adapters over the same date. Independent of the legacy object.
+    selected_retrieval_frontier = _build_selected_retrieval_frontier(
+        analysis_observation_frontier_date=analysis_observation_frontier_date,
+        cohort_list=fe.cohort_list,
+    )
     row_tau_solid_max = int(fe.tau_solid_max)
     row_tau_future_max = int(fe.tau_future_max)
-    if selected_a_clock_evidence is not None and selected_a_clock_evidence.has_cells():
-        selected_frontier_bounds = selected_a_clock_evidence.frontier_tau_bounds(
-            fe.cohort_list,
-            use_retrieval_frontier=True,
-        )
-        if selected_frontier_bounds is not None:
-            row_tau_solid_max = int(selected_frontier_bounds[0])
-            row_tau_future_max = int(selected_frontier_bounds[1])
+    if selected_retrieval_frontier.bounds is not None:
+        row_tau_solid_max = int(selected_retrieval_frontier.bounds[0])
+        row_tau_future_max = int(selected_retrieval_frontier.bounds[1])
 
     if _is_active_carrier:
-        # Active completeness inputs read selected A-clock prefixes
-        # directly. `CohortEvidence` remains the zero-prefix placeholder
-        # for active model projection, so exact selected observations do
-        # not disappear behind mutated legacy fields.
+        # Active completeness inputs read the selected retrieval frontier
+        # per anchor (the one query-wide analysis observation date mapped
+        # to each Cohort's age). Fall back to the engine_cohort `eval_age`
+        # (always >= 0 by construction) when this anchor carries no
+        # frontier — `frontier_age` carries the `-1` empty-frames sentinel
+        # and completeness "at frontier" is undefined with no frontier, so
+        # the consumer needs a >= 0 age.
         cohort_eval_ages = []
         cohort_weights = []
-        selected_prefixes = (
-            selected_a_clock_evidence.prefixes_for_cohorts(
-                fe.cohort_list,
-                horizon=fe.saturation_tau,
-                use_retrieval_frontier=True,
+        for ec, ci in zip(fe.engine_cohorts, fe.cohort_list):
+            anchor_key = _anchor_day_key(ci.get('anchor_day'))
+            frontier_tau = (
+                selected_retrieval_frontier.paired_frontier_by_anchor.get(
+                    anchor_key,
+                )
             )
-            if selected_a_clock_evidence is not None
-            and selected_a_clock_evidence.has_cells()
-            else []
-        )
-        for idx, (ec, _ci) in enumerate(zip(fe.engine_cohorts, fe.cohort_list)):
-            prefix = (
-                selected_prefixes[idx]
-                if idx < len(selected_prefixes)
-                else None
-            )
-            # Read `eval_age` on the engine_cohort fallback (always >= 0
-            # by construction) rather than `frontier_age`, which carries
-            # the `-1` "no observations recorded" sentinel under empty-
-            # frames synthesis. Completeness "at frontier" is undefined
-            # when there is no frontier, so the consumer needs a >= 0
-            # age. The active-prefix path is unaffected (prefix.frontier_age
-            # is built from real selected-row data) but the read is
-            # clamped defensively.
             cohort_eval_ages.append(
-                max(int(prefix.frontier_age if prefix is not None else (
+                max(int(frontier_tau if frontier_tau is not None else (
                     getattr(ec, 'eval_age', getattr(ec, 'frontier_age', 0)) or 0
                 )), 0),
             )
@@ -6380,6 +6474,7 @@ def compute_cohort_maturity_rows_v3(
         band_level=band_level,
         n_by_anchor=n_by_anchor,
         selected_a_clock_evidence=selected_a_clock_evidence,
+        selected_retrieval_frontier=selected_retrieval_frontier,
         projection_bases=projection_bases,
         emit_diagnostics=emit_diagnostics,
     )
