@@ -2075,7 +2075,7 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
               f"compile={compile_ms}ms, n_dim={compiled_model.n_dim}", flush=True)
 
         sampler = compiled_model._make_sampler(
-            settings, init_mean, cores, progress_type, store,
+            settings, init_mean, cores, progress_type, None, 100, store,
         )
         _sampling_error = None
         try:

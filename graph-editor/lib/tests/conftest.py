@@ -400,6 +400,11 @@ def _resolve_truth_path(graph_name: str) -> Path | None:
     canonical = DAGNET_ROOT / "bayes" / "truth" / f"{graph_name}.truth.yaml"
     if canonical.is_file():
         return canonical
+    # Non-recovery fixtures (drift / F-mode chart) live in bayes/truth/chart/,
+    # kept out of the top-level dir the bayes recovery sweep scans.
+    chart = DAGNET_ROOT / "bayes" / "truth" / "chart" / f"{graph_name}.truth.yaml"
+    if chart.is_file():
+        return chart
     repo = _resolve_data_repo_dir()
     if repo is not None:
         candidate = repo / "graphs" / f"{graph_name}.truth.yaml"

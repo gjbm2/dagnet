@@ -16,9 +16,14 @@ from typing import Any, Dict, List, Optional
 
 from .lag_distribution_utils import log_normal_cdf, to_model_space_age_days
 from .forecasting_settings import ForecastingSettings
-
-# Epsilon to prevent division by zero when completeness is very small.
-COMPLETENESS_EPSILON = 1e-9
+# Layer rule + thresholds live in the non-legacy projection boundary
+# (73q Phase 2). Re-exported here so existing importers of
+# COMPLETENESS_EPSILON keep working until this legacy surface is deleted
+# in 73q Phase 7. There is one canonical definition; this is an alias.
+from .cf_projection_bundle import (
+    COMPLETENESS_EPSILON,
+    completeness_to_layer,
+)
 
 
 @dataclass
@@ -89,13 +94,8 @@ def annotate_data_point(
     # Clamp completeness to [0, 1].
     c = max(0.0, min(1.0, c))
 
-    # Layer classification.
-    if c >= maturity_threshold:
-        layer = 'mature'
-    elif c > COMPLETENESS_EPSILON:
-        layer = 'forecast'
-    else:
-        layer = 'evidence'  # No model info (age 0 or during dead-time).
+    # Layer classification — shared rule (73q Phase 2).
+    layer = completeness_to_layer(c, maturity_threshold=maturity_threshold)
 
     # Evidence/forecast split.
     #

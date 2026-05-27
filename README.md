@@ -385,26 +385,29 @@ The database uses two tables, created lazily on first use:
 CREATE TABLE IF NOT EXISTS snapshots (
     param_id TEXT NOT NULL,
     core_hash TEXT NOT NULL,
-    slice_key TEXT NOT NULL DEFAULT '',
+    context_def_hashes TEXT,
+    slice_key TEXT NOT NULL,
     anchor_day DATE NOT NULL,
     retrieved_at TIMESTAMPTZ NOT NULL,
     A INTEGER,
-    X INTEGER NOT NULL,
-    Y INTEGER NOT NULL,
+    X INTEGER,
+    Y INTEGER,
     median_lag_days REAL,
     mean_lag_days REAL,
     anchor_median_lag_days REAL,
     anchor_mean_lag_days REAL,
     onset_delta_days REAL,
+    write_inputs_json JSONB,
     PRIMARY KEY (param_id, core_hash, slice_key, anchor_day, retrieved_at)
 );
+-- plus secondary lookup indexes: idx_snapshots_lookup, idx_snapshots_core_hash_anchor
 ```
 
 **`signature_registry`** — catalogue of known `(param_id, core_hash)` pairs with canonical signature text and inputs. Written during snapshot appends; read for inventory and Snapshot Manager browsing.
 
 Signature equivalence mappings (linking old and new core hashes for data continuity) are stored in a repo-versioned `hash-mappings.json` file, not in the database.
 
-Both tables are created automatically by the backend when first needed — no migration step required.
+Both tables and their indexes are created automatically by `ensure_schema()` in `graph-editor/lib/snapshot_service.py`, which runs idempotently on first DB access (connection-pool creation) — no migration step required. That function is the single source of truth for the schema; the DDL above is illustrative.
 
 ### Verifying the connection
 

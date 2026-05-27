@@ -579,6 +579,79 @@ class TestDrift:
             f"Expected positive autocorrelation from drift, got {autocorr:.3f}"
         )
 
+    def test_drift_does_not_saturate_via_step_day_overdispersion(self):
+        """Regression: the step-day overdispersion factor must be centred on
+        the DRIFTED nodal rate, not the undrifted base p.
+
+        When it is centred on the base, the multiplicative factor
+        ``p_step / base_p`` carries an inflated CV (≈ σ/base_p); multiplied
+        into the drift-raised entry-day p it pushes the effective conversion
+        probability past 1.0, where it saturates the 0.999 clip. The realised
+        per-cohort conversion rate then overshoots the drift ceiling (observed
+        up to ~0.999 on the synth-fmode-drift fixture whose ceiling is 0.80).
+        See ``synth_gen._get_step_day_p``.
+
+        A single solo edge with no latency makes ``k_daily / n_daily`` the
+        realised Bernoulli ``p_eff`` for each day's cohort, with the
+        conversion calendar day equal to the entry day so the entry and step
+        drift levels coincide. At the fixture's overdispersion (κ=50) and
+        drift 0.20 → 0.80, the legitimate realised rate stays below ~0.92;
+        saturation toward the 0.999 clip (rates ≥ 0.95, reaching ~0.999) is
+        the defect signature. Pre-fix (seed 42) this produced max ≈ 0.9994
+        with several days above 0.95; the mean stays ≈ 0.50 either way, so the
+        defect is purely tail saturation, not a mean shift.
+        """
+        graph = {
+            "nodes": [
+                _node("node-a", is_start=True),
+                _node("node-b", absorbing=True),
+            ],
+            "edges": [
+                _edge("edge-a-b", "node-a", "node-b", "param-a-b", p_mean=0.20),
+            ],
+        }
+        topology = analyse_topology(graph)
+        truth = {
+            "edges": {
+                "param-a-b": {
+                    "p": 0.20, "onset": 0.0, "mu": 0.0, "sigma": 0.0,
+                    "latency_parameter": False,
+                },
+            },
+        }
+        _rows, stats = simulate_graph(
+            graph, topology, truth,
+            {
+                **DEFAULT_SIM_CONFIG,
+                "n_days": 100,
+                "mean_daily_traffic": 5000,
+                "kappa_sim_default": 50.0,
+                "kappa_step_default": 50.0,
+                "drift_p_to": 0.80,
+                "failure_rate": 0.0,
+                "seed": 42,
+                "base_date": "2025-12-12",
+            },
+            _make_hash_lookup(topology),
+        )
+
+        daily = stats["edge_daily"]["edge-a-b"]
+        rates = [k / n for k, n in zip(daily["k_daily"], daily["n_daily"]) if n > 0]
+        assert rates, "expected per-day conversion rates"
+        max_rate = max(rates)
+        # Drift ceiling is 0.80; κ=50 overdispersion legitimately reaches ~0.92.
+        # A realised rate ≥ 0.95 (toward the 0.999 clip) is the saturation defect.
+        assert max_rate <= 0.95, (
+            f"realised per-day conversion rate {max_rate:.4f} overshoots the "
+            f"0.80 drift ceiling — step-day overdispersion is saturating the "
+            f"0.999 clip (see _get_step_day_p)"
+        )
+        # Non-vacuousness: drift must actually reach the ceiling region.
+        assert max_rate >= 0.82, (
+            f"drift did not reach the ceiling region (max rate {max_rate:.4f}); "
+            f"fixture mis-specified"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: core hash consistency

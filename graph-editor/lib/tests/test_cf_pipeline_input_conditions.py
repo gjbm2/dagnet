@@ -845,10 +845,9 @@ def test_active_cohort_only_superset_degrades_visibly():
         graph=graph,
         query_from_node='node-x',
         query_to_node='node-y',
-        anchor_node_id='node-a',
         anchor_from=date.fromisoformat(_ANCHOR_FROM),
         anchor_to=date.fromisoformat(_ANCHOR_TO),
-        is_window=False,
+        population_root='node-a',
         graph_preference='best_available',
         scenario_id='test-active-cohort-only-superset',
     )

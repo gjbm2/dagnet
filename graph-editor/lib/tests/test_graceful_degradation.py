@@ -92,7 +92,30 @@ class TestGracefulDegradation:
                     "name": "Base",
                     "colour": "#000000",
                     "visibility_mode": "f+e",
-                    "graph": {},
+                    "graph": {
+                        "nodes": [
+                            {"uuid": "A", "id": "A", "entry": {"is_start": True}},
+                            {"uuid": "B", "id": "B"},
+                        ],
+                        "edges": [{
+                            "uuid": "e1",
+                            "id": "e1",
+                            "from": "A",
+                            "to": "B",
+                            "p": {
+                                "forecast": {"mean": 0.2},
+                                "latency": {"latency_parameter": False},
+                                "model_vars": [{
+                                    "source": "analytic",
+                                    "probability": {
+                                        "mean": 0.2,
+                                        "alpha": 2.0,
+                                        "beta": 8.0,
+                                    },
+                                }],
+                            },
+                        }],
+                    },
                     "snapshot_subjects": [{
                         "subject_id": "s1::epoch:0",
                         "param_id": "pytest-gd-param",
@@ -105,6 +128,8 @@ class TestGracefulDegradation:
                         "sweep_to": "2025-10-01",
                         "slice_keys": ["__epoch_gap__"],
                         "target": {"targetId": "e1"},
+                        "from_node": "A",
+                        "to_node": "B",
                     }],
                 }],
             }

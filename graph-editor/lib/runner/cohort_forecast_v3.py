@@ -462,6 +462,14 @@ def _build_span_resolutions(
 ) -> tuple[Optional[list], Optional[str]]:
     from .span_kernel import _build_span_topology
 
+    # Zero-length span (from == to): the A->X carrier when the population
+    # root sits at X (window / cohort(A=X)). There are no edges to resolve,
+    # so the leg degenerates to an empty family — not a skip. This is the
+    # null-subgraph degeneration that dissolves the carrier without
+    # consulting a mode flag at the call site.
+    if str(from_node) == str(to_node):
+        return [], None
+
     topo = _build_span_topology(
         graph,
         x_node_id=str(from_node),
@@ -540,7 +548,8 @@ def build_resolved_cf_runtime(
     sweep_to: str,
     as_at: Optional[str],
     scenario_id: Optional[str],
-    is_window: bool,
+    population_root: str,
+    temporal_mode: str,
     is_multi_hop: bool,
     anchor_node_id: Optional[str],
     resolved: Any,
@@ -574,24 +583,20 @@ def build_resolved_cf_runtime(
         ComposeOptions,
         ConditioningPolicyOptions,
         SpanEdgeResolution,
-        _build_request_arrival_map,
-        _build_resolved_runtime_prefix_arrival_identity,
         compute_resolved_runtime_readout,
     )
 
-    population_root = (
-        str(anchor_node_id)
-        if (anchor_node_id and not is_window)
-        else str(query_from_node)
-    )
-
+    # population_root and temporal_mode are resolved once at the engine's
+    # public entry (build_cf_projection_bundle) and threaded in. The carrier
+    # leg and active-carrier flag below read this root (an upstream root ⟺
+    # there is an A→X leg); no mode flag is consulted here.
     subject_resolutions, subject_skip = _build_span_resolutions(
         graph=graph,
         from_node=str(query_from_node),
         to_node=str(query_to_node),
         target_edge_id=str(target_edge_id),
         target_resolved=resolved,
-        temporal_mode='window' if is_window else 'cohort',
+        temporal_mode=temporal_mode,
         scenario_id=str(scenario_id),
         anchor_from=anchor_from,
         anchor_to=anchor_to,
@@ -604,27 +609,28 @@ def build_resolved_cf_runtime(
         mece_dimensions=tuple(mece_dimensions or ()),
     )
 
-    carrier_resolutions = []
-    carrier_skip = None
-    if (not is_window) and anchor_node_id and str(anchor_node_id) != str(query_from_node):
-        carrier_resolutions, carrier_skip = _build_span_resolutions(
-            graph=graph,
-            from_node=str(anchor_node_id),
-            to_node=str(query_from_node),
-            target_edge_id=str(target_edge_id),
-            target_resolved=resolved,
-            temporal_mode='cohort',
-            scenario_id=str(scenario_id),
-            anchor_from=anchor_from,
-            anchor_to=anchor_to,
-            as_at=as_at,
-            resolution_class=CarrierEdgeResolution,
-            mark_target=False,
-            envelope_plan=envelope_plan,
-            context_key=context_key,
-            context_selector=context_selector,
-            mece_dimensions=tuple(mece_dimensions or ()),
-        )
+    # Carrier (A→X) leg, rooted at the population root. When the root sits
+    # at X (window / cohort(A=X)) the span is zero-length and resolves to
+    # an empty family (see `_build_span_resolutions`) — the leg degenerates
+    # to nothing without a mode flag.
+    carrier_resolutions, carrier_skip = _build_span_resolutions(
+        graph=graph,
+        from_node=str(population_root),
+        to_node=str(query_from_node),
+        target_edge_id=str(target_edge_id),
+        target_resolved=resolved,
+        temporal_mode='cohort',
+        scenario_id=str(scenario_id),
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        as_at=as_at,
+        resolution_class=CarrierEdgeResolution,
+        mark_target=False,
+        envelope_plan=envelope_plan,
+        context_key=context_key,
+        context_selector=context_selector,
+        mece_dimensions=tuple(mece_dimensions or ()),
+    )
 
     # Two-clocks split (per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`
     # invariant 5): the denominator clock is the carrier `A → X` clock; the
@@ -645,53 +651,32 @@ def build_resolved_cf_runtime(
     # silently dropping early anchors from chart evidence. The envelope
     # path is the canonical construction; consuming it here removes the
     # duplicate map and the divergence.
-    subject_arrival_map = None
-    carrier_arrival_map = None
-    is_active = bool(
-        carrier_resolutions
-        and not is_window
-        and anchor_node_id
-        and str(anchor_node_id) != str(query_from_node)
-    )
     conditioning_options = ConditioningPolicyOptions()
 
-    if is_active:
-        # Active cohort: maps come from the request envelope plan whose
-        # carrier roots are the cohort A-anchor range and whose subject
-        # roots are the carrier's X-arrival days.
-        carrier_arrival_map = envelope_plan.carrier_arrival_map
-        subject_arrival_map = envelope_plan.subject_arrival_map
-    elif subject_resolutions:
-        # Window mode and cohort(A = X): no carrier; subject map is
-        # X-rooted identity over the public window. The envelope plan
-        # leaves arrival maps unset for window mode (per Appendix A's
-        # local-clock binding contract), so build the subject map here.
-        target_resolution = next(
-            (r for r in subject_resolutions if getattr(r, 'is_target', False)),
-            subject_resolutions[0],
-        )
-        subject_arrival_identity = _build_resolved_runtime_prefix_arrival_identity(
-            primitive_scope=target_resolution.primitive_scope,
-            request_root=str(query_from_node),
-        )
-        _draw_count_for_arrival_map = conditioning_options.draw_count
-        subject_arrival_map = _build_request_arrival_map(
+    # One builder for the timing curves: the request-envelope plan. Use the
+    # prep step's plan when supplied; otherwise build it from the same builder
+    # (degenerate / minimal unit callers). The builder already degenerates —
+    # a zero-length A→X carrier yields a None carrier map (the spine composes
+    # the empty carrier as a zero-edge identity) and an X-rooted identity
+    # subject map. The runtime then reads both maps unconditionally: no
+    # window/cohort branch and no second arrival-map builder.
+    if envelope_plan is None:
+        from .request_envelope import build_request_envelope_plan
+        envelope_plan = build_request_envelope_plan(
             graph=graph,
-            root_node_id=str(query_from_node),
-            primitive_scope_for_window=target_resolution.primitive_scope,
-            edge_resolutions=[
-                (r.transition, r.resolved_model) for r in subject_resolutions
-            ],
-            identity=subject_arrival_identity,
-            max_tau=400,
-            scenario_seed=_runtime_seed(scenario_id, 'resolved_cf_runtime'),
-            draw_count=_draw_count_for_arrival_map,
-            primitive_scopes={
-                (r.transition.source_node, r.transition.destination_node):
-                    r.primitive_scope
-                for r in subject_resolutions
-            },
+            query_from_node=str(query_from_node),
+            query_to_node=str(query_to_node),
+            anchor_from=_date.fromisoformat(str(anchor_from)[:10]),
+            anchor_to=_date.fromisoformat(str(anchor_to)[:10]),
+            population_root=str(population_root),
+            graph_preference=graph.get('model_source_preference'),
+            as_at=as_at,
+            scenario_id=scenario_id,
+            context_key=context_key,
+            context_selector=context_selector,
         )
+    carrier_arrival_map = envelope_plan.carrier_arrival_map
+    subject_arrival_map = envelope_plan.subject_arrival_map
 
     # 73n in-runtime widening REMOVED. The fetch envelope is now derived
     # at the preparation layer by `runner.request_envelope.build_request_
@@ -717,7 +702,6 @@ def build_resolved_cf_runtime(
         request_evidence_candidates=evidence_candidates,
         prebuilt_subject_arrival_map=subject_arrival_map,
         prebuilt_carrier_arrival_map=carrier_arrival_map,
-        is_window=is_window,
     )
 
     if subject_skip or carrier_skip:
@@ -868,6 +852,51 @@ def _runtime_request_cdf_draws(
         runtime.composed_carrier,
         horizon=horizon,
     )
+
+
+def _latent_chart_extent(
+    runtime: ResolvedCFRuntime,
+    *,
+    floor: int,
+    cap: int,
+    axis_tau_max: Optional[int],
+) -> int:
+    """Chart extent latent on the model's composed latency reach.
+
+    The extent is the t95 reach of the unconditioned predictive request span
+    (carrier∘subject, composed from the population root): window (X→Z) and
+    cohort (A→Z) differ only in which root the composition began from, so no
+    temporal mode is consulted — the reach is latent in the composed CDF.
+
+    The predictive (model) basis is used rather than the rate-conditioned
+    posterior because the chart extent is a latency-support property — how far
+    conversions can land — not a rate quantity. Sparse or zero evidence
+    collapses a conditioned CDF to no mass (asymptote → 0), which would clip
+    the chart to nothing; the predictive span always carries the model's
+    latency reach. This reproduces the former ``max(calendar, t95)`` display
+    horizon (which read t95 off ``resolved.latency``, the same model latency)
+    but sourced from the composed span, so the window/cohort distinction is
+    latent in the composition rather than a ``resolve_model_params`` mode
+    branch. Floored at the observed calendar reach so the evidence range is
+    never clipped, capped at the composition ceiling, and fully overridden by
+    an explicit FE ``axis_tau_max`` (chart-settings contract: nothing
+    specified → auto/latent; user specified → use it).
+    """
+    # Model-latency reach (t95) from the unconditioned predictive composed
+    # span. The predictive overlay is always built and the model CDF always
+    # carries mass (asymptote > 0), so the reach reads straight through:
+    # mean_cdf[-1] == asymptote, which always clears 0.95·asymptote, so the
+    # last index qualifies and the nonzero set is non-empty.
+    overlay = runtime.unconditioned_overlays['predictive']
+    cdf = _strict_span_request_cdf_draws(overlay.subject, overlay.carrier, horizon=cap)
+    mean_cdf = np.nanmean(cdf, axis=0)
+    asymptote = float(mean_cdf[-1])
+    t95 = int(np.nonzero(mean_cdf >= 0.95 * asymptote)[0][0])
+    # axis_tau_max is an extend-only hint (former max_tau semantics): it raises
+    # the floor when the FE wants a wider axis, never shrinks the reach. `or 0`
+    # makes the absent case a no-op.
+    extent = max(floor, t95, int(axis_tau_max or 0))
+    return max(0, min(extent, cap))
 
 
 def _root_window_carrier_n_by_anchor_day(
@@ -1084,43 +1113,29 @@ def _runtime_completeness(
     cohort_eval_ages: Sequence[int],
     cohort_weights: Sequence[float],
     horizon: int,
-) -> tuple[Optional[float], Optional[float]]:
-    """N-weighted mean and SD of the request-rooted CDF at each cohort's
-    observed frontier.
+) -> tuple[float, float, np.ndarray]:
+    """N-weighted mean and SD of the request-rooted CDF at each Cohort's
+    eval_age, plus the per-Cohort array the scalar reduces.
 
-    Pulls completeness from the same composed CDF the row builder uses
-    so the public scalar and the rendered curves stay aligned. Returns
-    ``(None, None)`` if the runtime has no composed CDF or every cohort
-    has zero weight.
+    The weighted scalar mean is ``Σ_i w_i · per_cohort[i] / Σ_i w_i``. A
+    zero-population request (``Σ w_i == 0``, e.g. the query-scoped
+    degradation fixture) degenerates to uniform weighting — the limit of the
+    weighted mean as the weights flatten — so the scalar is the unweighted
+    per-Cohort mean, not 0/0. ``+ float(Σw == 0)`` is bool-as-arithmetic: it
+    adds nothing when there is population and a flat 1 per Cohort when there
+    is none, so the reduction is always defined with no branch.
     """
-    if not cohort_eval_ages or not cohort_weights:
-        return None, None
     cdf = _runtime_request_cdf_draws(runtime, horizon=horizon)
-    if cdf is None:
-        cdf_mean = (
-            runtime.composed_subject.cdf_mean
-            if runtime.composed_subject is not None else None
-        )
-        if cdf_mean is None:
-            return None, None
-        weights = np.asarray(cohort_weights, dtype=np.float64)
-        wsum = float(weights.sum())
-        if wsum <= 0:
-            return None, None
-        ages = np.asarray(cohort_eval_ages, dtype=np.int64)
-        ages = np.clip(ages, 0, len(cdf_mean) - 1)
-        per_cohort = cdf_mean[ages]
-        return float((weights * per_cohort).sum() / wsum), 0.0
-
     weights = np.asarray(cohort_weights, dtype=np.float64)
-    wsum = float(weights.sum())
-    if wsum <= 0:
-        return None, None
-    ages = np.asarray(cohort_eval_ages, dtype=np.int64)
-    ages = np.clip(ages, 0, cdf.shape[1] - 1)
-    per_cohort_per_draw = cdf[:, ages]
-    weighted_per_draw = (weights * per_cohort_per_draw).sum(axis=1) / wsum
-    return float(weighted_per_draw.mean()), float(weighted_per_draw.std())
+    weights = weights + float(weights.sum() == 0.0)
+    per_cohort_per_draw = cdf[:, np.asarray(cohort_eval_ages, dtype=np.int64)]
+    per_cohort = per_cohort_per_draw.mean(axis=0)
+    weighted_per_draw = (weights * per_cohort_per_draw).sum(axis=1) / weights.sum()
+    return (
+        float(weighted_per_draw.mean()),
+        float(weighted_per_draw.std()),
+        per_cohort,
+    )
 
 
 def _anchor_day_key(anchor_day: Any) -> str:
@@ -1185,12 +1200,10 @@ def _build_selected_retrieval_frontier(
         return SelectedRetrievalFrontier(paired_frontier_by_anchor={}, bounds=None)
     per_anchor: Dict[str, int] = {}
     for ci in cohort_list:
-        tau_obs = ci.get('tau_observed') if isinstance(ci, Mapping) else None
+        tau_obs = ci.get('tau_observed')
         if isinstance(tau_obs, (int, float)) and int(tau_obs) < 0:
             continue
-        anchor_key = _anchor_day_key(
-            ci.get('anchor_day') if isinstance(ci, Mapping) else None,
-        )
+        anchor_key = _anchor_day_key(ci['anchor_day'])
         try:
             anchor_d = _date.fromisoformat(anchor_key)
         except (TypeError, ValueError):
@@ -1241,26 +1254,12 @@ def _build_selected_cohort_inputs(
     """
     inputs: List[Mapping[str, Any]] = []
     for ec, ci in zip(engine_cohorts, cohort_list or ()):
-        anchor_day_raw = (
-            ci.get('anchor_day')
-            if isinstance(ci, Mapping)
-            else getattr(ec, 'anchor_day', None)
-        )
-        if anchor_day_raw is None:
-            continue
-        anchor_day_key = (
-            anchor_day_raw.isoformat()
-            if hasattr(anchor_day_raw, 'isoformat')
-            else str(anchor_day_raw)[:10]
-        )
+        anchor_day_key = ci['anchor_day'].isoformat()
         n_pop = float(getattr(ec, 'a_pop', 0.0) or 0.0)
         if n_pop <= 0.0:
             continue
         n_anchor = float(n_by_anchor.get(anchor_day_key, 0.0) or 0.0)
-        tau_max_int = int(
-            (ci.get('tau_max') if isinstance(ci, Mapping) else None)
-            or 0,
-        )
+        tau_max_int = int(ci.get('tau_max') or 0)
         # Per-Cohort frontier f_c. The selected retrieval frontier (one
         # query-wide analysis observation date mapped to this anchor's
         # age) is authoritative when present. The frame-derived
@@ -1270,9 +1269,7 @@ def _build_selected_cohort_inputs(
         # FC continuation to the wrong frontier. The empty-frames
         # sentinel (-1) carries no observation and is preserved so the
         # spine projects from the unit prior.
-        frame_tau_obs = (
-            ci.get('tau_observed') if isinstance(ci, Mapping) else None
-        )
+        frame_tau_obs = ci.get('tau_observed')
         if isinstance(frame_tau_obs, (int, float)) and int(frame_tau_obs) < 0:
             tau_obs_int = -1
         else:
@@ -1293,10 +1290,60 @@ def _build_selected_cohort_inputs(
     return inputs
 
 
+# ── Shared FC-draw quantilers (73q Phase 3) ─────────────────────────────
+# The tau reducer's per-τ `_quantiles` (cohort_maturity) and the date
+# reducer's `forecast_bands` / `latency_bands` (daily_conversions) must
+# emit identical band geometry from the same FC rate draws. These small
+# NaN-aware reductions over a 1-D draw slice are the one definition both
+# read, so neither reducer reimplements the quantile math. They mirror the
+# established all-NaN→None contract (a rate cell is undefined where
+# X_total = 0); no clip, no `or 0.0` — undefined propagates as None.
+
+#: Forecast-band confidence levels emitted on `forecast_bands` rows. This
+#: is the set the tau reducer already produces (CF_ROW_PIPELINE §5); 73q
+#: does not redefine it.
+_FORECAST_BAND_LEVELS = (0.80, 0.90, 0.95, 0.99)
+
+#: Confidence levels carried on a forecast-side `latency_bands` entry —
+#: the legacy daily-conversions public shape (api_handlers.py).
+_LATENCY_FORECAST_BAND_LEVELS = (0.80, 0.90)
+
+
+def _forecast_rate_bands(rate_draws_1d, band_levels):
+    """NaN-aware confidence bands for a 1-D rate-draw slice.
+
+    Returns ``{'<pct>': [lo, hi]}`` keyed by band level, or ``None`` when
+    every draw is NaN (the rate is undefined at this slice — X_total = 0).
+    Quantiles are the same ``(1 ± bl) / 2`` pair the tau reducer uses.
+    """
+    d = np.asarray(rate_draws_1d, dtype=np.float64)
+    if not np.isfinite(d).any():
+        return None
+    return {
+        str(int(bl * 100)): [
+            float(np.nanquantile(d, (1 - bl) / 2)),
+            float(np.nanquantile(d, (1 + bl) / 2)),
+        ]
+        for bl in band_levels
+    }
+
+
+def _nan_mean_or_none(draws_1d):
+    """Mean of a 1-D draw slice, or ``None`` when every draw is NaN."""
+    d = np.asarray(draws_1d, dtype=np.float64)
+    return float(np.nanmean(d)) if np.isfinite(d).any() else None
+
+
+def _nan_median_or_none(draws_1d):
+    """Median of a 1-D draw slice, or ``None`` when every draw is NaN."""
+    d = np.asarray(draws_1d, dtype=np.float64)
+    return float(np.nanmedian(d)) if np.isfinite(d).any() else None
+
+
 def _project_runtime_rows(
     *,
     runtime: ResolvedCFRuntime,
-    engine_cohorts: Sequence[Any],
+    selected_projection: 'model_span_spine.SelectedCohortRowProjection',
     cohort_eval_ages: Sequence[int],
     cohort_weights: Sequence[float],
     max_tau: int,
@@ -1304,9 +1351,6 @@ def _project_runtime_rows(
     tau_future_max: int,
     sweep_to: str,
     band_level: float,
-    n_by_anchor: Optional[Mapping[str, float]] = None,
-    selected_retrieval_frontier: Optional[SelectedRetrievalFrontier] = None,
-    cohort_list: Optional[Sequence[Mapping[str, Any]]] = None,
     emit_diagnostics: bool = False,
 ) -> List[Dict[str, Any]]:
     """Build chart rows from the runtime's composed objects + observed
@@ -1347,38 +1391,14 @@ def _project_runtime_rows(
             overlay.subject, overlay.carrier, horizon=max_tau,
         )
 
-    # E+F draws come from the spine's single mode-blind reducer — one
-    # operator-supply pass per family (conditioned + empirical), one DP
-    # core, one division (Phase 6 §4.9 + §5.6). The legacy selected-Cohort
-    # group reducer and its Pop D / Pop C enumeration are gone; the spine
-    # reducer projects ΣY/ΣX directly from the composed operator surfaces.
-    selected_cohort_inputs = _build_selected_cohort_inputs(
-        engine_cohorts,
-        cohort_list or [],
-        n_by_anchor or {},
-        (
-            selected_retrieval_frontier.paired_frontier_by_anchor
-            if selected_retrieval_frontier is not None
-            else {}
-        ),
-    )
-    # FC plan §9.4 / §9.5: the FC shadow surface reads the
-    # predictive-basis CONDITIONED spans
-    # (``runtime.composed_*_predictive`` — built from the SAME bound
-    # evidence as the epistemic ``composed_*`` pair, just with
-    # ``dispersion_basis='predictive'``). The
-    # unconditioned-predictive overlay carries no evidence binding and
-    # is NOT a substitute for the conditioned-predictive surface.
-    selected_projection = model_span_spine.project_selected_cohort_rows(
-        composed_carrier=runtime.composed_carrier,
-        composed_subject=runtime.composed_subject,
-        composed_carrier_predictive=runtime.composed_carrier_predictive,
-        composed_subject_predictive=runtime.composed_subject_predictive,
-        composed_empirical_carrier=runtime.composed_empirical_carrier,
-        composed_empirical_subject=runtime.composed_empirical_subject,
-        selected_cohorts=selected_cohort_inputs,
-        horizon=max_tau,
-    )
+    # 73q Phase 2: ``selected_projection`` is pre-built by
+    # ``build_cf_projection_bundle`` at ``fe.saturation_tau`` (the spine's
+    # single mode-blind reducer — one operator-supply pass per family,
+    # one DP core, one division). This row builder reads it through
+    # ``fe.max_tau`` only: the loop below runs ``range(max_tau + 1)``, and
+    # the spine pads/forward-fills beyond the grid, so projecting at the
+    # larger saturation horizon leaves every τ ≤ max_tau value unchanged —
+    # public cohort-maturity rows are identical to projecting at max_tau.
     # Atom 6: midpoint / fan_* / fan_bands / projected_rate read the
     # FC (frontier-conditioned) continuation surface `ef_rate_draws`,
     # not the legacy spliced surface. `ef_*` is prefix-pinned to strict
@@ -1393,7 +1413,7 @@ def _project_runtime_rows(
     _selected_cohort_diag = None
     epi_rate_draws = _overlay_rate_draws('epistemic')
 
-    completeness_mean, completeness_sd = _runtime_completeness(
+    completeness_mean, completeness_sd, _ = _runtime_completeness(
         runtime,
         cohort_eval_ages=cohort_eval_ages,
         cohort_weights=cohort_weights,
@@ -1439,22 +1459,6 @@ def _project_runtime_rows(
             return None
         return float(np.nanmean(d))
 
-    # Active cohort A!=X: evidence-named fields are populated only from
-    # actual selected A-clock observations supplied by
-    # selected_a_clock_evidence. Target-window frame prefixes remain
-    # forbidden as substitutes. The per-particle reducer's midpoint/fan
-    # stay projection-derived from composed carrier + subject surfaces.
-    pop_root = runtime.population_root
-    denom_node = runtime.denominator_node
-    roots_equal_at_X = (
-        pop_root is not None
-        and denom_node is not None
-        and str(pop_root) == str(denom_node)
-    )
-    is_active_carrier = (
-        runtime.composed_carrier is not None
-        and not roots_equal_at_X
-    )
     rows: List[Dict[str, Any]] = []
     for tau in range(max_tau + 1):
         # Evidence-named row fields come from the empirical operator's
@@ -1509,18 +1513,14 @@ def _project_runtime_rows(
         # is now produced by the frontier-continuation DP, not
         # reconstructed at row-projection time. Negative residuals
         # would be a frontier-ledger conservation defect; the engine
-        # surfaces them rather than clamping. `is_active_carrier` gates
-        # whether the field is emitted at all (identity-carrier
-        # contract unchanged); inside the active branch the value is
-        # whatever the predictive continuation produced.
-        forecast_y_tau = (
-            _draw_mean(selected_projection.ef_forecast_y, tau)
-            if is_active_carrier else None
-        )
-        forecast_x_tau = (
-            _draw_mean(selected_projection.ef_forecast_x, tau)
-            if is_active_carrier else None
-        )
+        # surfaces them rather than clamping. The spine builds these
+        # continuation residuals mode-blind (model_span_spine.py:2017 —
+        # `future_*_cont.sum(axis=0)`, no mode fork), so the reducer reads
+        # them directly: window / A=X / active-carrier are degeneracies of
+        # one surface. `_draw_mean` returns None only when the continuation
+        # is genuinely undefined (all-NaN draws), not as a mode signal.
+        forecast_y_tau = _draw_mean(selected_projection.ef_forecast_y, tau)
+        forecast_x_tau = _draw_mean(selected_projection.ef_forecast_x, tau)
 
         # Midpoint and fan emit across all epochs (A/B/C) so consumers
         # asserting the per-cohort calibrated E+F surface have values at
@@ -1618,15 +1618,10 @@ class FrameEvidence:
 
 def build_cohort_evidence_from_frames(
     frames: List[Dict[str, Any]],
-    target_edge: Dict[str, Any],
     anchor_from: str,
     anchor_to: str,
     sweep_to: str,
-    is_window: bool,
-    resolved: Any,
     axis_tau_max: Optional[int] = None,
-    *,
-    is_active_carrier: bool = False,
 ) -> Optional[FrameEvidence]:
     """Build CohortEvidence from derived maturity frames.
 
@@ -1653,8 +1648,6 @@ def build_cohort_evidence_from_frames(
         sweep_to_d = _date.fromisoformat(str(sweep_to)[:10])
     except (ValueError, TypeError):
         return None
-
-    lat = resolved.latency
 
     # ── Find last frame ────────────────────────────────────────────
     last_frame = None
@@ -1844,57 +1837,22 @@ def build_cohort_evidence_from_frames(
     #                   the public p_infinity scalar.
     #                   May exceed max_tau when path-level latency dominates
     #                   A→Y timing (cohort mode, multi-hop).
+    # Display floor: the observed calendar reach (oldest cohort → sweep_to),
+    # optionally raised by the FE override. The true chart extent is latent
+    # on the conditioned span CDF and is resolved by build_cf_projection_
+    # bundle after composition (_latent_chart_extent); this is only the floor
+    # below which the evidence range is never clipped.
     max_tau = tau_future_max
     if axis_tau_max is not None and axis_tau_max > max_tau:
         max_tau = axis_tau_max
-    if lat.sigma > 0:
-        try:
-            from .lag_distribution_utils import log_normal_inverse_cdf
-            t95 = log_normal_inverse_cdf(
-                0.95,
-                lat.mu,
-                lat.sigma,
-            ) + lat.onset_delta_days
-            max_tau = max(max_tau, int(math.ceil(t95)))
-        except Exception:
-            pass
     max_tau = min(max_tau, 400)
 
-    saturation_tau = max_tau
-    if lat.sigma > 0:
-        try:
-            from .lag_distribution_utils import log_normal_inverse_cdf
-            mu_s, sigma_s, onset_s = lat.mu, lat.sigma, lat.onset_delta_days
-            if not is_window:
-                # Cohort mode: fallback scalar support needs the path-level
-                # A→Y horizon, not the edge-local one. Re-resolve with
-                # scope='path' because build_cohort_evidence receives
-                # `resolved` from an earlier scope='edge' call (so
-                # resolved.path_latency is None on this side).
-                try:
-                    path_resolved = resolve_model_params(
-                        target_edge,
-                        scope='path',
-                        temporal_mode='cohort',
-                    )
-                    pl = (
-                        getattr(path_resolved, 'path_latency', None)
-                        if path_resolved
-                        else None
-                    )
-                    if pl is not None and pl.sigma > 0:
-                        mu_s, sigma_s, onset_s = (
-                            pl.mu,
-                            pl.sigma,
-                            pl.onset_delta_days,
-                        )
-                except Exception:
-                    pass
-            t95_sat = log_normal_inverse_cdf(0.95, mu_s, sigma_s) + onset_s
-            saturation_tau = max(saturation_tau, int(math.ceil(2.0 * t95_sat)))
-        except Exception:
-            pass
-    saturation_tau = min(saturation_tau, 400)
+    # Composition ceiling: a safe upper bound on reach so the conditioned,
+    # population-root-rooted span CDF (read by the bundle to derive the latent
+    # extent) is never truncated. No latency lookup and no temporal mode here
+    # — the per-primitive composition is the cheap pass; the expensive
+    # per-cohort projection is sized down to the latent extent by the bundle.
+    saturation_tau = 400
 
     # Frame evidence is raw observed chart evidence only. Active A!=X
     # carrier semantics are owned by the primitive-backed runtime span;
@@ -1919,7 +1877,7 @@ def build_cohort_evidence_from_frames(
 
         raw_obs_x = [0.0] * (saturation_tau + 1)
         raw_obs_y = [0.0] * (saturation_tau + 1)
-        last_x = raw_n_i if is_window else 0.0
+        last_x = 0.0
         last_y = 0.0
         for t in range(saturation_tau + 1):
             if t <= a_i:
@@ -1927,32 +1885,16 @@ def build_cohort_evidence_from_frames(
                 if obs:
                     last_x = float(obs[0])
                     last_y = float(obs[1])
-                elif is_window:
-                    last_x = raw_n_i
                 raw_obs_x[t] = last_x
                 raw_obs_y[t] = last_y
             else:
                 raw_obs_x[t] = last_x if last_x > 0 else raw_n_i
                 raw_obs_y[t] = last_y
 
-        # Active cohort A!=X: window-prepared target frames are X-clocked
-        # and must not seed selected A-clock observed prefixes. Exact
-        # A-clock observed-prefix pinning is separate future work; keep
-        # observed prefixes empty so model projection cannot masquerade
-        # as evidence.
-        if is_active_carrier:
-            raw_obs_x = [0.0] * (saturation_tau + 1)
-            raw_obs_y = [0.0] * (saturation_tau + 1)
-            a_i = 0
-
         obs_x = raw_obs_x
         obs_y = raw_obs_y
-        x_frozen = float(obs_x[a_i]) if a_i < len(obs_x) else (
-            0.0 if is_active_carrier else raw_n_i
-        )
-        y_frozen = float(obs_y[a_i]) if a_i < len(obs_y) else (
-            0.0 if is_active_carrier else float(ci.get('y_frozen', 0.0) or 0.0)
-        )
+        x_frozen = float(obs_x[a_i])
+        y_frozen = float(obs_y[a_i])
         evidence_n = x_frozen
         evidence_k = y_frozen
 
@@ -2008,6 +1950,307 @@ def build_cohort_evidence_from_frames(
     )
 
 
+def build_cf_projection_bundle(
+    frames: List[Dict[str, Any]],
+    graph: Dict[str, Any],
+    target_edge_id: str,
+    query_from_node: str,
+    query_to_node: str,
+    anchor_from: str,
+    anchor_to: str,
+    sweep_to: str,
+    *,
+    is_window: bool = True,
+    axis_tau_max: Optional[int] = None,
+    anchor_node_id: Optional[str] = None,
+    is_multi_hop: bool = False,
+    resolved_override: Any = None,
+    evidence_candidates: Optional[List[Any]] = None,
+    scenario_id: Optional[str] = None,
+    as_at: Optional[str] = None,
+    per_edge_upstream_candidates: Optional[Dict[str, Sequence[Any]]] = None,
+    per_edge_subject_candidates: Optional[Dict[str, Sequence[Any]]] = None,
+    per_edge_results_by_uuid: Optional[Dict[str, Dict[str, Any]]] = None,
+    show_model_curve: bool = False,
+    envelope_plan: Optional[Any] = None,
+    context_key: Optional[str] = None,
+    context_selector: Optional[str] = None,
+    mece_dimensions: Sequence[str] = (),
+):
+    """Build the one shared CF projection bundle (73q Phase 2).
+
+    Extracts the preparation/projection sequence that ``cohort_maturity``
+    and ``daily_conversions`` both need: resolve model params, materialise
+    frame evidence, build the ``ResolvedCFRuntime``, resolve base mass and
+    the retrieval frontier, and project the selected-Cohort surfaces.
+
+    The projection is built at ``fe.saturation_tau`` (not ``fe.max_tau``)
+    so the date reducer can index per-Cohort FC draws at saturation; the
+    tau reducer still emits public rows only through ``fe.max_tau`` (73q
+    §"Saturation tau"). Scalar metadata (``cf_mode`` / ``cf_reason`` /
+    ``promoted_source``) is read from the resolved model object, not from
+    ``runtime_provenance``. Always returns a bundle: a missing edge,
+    unresolvable model, malformed dates, or unbuildable runtime are
+    upstream defects that fail visibly (I-12), not early-out refusals.
+    """
+    from .forecast_runtime import find_edge_by_id, get_cf_mode_and_reason
+    from .cf_projection_bundle import CFProjectionBundle, latency_band_taus
+
+    # No perimeter refusals. A missing edge, an unresolvable model, or
+    # malformed/inverted request dates are upstream defects, not user
+    # requests, and per I-12 must fail visibly rather than be masked as
+    # empty rows: find_edge_by_id only misses on a graph/edge-id desync
+    # (the maturity call is gated on an analysed-path edge id);
+    # resolve_model_params returns a populated model even for an edge with
+    # no `p` block (model_resolver.py:230-231); build_cohort_evidence_from_
+    # frames returns None ONLY for malformed dates (its docstring), and a
+    # genuine no-data request yields synthesised zero-observation cohorts.
+    target_edge = find_edge_by_id(graph, target_edge_id)
+
+    # Translate the mode flag to topology once, here at the engine's public
+    # entry: the population root (the upstream anchor A for cohort, the
+    # subject start X for window) and the model-resolution clock label.
+    # Everything below — the runtime, the span resolver, the readout —
+    # consumes these, never is_window.
+    temporal_mode = 'window' if is_window else 'cohort'
+    population_root = (
+        str(anchor_node_id)
+        if (anchor_node_id and not is_window)
+        else str(query_from_node)
+    )
+
+    resolved = resolved_override if resolved_override is not None else (
+        resolve_model_params(
+            target_edge,
+            scope='edge',
+            temporal_mode=temporal_mode,
+        )
+    )
+    _cf_mode, _cf_reason = get_cf_mode_and_reason(resolved)
+    # Preserve the resolved model's source verbatim, including absence
+    # (None / ''). The bundle field is Optional[str]; substituting a real
+    # value like 'best_available' would assert a promoted source that did
+    # not actually resolve (73q scalar-metadata contract: sourced from the
+    # resolved object, never invented).
+    _promoted_source = resolved.source
+
+    fe = build_cohort_evidence_from_frames(
+        frames=frames,
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        sweep_to=sweep_to,
+        axis_tau_max=axis_tau_max,
+    )
+
+    request_candidates = _aggregate_request_candidates(
+        target_candidates=evidence_candidates,
+        per_edge_subject_candidates=per_edge_subject_candidates,
+        per_edge_upstream_candidates=per_edge_upstream_candidates,
+    )
+
+    # Build the runtime at the SATURATION horizon. The composed spans
+    # extend to fe.saturation_tau so the per-Cohort FC arrays cover it;
+    # the tau reducer reads the same projection but emits only through
+    # fe.max_tau (values at τ ≤ max_tau are unchanged by the larger grid).
+    runtime = build_resolved_cf_runtime(
+        graph=graph,
+        target_edge_id=str(target_edge_id),
+        query_from_node=str(query_from_node),
+        query_to_node=str(query_to_node),
+        anchor_from=str(anchor_from or ''),
+        anchor_to=str(anchor_to or anchor_from or ''),
+        sweep_to=str(sweep_to or anchor_from or ''),
+        as_at=as_at,
+        scenario_id=scenario_id,
+        population_root=population_root,
+        temporal_mode=temporal_mode,
+        is_multi_hop=is_multi_hop,
+        anchor_node_id=anchor_node_id,
+        resolved=resolved,
+        max_tau=fe.saturation_tau,
+        evidence_candidates=request_candidates,
+        unconditioned_overlay_bases=(
+            ('predictive', 'epistemic') if show_model_curve else ('predictive',)
+        ),
+        envelope_plan=envelope_plan,
+        context_key=context_key,
+        context_selector=context_selector,
+        mece_dimensions=tuple(mece_dimensions or ()),
+    )
+
+    # Per-anchor base mass + skip-reason provenance. ``_root_window_...``
+    # returns {} for an empty candidate pool and the loop is a no-op when
+    # there are no Cohorts, so neither needs a guard.
+    # population_root is a ResolvedCFRuntime field set unconditionally to
+    # query_from_node (or anchor_node_id in active mode) when the runtime
+    # is built (forecast_runtime.py:243-245), so it always exists and is
+    # the correct lookup root — no attribute-default or anchor_node_id
+    # fallback is reachable. An empty root degrades to an empty n_by_anchor
+    # (the lookup refuses), not a crash.
+    n_by_anchor: Dict[str, float] = _root_window_carrier_n_by_anchor_day(
+        runtime.request_evidence_candidates,
+        str(runtime.population_root),
+    )
+    # Per-anchor base mass + skip reason, as arithmetic over two disjoint
+    # 0/1 masks rather than a case fork. anchor_day is always a date
+    # (build_cohort_evidence_from_frames calls ci['anchor_day'].isoformat()
+    # on every entry, line 1893). n_by_anchor only stores strictly-positive
+    # counts (_root_window_carrier_n_by_anchor_day, line 931), so a missing
+    # anchor reads 0.0 and `present` is exactly "has root-window evidence".
+    #   present  → a_pop = n_root (carrier mass)
+    #   empty    → a_pop = its synthesised prior mass (empty-frames cohort)
+    #   neither  → a_pop = 0 (frames exist, no root evidence)
+    # a_pop = present·n_root + empty·prior; the two terms are exclusive.
+    # The reason label is the same selection ranked into a tuple.
+    ad_strs = [ci['anchor_day'].isoformat() for ci in fe.cohort_list]
+    n_roots = np.array(
+        [n_by_anchor.get(s, 0.0) for s in ad_strs], dtype=np.float64,
+    )
+    tau_obs = np.array(
+        [int(ci.get('tau_observed', 0)) for ci in fe.cohort_list], dtype=np.int64,
+    )
+    a_pop_prior = np.array(
+        [float(ec.a_pop) for ec in fe.engine_cohorts], dtype=np.float64,
+    )
+    present = n_roots > 0.0
+    empty = ~present & (tau_obs < 0)
+    a_pop_final = present * n_roots + empty * a_pop_prior
+    for ec, value in zip(fe.engine_cohorts, a_pop_final):
+        ec.a_pop = float(value)
+    _A_POP_REASON = (
+        'no_root_window_evidence', 'empty_frames_prior', 'root_window_carrier_n',
+    )
+    rank = present.astype(np.int64) * 2 + empty.astype(np.int64)
+    a_pop_provenance: Dict[str, str] = {
+        s: _A_POP_REASON[r] for s, r in zip(ad_strs, rank)
+    }
+
+    analysis_observation_frontier_date = _analysis_observation_frontier_date(
+        per_edge_results_by_uuid=per_edge_results_by_uuid,
+        as_at=as_at,
+    )
+    selected_retrieval_frontier = _build_selected_retrieval_frontier(
+        analysis_observation_frontier_date=analysis_observation_frontier_date,
+        cohort_list=fe.cohort_list,
+    )
+    # Strictly required: the selected retrieval frontier, when an admitted
+    # evidence date resolved it, is authoritative for the row epoch
+    # bounds; absent, the frame-derived bounds stand. Two genuine sources.
+    # Two genuine sources: the frontier bounds when an admitted evidence date
+    # resolved them, else the frame-derived bounds. A resolved frontier is
+    # always a 2-tuple (truthy), so `or` coalesces — a value default, not a
+    # control-flow branch.
+    _solid, _future = (
+        selected_retrieval_frontier.bounds
+        or (fe.tau_solid_max, fe.tau_future_max)
+    )
+    row_tau_solid_max = int(_solid)
+    row_tau_future_max = int(_future)
+
+    # Completeness inputs on one clock, rooted at population_root (A in
+    # cohort mode, X in window). Per COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_
+    # SEMANTICS.md invariants 1 and 6, window/cohort/A=X are degeneracies of
+    # one path, never a mode branch here — a `if window … else …` in this
+    # projection layer is the leaking-abstraction smell the doc names.
+    #   eval age = steps from the root to the observation frontier
+    #     (the frontier τ per anchor; ec.eval_age is the per-cohort fallback
+    #     when no query-wide frontier date resolved, and equals the former
+    #     window arm's max(tau_observed, 0) by construction);
+    #   weight   = population at the root (a_pop, set for every cohort by the
+    #     loop above).
+    # The removed _is_active_carrier window arm read (tau_observed,
+    # evidence_n) — the pre-cutover proxy of exactly these two quantities.
+    cohort_eval_ages = [
+        max(int(selected_retrieval_frontier.paired_frontier_by_anchor.get(
+            _anchor_day_key(ci['anchor_day']), ec.eval_age,
+        )), 0)
+        for ec, ci in zip(fe.engine_cohorts, fe.cohort_list)
+    ]
+    cohort_weights = [float(ec.a_pop) for ec in fe.engine_cohorts]
+
+    # Chart extent latent on the conditioned span (composed at the
+    # saturation ceiling above): the smallest τ at which the request CDF has
+    # saturated, floored at the calendar reach, FE-overridable. The
+    # expensive per-Cohort (C,S,T) projection is built at this latent extent,
+    # not the ceiling, so window/cohort horizons emerge from the conditioned
+    # data rather than a mode/latency lookup.
+    latent_extent = _latent_chart_extent(
+        runtime,
+        floor=int(fe.max_tau),
+        cap=int(fe.saturation_tau),
+        axis_tau_max=axis_tau_max,
+    )
+    selected_cohort_inputs = _build_selected_cohort_inputs(
+        fe.engine_cohorts,
+        fe.cohort_list,
+        n_by_anchor,
+        selected_retrieval_frontier.paired_frontier_by_anchor,
+    )
+    selected_projection = model_span_spine.project_selected_cohort_rows(
+        composed_carrier=runtime.composed_carrier,
+        composed_subject=runtime.composed_subject,
+        composed_carrier_predictive=runtime.composed_carrier_predictive,
+        composed_subject_predictive=runtime.composed_subject_predictive,
+        composed_empirical_carrier=runtime.composed_empirical_carrier,
+        composed_empirical_subject=runtime.composed_empirical_subject,
+        selected_cohorts=selected_cohort_inputs,
+        horizon=latent_extent,
+    )
+
+    # Ordered per-Cohort projection status, aligned 1:1 with
+    # fe.cohort_list. The projection's per-Cohort arrays are in ADMITTED
+    # order (Cohorts with N_pop <= 0 are excluded by
+    # _build_selected_cohort_inputs), so the date reducer needs an
+    # explicit index map from each cohort_list row to its projection row
+    # (or to a null projection with the skip reason). Built from the
+    # admitted inputs in order — no second admission gate.
+    admitted_index_by_anchor = {
+        _anchor_day_key(inp['anchor_day']): idx
+        for idx, inp in enumerate(selected_cohort_inputs)
+    }
+    cohort_projection_status = []
+    for ci in fe.cohort_list:
+        anchor_key = _anchor_day_key(ci['anchor_day'])
+        cohort_projection_status.append({
+            'anchor_day': anchor_key,
+            'projection_index': admitted_index_by_anchor.get(anchor_key),
+            'reason': a_pop_provenance.get(anchor_key),
+        })
+
+    # Per-Cohort completeness (the un-reduced view _runtime_completeness
+    # returns alongside the scalar) at the same saturation horizon, and
+    # the shared latency-band tau set.
+    _, _, completeness_by_cohort = _runtime_completeness(
+        runtime,
+        cohort_eval_ages=cohort_eval_ages,
+        cohort_weights=cohort_weights,
+        horizon=fe.saturation_tau,
+    )
+    _lat = resolved.latency
+    band_taus = latency_band_taus(_lat.mu, _lat.sigma, _lat.onset_delta_days)
+
+    return CFProjectionBundle(
+        frame_evidence=fe,
+        runtime=runtime,
+        selected_projection=selected_projection,
+        selected_retrieval_frontier=selected_retrieval_frontier,
+        n_by_anchor=n_by_anchor,
+        a_pop_provenance=a_pop_provenance,
+        cohort_eval_ages=cohort_eval_ages,
+        cohort_weights=cohort_weights,
+        cohort_projection_status=cohort_projection_status,
+        completeness_by_cohort=completeness_by_cohort,
+        latency_band_taus=band_taus,
+        row_tau_solid_max=row_tau_solid_max,
+        row_tau_future_max=row_tau_future_max,
+        cf_mode=_cf_mode,
+        cf_reason=_cf_reason,
+        promoted_source=_promoted_source,
+        saturation_tau=int(fe.saturation_tau),
+        max_tau=int(latent_extent),
+    )
+
+
 def compute_cohort_maturity_rows_v3(
     frames: List[Dict[str, Any]],
     graph: Dict[str, Any],
@@ -2053,262 +2296,49 @@ def compute_cohort_maturity_rows_v3(
     marks itself as degraded; this function never substitutes legacy
     aggregate timing or runs an aggregate-IS conditioning step.
     """
-    from .forecast_runtime import find_edge_by_id, get_cf_mode_and_reason
-
-    target_edge = find_edge_by_id(graph, target_edge_id)
-    if target_edge is None:
-        return []
-
-    # ── Resolve model params ────────────────────────────────────────
-    # Default: edge-level. ``resolved_override`` carries collapsed
-    # shortcuts (e.g. path latency + edge p for multi-hop subjects).
-    if resolved_override is not None:
-        resolved = resolved_override
-    else:
-        temporal = 'window' if is_window else 'cohort'
-        resolved = resolve_model_params(
-            target_edge,
-            scope='edge',
-            temporal_mode=temporal,
-        )
-    if not resolved:
-        return []
-    _cf_mode, _cf_reason = get_cf_mode_and_reason(resolved)
-
-    # ── Observed evidence display (raw frame observation only) ──────
-    # The frame evidence carries the chart's per-(τ) observed series and
-    # the per-cohort eval ages used for completeness. Carrier reach,
-    # subject span, and asymptotic rates come from the runtime, not from
-    # this object.
-    _is_active_carrier = (
-        not is_window
-        and bool(anchor_node_id)
-        and bool(query_from_node)
-        and str(anchor_node_id) != str(query_from_node)
-    )
-    fe = build_cohort_evidence_from_frames(
+    # 73q Phase 2: the public row function is "build bundle → tau
+    # reducer". The bundle owns the prep/projection sequence (resolve,
+    # frame evidence, runtime, base mass, frontier) and builds the
+    # selected-Cohort projection at fe.saturation_tau. The tau reducer
+    # below emits public rows only through fe.max_tau.
+    bundle = build_cf_projection_bundle(
         frames=frames,
-        target_edge=target_edge,
+        graph=graph,
+        target_edge_id=target_edge_id,
+        query_from_node=query_from_node,
+        query_to_node=query_to_node,
         anchor_from=anchor_from,
         anchor_to=anchor_to,
         sweep_to=sweep_to,
         is_window=is_window,
-        resolved=resolved,
         axis_tau_max=axis_tau_max,
-        is_active_carrier=_is_active_carrier,
-    )
-    if fe is None:
-        return []
-
-    # 73g §1: one general forecast machinery path. Build a single
-    # request-level candidate pool from every parameterised primitive
-    # in the request topology — target subject, non-target subject
-    # edges, and carrier edges. Per-primitive merge in the readout
-    # filters by ``(subject_from, subject_to)`` naturally, so a single
-    # pool is correct: each primitive sees only its own rows by
-    # subject identity, then admits or rejects them by its local
-    # arrival-weight clock support. This avoids the
-    # target-vs-carrier branch the readout would otherwise need.
-    #
-    # The per-edge candidate dicts feed raw candidate material directly
-    # into one request pool. Per-primitive merge in the readout is the
-    # only authoritative merge/binding boundary.
-    request_candidates = _aggregate_request_candidates(
-        target_candidates=evidence_candidates,
-        per_edge_subject_candidates=per_edge_subject_candidates,
-        per_edge_upstream_candidates=per_edge_upstream_candidates,
-    )
-
-    runtime = build_resolved_cf_runtime(
-        graph=graph,
-        target_edge_id=str(target_edge_id),
-        query_from_node=str(query_from_node),
-        query_to_node=str(query_to_node),
-        anchor_from=str(anchor_from or ''),
-        anchor_to=str(anchor_to or anchor_from or ''),
-        sweep_to=str(sweep_to or anchor_from or ''),
-        as_at=as_at,
-        scenario_id=scenario_id,
-        is_window=is_window,
-        is_multi_hop=is_multi_hop,
         anchor_node_id=anchor_node_id,
-        resolved=resolved,
-        max_tau=fe.max_tau,
-        evidence_candidates=request_candidates,
-        unconditioned_overlay_bases=(
-            ('predictive', 'epistemic') if show_model_curve else ('predictive',)
-        ),
+        is_multi_hop=is_multi_hop,
+        resolved_override=resolved_override,
+        evidence_candidates=evidence_candidates,
+        scenario_id=scenario_id,
+        as_at=as_at,
+        per_edge_upstream_candidates=per_edge_upstream_candidates,
+        per_edge_subject_candidates=per_edge_subject_candidates,
+        per_edge_results_by_uuid=per_edge_results_by_uuid,
+        show_model_curve=show_model_curve,
         envelope_plan=envelope_plan,
         context_key=context_key,
         context_selector=context_selector,
-        mece_dimensions=tuple(mece_dimensions or ()),
+        mece_dimensions=mece_dimensions,
     )
-    if runtime is None:
-        return []
-
-    # Active-cohort base population (a_pop) per anchor day must be
-    # available BEFORE the selected A-clock evidence builder runs —
-    # the new dual-prefix builder (docs/current/cohort-1apr-falling-k-
-    # problem-statement.md A.6 phase 1) consumes N_cohort(C) for both
-    # the X_prefix amplitude and the M_select(X, C, u) mass surface.
-    # The frame-bundle 'a' value is not consulted for active; anchors
-    # without admissible root-window evidence get a_pop = 0 and are
-    # excluded from the active projection.
-    a_pop_provenance: Dict[str, str] = {}
-    n_by_anchor: Dict[str, float] = {}
-    # Source N_cohort per anchor day from any candidate whose
-    # `subject_from` is the population root. For active `cohort(A!=X)`
-    # the matching candidates are the carrier (A-rooted upstream) edges;
-    # for identity carrier (`window()` or `cohort(A=X)`) the matching
-    # candidate is the X-rooted subject primitive itself — A == X so
-    # there is no separate upstream carrier. Same function, same filter,
-    # different sub-object degenerates as a property of the data.
-    #
-    # The slice-family-WINDOW filter inside `_root_window_carrier_n_by_
-    # anchor_day` is load-bearing: the candidate's raw `n` per
-    # `observed_date` is the X-rooted count under window binding, which
-    # is the correct N_cohort surface per anchor day. For multi-hop
-    # window subjects routing N_cohort through `engine_cohort.a_pop`
-    # instead would substitute a frame-derived per-cohort scalar for
-    # the per-day candidate counts — different aggregation, different
-    # amplitude downstream in M_select and X_prefix. Atom-3 plan stage 2
-    # attempted that substitution on invariant-6 grounds; it broke
-    # multi-hop window numerically and was reverted. AP59 reachability
-    # on cohort-only-evidence fixtures is not a current production
-    # defect (§6a baseline) and is guarded by the stage 1 provenance
-    # test (`test_a_equals_x_provenance_uses_unified_path_not_rescue`).
-    _pop_root_for_lookup = (
-        str(runtime.population_root)
-        if getattr(runtime, 'population_root', None)
-        else anchor_node_id
-    )
-    # Single-pool read: every evidence consumer in the CF row pipeline
-    # reads from `runtime.request_evidence_candidates`, the flat,
-    # deduplicated pool built by `_aggregate_request_candidates` before
-    # the runtime was constructed. The `per_edge_*_candidates` params
-    # on the public entry are still accepted (production builds them
-    # via `build_(carrier_)superset_candidates_by_edge` and passes them
-    # at `api_handlers.py:1800-1801` / `:2235-2236`) — they feed
-    # `_aggregate_request_candidates` only.
-    if fe.engine_cohorts:
-        n_by_anchor = _root_window_carrier_n_by_anchor_day(
-            runtime.request_evidence_candidates,
-            _pop_root_for_lookup,
-        )
-    if fe.engine_cohorts:
-        # Per-cohort base mass population — uniform across carrier modes
-        # per invariant 6 (COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS
-        # §"Identity carrier is data, not a route"). The candidate's
-        # root-window `n` per anchor day is the authoritative source for
-        # ``a_pop`` whether the carrier route is non-trivial (active) or
-        # collapses to identity (``population_root == X``). The frame-
-        # bundle ``a_frozen`` is never an admissible fallback (Phase 3
-        # plan); the only categorical alternative to real evidence is
-        # the empty-frames unit prior (``tau_observed = -1`` sentinel).
-        for ec, ci in zip(fe.engine_cohorts, fe.cohort_list):
-            ad = ci.get('anchor_day')
-            if ad is None:
-                ec.a_pop = 0.0
-                continue
-            ad_str = (
-                ad.isoformat() if hasattr(ad, 'isoformat') else str(ad)[:10]
-            )
-            n_root = n_by_anchor.get(ad_str)
-            if n_root is not None and n_root > 0:
-                ec.a_pop = float(n_root)
-                a_pop_provenance[ad_str] = 'root_window_carrier_n'
-            elif int(ci.get('tau_observed', 0) or 0) < 0:
-                # Empty-frames synthesis: no frames at all, no expectation
-                # of root-window carrier evidence either. Preserve the
-                # synthesised ``a_pop = 1.0`` so the projection produces
-                # the natural Bayesian degeneracy — unit cohort through
-                # the predictive carrier × subject convolution.
-                a_pop_provenance[ad_str] = 'empty_frames_prior'
-            else:
-                # Frames exist but no admissible root-window carrier
-                # evidence for this anchor day. Zero the cohort's base
-                # mass; the spine treats this as an algebraic no-op
-                # (zero root seed, zero occupancy, zero contribution to
-                # every aggregate).
-                ec.a_pop = 0.0
-                a_pop_provenance[ad_str] = 'no_root_window_evidence'
-
-
-    # Selected retrieval frontier source: the one query-wide analysis
-    # observation date (latest admitted evidence date, capped by asat /
-    # today), computed directly from the admitted evidence_superset_rows.
-    # Independent of any legacy selected-clock object.
-    analysis_observation_frontier_date = _analysis_observation_frontier_date(
-        per_edge_results_by_uuid=per_edge_results_by_uuid,
-        as_at=as_at,
-    )
-
-    # Selected retrieval frontier: the one query-wide analysis observation
-    # date mapped to per-anchor τ. Behaviour-preserving replacement for the
-    # SelectedAClockEvidence frontier wrappers (frontier_tau_bounds /
-    # prefixes_for_cohorts(use_retrieval_frontier=True)), which were thin
-    # adapters over the same date. Independent of the legacy object.
-    selected_retrieval_frontier = _build_selected_retrieval_frontier(
-        analysis_observation_frontier_date=analysis_observation_frontier_date,
-        cohort_list=fe.cohort_list,
-    )
-    row_tau_solid_max = int(fe.tau_solid_max)
-    row_tau_future_max = int(fe.tau_future_max)
-    if selected_retrieval_frontier.bounds is not None:
-        row_tau_solid_max = int(selected_retrieval_frontier.bounds[0])
-        row_tau_future_max = int(selected_retrieval_frontier.bounds[1])
-
-    if _is_active_carrier:
-        # Active completeness inputs read the selected retrieval frontier
-        # per anchor (the one query-wide analysis observation date mapped
-        # to each Cohort's age). Fall back to the engine_cohort `eval_age`
-        # (always >= 0 by construction) when this anchor carries no
-        # frontier — `frontier_age` carries the `-1` empty-frames sentinel
-        # and completeness "at frontier" is undefined with no frontier, so
-        # the consumer needs a >= 0 age.
-        cohort_eval_ages = []
-        cohort_weights = []
-        for ec, ci in zip(fe.engine_cohorts, fe.cohort_list):
-            anchor_key = _anchor_day_key(ci.get('anchor_day'))
-            frontier_tau = (
-                selected_retrieval_frontier.paired_frontier_by_anchor.get(
-                    anchor_key,
-                )
-            )
-            cohort_eval_ages.append(
-                max(int(frontier_tau if frontier_tau is not None else (
-                    getattr(ec, 'eval_age', getattr(ec, 'frontier_age', 0)) or 0
-                )), 0),
-            )
-            cohort_weights.append(
-                float(getattr(ec, 'a_pop', 0.0) or 0.0),
-            )
-    else:
-        # Clamp to >= 0 — `tau_observed = -1` is the empty-frames "no
-        # observations recorded" sentinel; completeness eval needs a
-        # valid age. See engine_cohort `eval_age = max(a_i, 0)` above.
-        cohort_eval_ages = [
-            max(int(c.get('tau_observed', c.get('tau_max', 0)) or 0), 0)
-            for c in fe.cohort_list
-        ]
-        cohort_weights = [
-            float(c.get('evidence_n', c.get('x_frozen', 0.0)) or 0.0)
-            for c in fe.cohort_list
-        ]
+    runtime = bundle.runtime
 
     rows = _project_runtime_rows(
         runtime=runtime,
-        engine_cohorts=fe.engine_cohorts,
-        cohort_list=fe.cohort_list,
-        cohort_eval_ages=cohort_eval_ages,
-        cohort_weights=cohort_weights,
-        max_tau=fe.max_tau,
-        tau_solid_max=row_tau_solid_max,
-        tau_future_max=row_tau_future_max,
+        selected_projection=bundle.selected_projection,
+        cohort_eval_ages=bundle.cohort_eval_ages,
+        cohort_weights=bundle.cohort_weights,
+        max_tau=bundle.max_tau,
+        tau_solid_max=bundle.row_tau_solid_max,
+        tau_future_max=bundle.row_tau_future_max,
         sweep_to=sweep_to,
         band_level=band_level,
-        n_by_anchor=n_by_anchor,
-        selected_retrieval_frontier=selected_retrieval_frontier,
         emit_diagnostics=emit_diagnostics,
     )
 
@@ -2316,10 +2346,10 @@ def compute_cohort_maturity_rows_v3(
         rows,
         conditioning={'owner': 'primitive_conditioning'},
         conditioned=runtime.public_moments.p_mean is not None,
-        cf_mode=_cf_mode,
-        cf_reason=_cf_reason,
+        cf_mode=bundle.cf_mode,
+        cf_reason=bundle.cf_reason,
         runtime_provenance=runtime.project_runtime_provenance(),
     )
-    if a_pop_provenance and rows:
-        rows[0]['_a_pop_provenance'] = a_pop_provenance
+    if bundle.a_pop_provenance and rows:
+        rows[0]['_a_pop_provenance'] = bundle.a_pop_provenance
     return rows

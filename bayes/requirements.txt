@@ -7,8 +7,8 @@
 
 numpy>=2.0
 scipy>=1.14
-pymc>=5.28
-arviz>=0.23
+pymc>=5.28,<6      # 6.x is a breaking rewrite; compiler targets the 5.x API
+arviz>=0.23,<1    # 1.x renamed dict_to_dataset(library=)→inference_library=, hdi(hdi_prob=)→prob=, ELPDData.loo_i→elpd_i
 nutpie>=0.16
 jax[cpu]>=0.4.30  # nutpie jax backend (jax_backend feature flag)
 requests>=2.32

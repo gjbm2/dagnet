@@ -261,7 +261,6 @@ def resolve_request_spans(
     prior_source: Optional[str],
     request_evidence_candidates: Sequence[Any],
     unconditioned_overlay_bases: Sequence[str],
-    is_window: bool,
 ) -> ResolvedSpans:
     """The bind+condition+compose procedure — one request → composed pair.
 
@@ -276,10 +275,15 @@ def resolve_request_spans(
     """
     registry = RequestPrimitiveRegistry(arrival_map=subject_arrival_map)
     empirical_horizon_len = int(options.timing_cdf_max_tau) + 1
+    # Mode is latent in the topology: the population root sitting at X means
+    # there is no carrier leg — the window / cohort(A=X) identity case. Every
+    # binding below reads this fact, not an is_window flag threaded from the
+    # perimeter.
+    rooted_at_x = str(population_root_node_id) == str(x_node_id)
     evidence_readout_binding = {
         True: EvidenceReadoutBinding.window(),
         False: EvidenceReadoutBinding.cohort(),
-    }[bool(is_window)]
+    }[rooted_at_x]
 
     carrier_family = _prepare_carrier_operator_family(
         carrier_resolutions=carrier_resolutions,
@@ -296,7 +300,7 @@ def resolve_request_spans(
         subject_resolutions=subject_resolutions,
         subject_arrival_map=subject_arrival_map,
         registry=registry,
-        is_window=is_window,
+        rooted_at_x=rooted_at_x,
         evidence_readout_binding=evidence_readout_binding,
         scenario_seed=scenario_seed,
         options=options,
@@ -333,7 +337,7 @@ def resolve_request_spans(
         _prepare_conditioned_only_family(
             resolutions=carrier_resolutions,
             arrival_map=carrier_arrival_map,
-            is_window=is_window,
+            rooted_at_x=rooted_at_x,
             evidence_readout_binding=evidence_readout_binding,
             scenario_seed=scenario_seed,
             options=options,
@@ -347,7 +351,7 @@ def resolve_request_spans(
         _prepare_conditioned_only_family(
             resolutions=subject_resolutions,
             arrival_map=subject_arrival_map,
-            is_window=is_window,
+            rooted_at_x=rooted_at_x,
             evidence_readout_binding=evidence_readout_binding,
             scenario_seed=scenario_seed,
             options=options,
@@ -522,7 +526,7 @@ def _prepare_subject_operator_family(
     subject_resolutions: Sequence[Any],
     subject_arrival_map: Any,
     registry: RequestPrimitiveRegistry,
-    is_window: bool,
+    rooted_at_x: bool,
     evidence_readout_binding: EvidenceReadoutBinding,
     scenario_seed: int,
     options: ConditioningPolicyOptions,
@@ -550,7 +554,7 @@ def _prepare_subject_operator_family(
             _window_identity_arrival_weights(
                 s_res.primitive_scope, draw_count=options.draw_count,
             )
-            if is_window
+            if rooted_at_x
             else subject_arrival_map.nodes[s_res.transition.source_node]
         )
         prepared = prepare_primitive(
@@ -620,7 +624,7 @@ def _prepare_conditioned_only_family(
     *,
     resolutions: Sequence[Any],
     arrival_map: Any,
-    is_window: bool,
+    rooted_at_x: bool,
     evidence_readout_binding: EvidenceReadoutBinding,
     scenario_seed: int,
     options: ConditioningPolicyOptions,
@@ -658,7 +662,7 @@ def _prepare_conditioned_only_family(
                 _window_identity_arrival_weights(
                     res.primitive_scope, draw_count=options.draw_count,
                 )
-                if is_window
+                if rooted_at_x
                 else arrival_map.nodes[res.transition.source_node]
             )
         prepared = prepare_primitive(
@@ -1136,6 +1140,21 @@ class SelectedCohortRowProjection:
     ef_rate_draws: np.ndarray            # (S, T) — ef_y / ef_x with NaN on 0/0
     ef_forecast_x: np.ndarray            # (S, T) — future residual: ef_x - strict_x
     ef_forecast_y: np.ndarray            # (S, T) — future residual: ef_y - strict_y
+    # Per-Cohort views (73q Phase 2, §"Per-Cohort un-aggregation"). These
+    # are the canonical product of the FC continuation; the aggregate
+    # ``ef_*`` above is exactly their ``.sum(axis=0)`` reduction. The tau
+    # reducer reads the aggregate; the date reducer (73q Phase 3) indexes
+    # these per-Cohort directly. ``ef_rate_draws_by_cohort`` is per-Cohort
+    # ``ef_y / ef_x`` under the same NaN-on-0/0 policy as the aggregate.
+    # The ordered strict-evidence arrays carry the same per-Cohort data as
+    # the anchor-keyed maps above, in selected-Cohort order.
+    ef_x_draws_by_cohort: np.ndarray         # (C, S, T)
+    ef_y_draws_by_cohort: np.ndarray         # (C, S, T)
+    ef_rate_draws_by_cohort: np.ndarray      # (C, S, T) — NaN on 0/0
+    ef_forecast_x_by_cohort: np.ndarray      # (C, S, T)
+    ef_forecast_y_by_cohort: np.ndarray      # (C, S, T)
+    evidence_x_strict_by_cohort: np.ndarray  # (C, T)
+    evidence_y_strict_by_cohort: np.ndarray  # (C, T)
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -1988,6 +2007,11 @@ def _project_frontier_continuation_surfaces(
     ef_y_draws = ef_y_cdT.sum(axis=0)
     with np.errstate(divide='ignore', invalid='ignore'):
         ef_rate_draws = ef_y_draws / ef_x_draws  # 0/0 → NaN visibly
+        # Per-Cohort rate (73q Phase 2): same NaN-on-0/0 policy, not
+        # reduced across cohorts. Rates don't sum, so this is NOT a
+        # cohort-axis sum of the aggregate — it is the per-Cohort
+        # division the date reducer indexes directly.
+        ef_rate_by_cohort = ef_y_cdT / ef_x_cdT  # (C, S, T), 0/0 → NaN
 
     # FC future residual: sum the per-cohort future continuation across
     # cohorts. Each cohort contributes zero for τ ≤ f_c and its DP
@@ -2003,6 +2027,13 @@ def _project_frontier_continuation_surfaces(
         'ef_rate_draws': ef_rate_draws,
         'ef_forecast_x': ef_forecast_x,
         'ef_forecast_y': ef_forecast_y,
+        # Per-Cohort views — the canonical product; the aggregates above
+        # are exactly their cohort-axis sum (73q Phase 2).
+        'ef_x_draws_by_cohort': ef_x_cdT,
+        'ef_y_draws_by_cohort': ef_y_cdT,
+        'ef_rate_draws_by_cohort': ef_rate_by_cohort,
+        'ef_forecast_x_by_cohort': future_x_cont_cdT,
+        'ef_forecast_y_by_cohort': future_y_cont_cdT,
     }
 
 
@@ -2257,6 +2288,11 @@ def project_selected_cohort_rows(
     evidence_x_strict = np.zeros(T, dtype=np.float64)
     evidence_y_strict = np.zeros(T, dtype=np.float64)
     applicable = np.zeros((cohort_count, T), dtype=np.float64)
+    # Ordered strict-evidence arrays aligned to selected-Cohort order
+    # (73q Phase 2) — same per-Cohort data as the anchor-keyed maps, in
+    # the order the date reducer iterates Cohorts.
+    strict_x_by_cohort_list: list[np.ndarray] = []
+    strict_y_by_cohort_list: list[np.ndarray] = []
 
     for cohort_idx, anchor_day in enumerate(anchor_days):
         strict_x_a = np.cumsum(
@@ -2267,6 +2303,8 @@ def project_selected_cohort_rows(
         ).mean(axis=0)
         evidence_x_strict_by_anchor_tau[anchor_day] = strict_x_a
         evidence_y_strict_by_anchor_tau[anchor_day] = strict_y_a
+        strict_x_by_cohort_list.append(strict_x_a)
+        strict_y_by_cohort_list.append(strict_y_a)
 
         # Two separate horizons drive two separate signals:
         #
@@ -2337,6 +2375,19 @@ def project_selected_cohort_rows(
         ef_rate_draws=fc['ef_rate_draws'],
         ef_forecast_x=fc['ef_forecast_x'],
         ef_forecast_y=fc['ef_forecast_y'],
+        ef_x_draws_by_cohort=fc['ef_x_draws_by_cohort'],
+        ef_y_draws_by_cohort=fc['ef_y_draws_by_cohort'],
+        ef_rate_draws_by_cohort=fc['ef_rate_draws_by_cohort'],
+        ef_forecast_x_by_cohort=fc['ef_forecast_x_by_cohort'],
+        ef_forecast_y_by_cohort=fc['ef_forecast_y_by_cohort'],
+        # Branchless (C, T) stack: a list of (T,) arrays → (C, T); the
+        # empty selected-cohort case → (0, T) via reshape, no guard.
+        evidence_x_strict_by_cohort=np.asarray(
+            strict_x_by_cohort_list, dtype=np.float64,
+        ).reshape(len(strict_x_by_cohort_list), T),
+        evidence_y_strict_by_cohort=np.asarray(
+            strict_y_by_cohort_list, dtype=np.float64,
+        ).reshape(len(strict_y_by_cohort_list), T),
         diagnostics={
             'cohort_count': cohort_count,
             'horizon': int(horizon),

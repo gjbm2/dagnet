@@ -1613,12 +1613,31 @@ def simulate_graph(
     # Step-day cache: (calendar_day, edge_id) → p_step
     _step_day_cache: dict[tuple[int, str], float] = {}
 
-    def _get_step_day_p(calendar_day: int, edge_id: str, p_expected: float) -> float:
-        """Return the step-day p for this edge on this calendar day (cached)."""
+    def _get_step_day_p(calendar_day: int, edge_id: str) -> tuple[float, float]:
+        """Return (p_step, p_expected) for this edge on this calendar day.
+
+        p_expected is the DRIFTED nodal rate at the conversion calendar day
+        — logit(base_p) + the drift offset for that day — matching the level
+        the entry-day draw is centred on. The step-day deviation factor
+        p_step / p_expected is then a unit-mean multiplicative term whose
+        dispersion tracks the drifted level. Centring it on the *undrifted*
+        base p instead inflates the factor's CV once drift moves the rate, so
+        entry_p × (p_step / base_p) saturates the 0.999 clip and the realised
+        per-cohort conversion rate overshoots the drift ceiling. Step-day
+        variation is nodal (context-free), so no context multipliers apply.
+        """
+        base_p = edge_params[edge_id]["p"]
+        d_idx = min(max(int(calendar_day), 0), total_sim_days - 1)
+        drift_offset = float(drift_paths[edge_id][d_idx])
+        if abs(drift_offset) > 1e-9:
+            logit_p = math.log(max(base_p, 1e-6) / max(1 - base_p, 1e-6)) + drift_offset
+            p_expected = 1.0 / (1.0 + math.exp(-logit_p))
+        else:
+            p_expected = base_p
         key = (calendar_day, edge_id)
         if key not in _step_day_cache:
             _step_day_cache[key] = _draw_day_p(p_expected, step_kappa)
-        return _step_day_cache[key]
+        return _step_day_cache[key], p_expected
 
     # --- Person-level simulation ---
     # Runs for total_sim_days (burn_in + n_days). The first burn_in_days
@@ -2049,8 +2068,7 @@ def _traverse(
         for eid in evented:
             p_entry = day_probs[eid]
             if step_day_fn is not None:
-                p_expected = edge_params[eid]["p"]
-                p_step = step_day_fn(cal_day, eid, p_expected)
+                p_step, p_expected = step_day_fn(cal_day, eid)
                 p_eff = min(max(p_entry * (p_step / p_expected), 0.001), 0.999)
             else:
                 p_eff = p_entry
@@ -2082,8 +2100,7 @@ def _traverse(
     for eid in solo_edges:
         p_entry = day_probs[eid]
         if step_day_fn is not None:
-            p_expected = edge_params[eid]["p"]
-            p_step = step_day_fn(cal_day, eid, p_expected)
+            p_step, p_expected = step_day_fn(cal_day, eid)
             p_eff = min(max(p_entry * (p_step / p_expected), 0.001), 0.999)
         else:
             p_eff = p_entry
@@ -3390,6 +3407,17 @@ def write_to_snapshot_db(
 
     conn = psycopg2.connect(db_connection)
     cur = conn.cursor()
+
+    # Provision the schema if absent (idempotent). synth gen uses its own raw
+    # connection — not the snapshot_service pool — so a synth run against a
+    # fresh database (e.g. a local dev Postgres) must create the tables itself
+    # via the single shared source of truth rather than assume they pre-exist.
+    lib_dir = os.path.join(REPO_ROOT, "graph-editor", "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    import snapshot_service
+    snapshot_service.ensure_schema(cur)
+    conn.commit()
 
     inputs_json = json.dumps({"synthetic": True, "generator": "synth_gen"})
     sig_algo = "sig_v1_sha256_trunc128_b64url"

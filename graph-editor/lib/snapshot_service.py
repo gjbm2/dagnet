@@ -67,10 +67,26 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
         conn_string = os.environ.get('DB_CONNECTION')
         if not conn_string:
             raise ValueError("DB_CONNECTION environment variable not set")
-        _pool = psycopg2.pool.ThreadedConnectionPool(
+        pool = psycopg2.pool.ThreadedConnectionPool(
             _POOL_MIN_CONN, _POOL_MAX_CONN, conn_string,
             connect_timeout=10,
         )
+        # Provision the schema once, on pool creation (idempotent — every
+        # statement is IF NOT EXISTS and never alters an existing table).
+        # Makes a fresh database self-provisioning rather than depending on
+        # tables having been created out-of-band.
+        try:
+            conn = pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    ensure_schema(cur)
+                conn.commit()
+            finally:
+                pool.putconn(conn)
+        except Exception:
+            pool.closeall()
+            raise
+        _pool = pool
         return _pool
 
 
@@ -204,13 +220,55 @@ def short_core_hash_from_canonical_signature(canonical_signature: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-def _ensure_flexi_sig_tables(cur) -> None:
+def ensure_schema(cur) -> None:
     """
-    Ensure flexi-sigs tables exist.
+    Idempotently create the snapshot DB tables and indexes if absent.
 
-    This is intentionally lazy (on demand) so local dev + integration tests
-    do not require a separate migration step.
+    Lazy (on demand) so a fresh database — local dev, a new Neon project, or
+    disaster recovery — provisions itself on first use with no separate
+    migration step. Safe to call repeatedly: every statement uses
+    ``IF NOT EXISTS`` and never alters an existing table, so it is a no-op
+    against an already-provisioned database (e.g. production).
+
+    DDL mirrors production exactly (introspected 27-May-26, incl. the two
+    secondary lookup indexes). This is the single source of truth for the
+    schema; the core ``snapshots`` table was previously created out-of-band,
+    which left a fresh database unable to accept writes.
     """
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS snapshots (
+          param_id                TEXT NOT NULL,
+          core_hash               TEXT NOT NULL,
+          context_def_hashes      TEXT,
+          slice_key               TEXT NOT NULL,
+          anchor_day              DATE NOT NULL,
+          retrieved_at            TIMESTAMPTZ NOT NULL,
+          A                       INTEGER,
+          X                       INTEGER,
+          Y                       INTEGER,
+          median_lag_days         REAL,
+          mean_lag_days           REAL,
+          anchor_median_lag_days  REAL,
+          anchor_mean_lag_days    REAL,
+          onset_delta_days        REAL,
+          write_inputs_json       JSONB,
+          PRIMARY KEY (param_id, core_hash, slice_key, anchor_day, retrieved_at)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_snapshots_lookup
+          ON snapshots (param_id, core_hash, slice_key, anchor_day)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_snapshots_core_hash_anchor
+          ON snapshots (core_hash, slice_key, anchor_day)
+        """
+    )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS signature_registry (

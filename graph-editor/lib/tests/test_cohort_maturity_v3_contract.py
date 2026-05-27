@@ -297,10 +297,9 @@ def _run_v3(
             graph=graph,
             query_from_node=query_from_node,
             query_to_node=query_to_node,
-            anchor_node_id=anchor_node_id,
             anchor_from=date.fromisoformat(anchor_from),
             anchor_to=date.fromisoformat(anchor_to),
-            is_window=False,
+            population_root=str(anchor_node_id),
             graph_preference='best_available',
             scenario_id=scenario_id,
         )

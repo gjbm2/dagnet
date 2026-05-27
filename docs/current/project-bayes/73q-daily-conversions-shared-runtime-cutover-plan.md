@@ -1,8 +1,20 @@
 # 73q Daily Conversions Shared Runtime Cutover Plan
 
 **Status**: Proposal (rewrite) — 7-May-26; test-architecture amendment 13-May-26; CF/FC machinery rethink 26-May-26
-**Supersedes**: the 4-May-26 version of this document, archived at `docs/archive/project-bayes/73q-daily-conversions-shared-runtime-cutover-plan.md`. The 13-May-26 amendment restructures Phase 1 into a four-tier test architecture and adds Phase 1d (retirement of `test_doc56_phase0_behaviours.py`). The 26-May-26 rethink retargets this plan at the current CF row pipeline and frontier-conditioned (`ef_*`) projection surfaces, and changes the implementation shape: 73q is now a reducer over a shared **CF projection bundle**, not over generic "conditioned draws".
+**Supersedes**: the 4-May-26 version of this document, archived at `docs/archive/project-bayes/73q-daily-conversions-shared-runtime-cutover-plan.md`. The 27-May-26 revision replaces the earlier interleaved test-phase framing with phase-owned acceptance: Phase 1 calibrates the legacy contract, Phase 2 owns projection-bundle tests, Phase 3 owns date-reducer/cross-consumer tests, and Phase 5a owns surprise-gauge replacement coverage. The implementation target remains the current CF row pipeline and frontier-conditioned (`ef_*`) projection surfaces: 73q is a reducer over a shared **CF projection bundle**, not over generic "conditioned draws".
 **Scope**: Move daily conversions onto the shared CF runtime by adding a date reducer over the same projection bundle as the cohort-maturity tau reducer, without implementing 73p hierarchical per-Cohort conditioning, and without trusting the current legacy daily-conversions arithmetic as an oracle.
+
+## Implementation progress
+
+<!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
+
+- [x] Phase 1 — Legacy Contract Calibration — completed 27-May-26
+- [x] Phase 2 — Projection Bundle Expansion — completed & closed 27-May-26 (horizon model reconciled; no-branch approvals recorded; cross-scenario tau-extent deferred — see Phase 2 close-out)
+- [ ] Phase 3 — Date reducer
+- [ ] Phase 4 — Wire into daily conversions and retire the legacy path
+- [ ] Phase 5 — Remaining consumer decisions and legacy-engine migration
+- [ ] Phase 6 — Retire cohort_maturity v1 and v2
+- [ ] Phase 7 — Cleanup sweep
 
 ## Why this is a rewrite
 
@@ -19,7 +31,7 @@ The older framing around "conditioned draws" is no longer precise enough. 73q mu
 
 - `FrameEvidence` and cohort metadata from `build_cohort_evidence_from_frames`;
 - the `ResolvedCFRuntime`;
-- the selected A-clock evidence object and projection bases;
+- the selected retrieval frontier object used by the current row projection;
 - `SelectedCohortRowProjection` generated to the required horizon;
 - per-Cohort views of the FC (`ef_*`) projection surfaces that are not yet exposed today.
 
@@ -73,11 +85,11 @@ The CF row/scalar path migrated to `ResolvedCFRuntime` in 73n and now routes pub
 
 The FE consumes `rate_by_cohort` as the primary chart input when present and reads observed `data` only as a fallback. The cutover therefore prioritises `rate_by_cohort` correctness; the calendar-date `data` series is preserved unchanged because `derive_daily_conversions` continues to produce it.
 
-## Current code reality as of 26-May-26
+## Current code reality as of 27-May-26
 
 This is the part that makes 73q non-trivial after the FC work. The current code is close, but it does **not** yet expose the reducer contract this document needs.
 
-- `model_span_spine.SelectedCohortRowProjection` exposes aggregate `(S, T)` surfaces only: `f_*`, `ef_*`, `rate_draws_spliced`, strict evidence totals, and strict evidence by anchor maps. Inside `project_selected_cohort_rows`, per-Cohort arrays (`x_model_by_anchor`, `y_model_by_anchor`, empirical traces, FC ledgers) exist during computation but are reduced before return.
+- `model_span_spine.SelectedCohortRowProjection` exposes aggregate `(S, T)` surfaces only: `f_*`, `ef_*`, strict evidence totals, and strict evidence by anchor maps. The legacy spliced transition fields have been removed from the public projection object. Inside `project_selected_cohort_rows`, per-Cohort arrays (`x_model_by_anchor`, `y_model_by_anchor`, empirical traces, FC ledgers) still exist during computation but are reduced before return.
 - `_project_runtime_rows` calls `project_selected_cohort_rows(..., horizon=max_tau)`. Daily conversions needs FC arrays at `fe.saturation_tau`, which may exceed public chart `max_tau`.
 - `_runtime_completeness` returns only an across-Cohort weighted mean and SD. Daily conversions needs the per-Cohort completeness values before that reduction.
 - Public cohort-maturity `forecast_x` / `forecast_y` row fields are emitted only for active carrier mode, as a display contract. Daily conversions cannot inherit that gate: an immature window Cohort still needs a `forecast_y` residual from `ef_forecast_y`.
@@ -109,11 +121,16 @@ The shared runtime and selected-Cohort spine are the authority for conditioned p
 
 This section is binding for phases 2, 3, and 4. Every consumer field of the daily-conversions response is named here with its projection-bundle source, the tau index at which it is read, the variant of any ambiguous mathematical object it depends on, and its behaviour when the bundle cannot produce the value. Phase 1 tests assert the contract directly. The contract must not be edited without a corresponding plan revision; phase 4 cannot relax it silently.
 
-### Saturation tau
+### Saturation tau and latent extent
 
-The runtime already computes a single principled saturation horizon per request. `build_cohort_evidence_from_frames` produces `fe.saturation_tau = max(max_tau, ceil(2 × t95))` capped at 400, where `t95` is the resolved latency 95th percentile (path-level in cohort mode, edge-level in window mode). This is the existing single source of truth. The date reducer reads `fe.saturation_tau` from the projection bundle for every field whose contract requires "evaluated at saturation". This plan does not introduce a new saturation definition, a percentile threshold, a floor, or a fallback. If the existing definition is wrong for some semantic question, that is a runtime change outside 73q's scope.
+Revised 27-May-26 to match the latent-chart-extent work that landed after this section was first drafted. Two horizons now exist with distinct roles; the earlier single derived `saturation_tau` is superseded.
 
-The projection bundle's per-Cohort arrays must extend to `fe.saturation_tau`. The existing public tau rows can stop at `fe.max_tau`, which can be smaller than `fe.saturation_tau`. Phase 2 aligns the spine projection horizon with `fe.saturation_tau` so the date reducer can index per-Cohort FC draws at saturation without re-running the projection at a different horizon.
+- **`fe.saturation_tau` — the composition ceiling.** `build_cohort_evidence_from_frames` sets `fe.saturation_tau = 400` (a flat ceiling, no longer the per-request `max(max_tau, ⌈2·t95⌉)` derivation). The composed spans are built to this ceiling — a cheap per-primitive pass — so the runtime CDF is available to 400 without re-composition.
+- **`latent_extent` — the data-latent reach.** `_latent_chart_extent` reads the t95 reach off the composed *predictive* request CDF, floors it at `fe.max_tau`, extends it (extend-only) by any FE `axis_tau_max`, and caps it at the `fe.saturation_tau` ceiling. This is the chart/row horizon, emergent from the model's own latency rather than a fixed setting.
+
+The expensive per-Cohort `(C, S, T)` projection is sized to `latent_extent`, not the ceiling — that is the cost saving (compose cheaply to 400, project only as far as conversions actually land). The bundle reports `bundle.max_tau = latent_extent`. Public cohort-maturity rows and the date reducer both read per-Cohort FC through `bundle.max_tau`. Because the predictive CDF has plateaued by its own t95, reading "at saturation" and reading at `latent_extent` return the same plateau value, so the date reducer's "evaluated at saturation" fields are satisfied by the per-Cohort arrays at `latent_extent` without projecting the full 400-wide grid. This plan still introduces no percentile threshold, magic floor, or fallback; both horizons are existing principled quantities (a fixed ceiling and the composed-span t95).
+
+**Multi-scenario caveat (deferred — see Phase 2 close-out).** `latent_extent` is computed per CF flow. For a multi-scenario overlay the chart axis should be the `max()` reach across scenarios; that cross-scenario `max()` is not computed today (flows run one-by-one). Deferred as a named atom.
 
 ### Completeness
 
@@ -121,9 +138,9 @@ Completeness is owned by the runtime per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_
 
 ### Layer
 
-`layer` is a daily-conversions-only field (cohort_maturity rows do not carry one). The rule is the existing rule from `forecast_application.annotate_data_point`: `c ≥ MATURITY_THRESHOLD → 'mature'; c > COMPLETENESS_EPSILON → 'forecast'; else 'evidence'`, with `MATURITY_THRESHOLD = 0.95` and `COMPLETENESS_EPSILON = 1e-9`.
+`layer` is a daily-conversions-only field (cohort_maturity rows do not carry one). The rule is the existing rule from `forecast_application.annotate_data_point`: `c ≥ 0.95 → 'mature'; c > COMPLETENESS_EPSILON → 'forecast'; else 'evidence'`, with `COMPLETENESS_EPSILON = 1e-9`.
 
-Because this plan later deletes the legacy `annotate_rows` / `annotate_data_point` surface, Phase 2 first extracts the constants and rule into a small non-legacy helper owned by the runtime/projection boundary. The date reducer imports that helper. No new constants, no local reimplementation.
+Because this plan later deletes the legacy `annotate_rows` / `annotate_data_point` surface, Phase 2 first extracts the threshold value, `COMPLETENESS_EPSILON`, and the completeness-to-layer rule into a small non-legacy helper owned by the runtime/projection boundary. The date reducer imports that helper. No new thresholds, no local reimplementation.
 
 ### Per-Cohort un-aggregation
 
@@ -146,7 +163,7 @@ The across-Cohort aggregate becomes a derived view for callers that need it. The
 - `forecast_bands`. Quantiles of per-Cohort FC `ef_rate_draws_by_cohort[i, :, fe.saturation_tau]` at the band levels the tau reducer already emits, computed by the same `_quantiles` helper the tau reducer uses. When per-Cohort FC rate draws are unavailable or all-NaN at `fe.saturation_tau`, `forecast_bands` is `null`. Band-level set is whatever the tau reducer is already producing today; this plan does not redefine it.
 - `completeness`. Per-Cohort variant of `_runtime_completeness` evaluated at `eval_age[i]` (see "Completeness" above). Range `[0.0, 1.0]`. Null when the runtime cannot produce a CDF readout at all.
 - `layer`. Derived from `completeness` by the extracted shared layer helper (see "Layer" above). When `completeness` is null, `layer` is `'evidence'` (the natural value at the rule's `c ≤ COMPLETENESS_EPSILON` branch when `c` is treated as zero).
-- `latency_bands`. A map keyed by canonical band labels matching the legacy labels (`'25d'`, `'50d'`, `'75d'`). Band taus are inverse-CDF percentiles of the resolved latency distribution at 0.25, 0.50, 0.75 plus `onset_delta_days` — the existing legacy derivation, lifted into a single projection-bundle accessor. Per band:
+- `latency_bands`. A map keyed by dynamic day labels matching the legacy public shape (for example `'8d'`, `'12d'`, depending on the resolved latency). Band taus are inverse-CDF percentiles of the resolved latency distribution at 0.25, 0.50, 0.75 plus `onset_delta_days`, discretised with the existing `max(1, round(raw_tau))` rule and deduplicated by tau. This derivation is lifted into a single projection-bundle accessor. Per band:
   - **Evidence side** (`eval_age[i] ≥ band_tau`): the value is `obs_y_at_age[i, band_tau] / x_frozen[i]`, sourced from `engine_cohorts[i].obs_y[band_tau]` (or the active prefix's `obs_y[band_tau]`) and the Cohort's `x_frozen`. Single rate value.
   - **Forecast side** (`eval_age[i] < band_tau`): the value is the quantile band of per-Cohort FC `ef_rate_draws_by_cohort[i, :, band_tau]` at the same band level the tau reducer is emitting today.
   - When `band_tau > fe.saturation_tau` (the bundle's draw horizon, the largest tau the per-Cohort projection arrays cover), the band is `null` with `_projection_provenance.reason = 'band_tau_above_saturation'`. The reducer does not silently clamp band_tau or substitute a different value; the bundle's saturation horizon is authoritative and a band beyond it is genuinely unavailable.
@@ -161,35 +178,32 @@ In active Cohort mode, a Cohort whose anchor_day has no admissible root-window c
 - `cohort_y_at_age`. Per-Cohort cumulative observed Y by Cohort age. Produced by `derive_daily_conversions` unchanged. The projection bundle carries equivalent information in `engine_cohorts[i].obs_y`, but the response field shape is preserved by `derive_daily_conversions`.
 - `total_conversions`, `date_range`. Produced by `derive_daily_conversions` unchanged.
 - `analysis_type`. Static string `'daily_conversions'`.
-- `cf_mode`, `cf_reason`. Read from `runtime` via `get_cf_mode_and_reason(runtime.resolved_override)` exactly as cohort_maturity does today.
-- `promoted_source`. Read from `runtime.runtime_provenance.p_conditioning_evidence.source`. Falls back to `runtime.resolved_override.source` if the provenance block is absent. The two sources currently agree by construction; the runtime-provenance form is canonical going forward.
+- `cf_mode`, `cf_reason`. Read from explicit projection-bundle scalar metadata. The bundle builder computes these from the same resolved model object the tau reducer uses, via `get_cf_mode_and_reason(resolved)`. The date reducer must not infer them from row fields or scrape runtime diagnostics.
+- `promoted_source`. Read from explicit projection-bundle scalar metadata, sourced from the resolved model source used to build the runtime. The date reducer must not scrape `runtime.runtime_provenance`; that provenance block is diagnostic and does not expose a stable `p_conditioning_evidence.source` contract today.
 
 ### Cross-reducer consistency
 
-The projection bundle is the same object for both reducers, so a strong cross-reducer invariant exists, but it is more delicate than a naive aggregation equivalence. The clean form: for any single-Cohort fixture, the cohort_maturity FC tau-row at `tau = saturation_tau` and the daily-conversions row for that Cohort must agree on the projected `Y / X` rate at that tau. For multi-Cohort fixtures, the cohort_maturity tau-row at any tau equals the across-Cohort sum of per-Cohort FC `(Y[i, :, τ], X[i, :, τ])` divided once at the end (the bundle's own aggregation rule); daily-conversions per-Cohort rows expose the un-summed view at each Cohort's `fe.saturation_tau`. Phase 1 tests for cross-reducer consistency are restricted to single-Cohort fixtures or to the explicit aggregation rule, never to a casual "weighted average" form.
+The projection bundle is the same object for both reducers, so a strong cross-reducer invariant exists, but it is more delicate than a naive aggregation equivalence. The clean form: for any single-Cohort fixture, the cohort_maturity FC tau-row at `tau = saturation_tau` and the daily-conversions row for that Cohort must agree on the projected `Y / X` rate at that tau. For multi-Cohort fixtures, the cohort_maturity tau-row at any tau equals the across-Cohort sum of per-Cohort FC `(Y[i, :, τ], X[i, :, τ])` divided once at the end (the bundle's own aggregation rule); daily-conversions per-Cohort rows expose the un-summed view at each Cohort's `fe.saturation_tau`. These cross-reducer tests belong to Phase 3, after the date reducer exists.
 
 ## Phases
 
 Each phase is a separable, mergeable chunk. Phases 2 and 3 are mechanically safe (they add capability without changing daily-conversions behaviour). Phase 1 is the calibration step that hardens the contract. Phase 4 is the cutover.
 
-### Phase 1 — Test architecture for the cutover
+Every phase follows the same test discipline:
 
-This phase delivers the test architecture 73q ships against. It comprises four tiers organised by what each tier proves and what it costs to run, plus the retirement of `test_doc56_phase0_behaviours.py`, whose current empirical cross-consumer matrix is rendered structurally redundant by the shared projection-bundle architecture and whose runtime cost (several real-DB pipeline runs per assertion) is disproportionate to the claims it still polices.
+- Write the phase's contract tests **blind and before** the production change.
+- The tests must assert the semantic contract, not current implementation output.
+- If the tests cannot be written before implementation, the contract is not specified well enough. Stop and refine the contract in this plan before coding.
+- A phase cannot close on prose, wiring, or "architecture complete" alone. Its phase-owned tests must run against the new path, and any legacy-gap xfail it owns must either flip or be reclassified with an explicit plan update.
+- For Phases 2-4, no new guards, conditionals, fallback branches, or mode/type branches are allowed unless explicitly approved before implementation. This includes branches on `window` vs `cohort`, identity carrier vs active carrier, single-hop vs multi-hop, latent vs non-latent, one vs many Cohorts, missing bundle fields, and "temporary" legacy fallback routes. Variation must enter as projection-bundle data, reducer selection, or explicit projection status. If an implementer believes a conditional is unavoidable, they must stop and get approval before coding it.
 
-The four tiers, in increasing wall-cost:
+### Phase 1 — Legacy Contract Calibration
 
-1. **Projection-bundle algebra unit tests** — sub-second; mock bundles assembled from numpy arrays; assert reducer algebra at the (Cohort, particle, τ) tensor level. No DB, no conditioning, no composition.
-2. **Projection-bundle integration tests** — seconds; tiny in-memory fixtures (a handful of edges, anchor days, and snapshots); assert properties of the extracted shared projection-bundle builder. No DB.
-3. **Cross-consumer projection tests via shared bundle** — seconds; a known bundle injected into the handler shims; assert tau reducer, date reducer, and (after Phase 5a) the scalar projector produce coherent readouts of the same per-Cohort surfaces.
-4. **Outside-in semantic acceptance oracle** — slow; the existing `test_cohort_factorised_outside_in.py` extended with daily-conversions cases per Phase 1a; full pipeline, real-DB; the load-bearing canary.
+Phase 1 is deliberately narrow and closeable. It does **not** create the projection bundle, the date reducer, cross-consumer tests, or doc56 replacement coverage. Those belong to the phases that create the relevant production surfaces.
 
-Tier 4 retains the original "blind invariant" framing because it is the semantic acceptance oracle and must clear legacy-gap expected-fails in phase 4. Tiers 1–3 do not require calibration against the legacy daily-conversions arithmetic because they assert structural properties of the new architecture (per-Cohort reducer algebra, projection-bundle determinism, single-bundle cross-consumer reads) rather than numerical outputs the legacy engine produced.
+This phase writes and calibrates the daily-conversions semantic contract against the current legacy path. The output is a contract test ledger: assertions that pass today become regression guards; assertions that correctly fail today become named legacy gaps that Phase 4 must clear.
 
-The four tiers do not all land in a single Phase 1 burst. Tier 1 can be written early — before Phases 2 and 3 — because it consumes mock projection bundles and drives the date reducer's algebra by pinning what it must implement. Tier 2 lands alongside the Phase 2 projection-bundle/accessor work. Tier 3 lands alongside Phase 3 and again at Phase 5a (surprise_gauge migration). Tier 4 is the existing Phase 1a/1b work below, authored blind against the contract and calibrated against legacy. The doc-56 retirement (Phase 1d) is the final cleanup pass once tiers 1–3 are in place.
-
-#### Phase 1a — Author outside-in tests blind (Tier 4)
-
-Extend the existing outside-in CLI tests with daily-conversions cases. Tests assert the "Reducer field contract" section above. The contract is the source of truth for what each field means; tests assert the contract's claims, not the legacy implementation's outputs. The required coverage classes are:
+Extend the existing outside-in CLI tests with daily-conversions cases. Tests assert the "Reducer field contract" section above. The contract is the source of truth for what each field means; tests assert the contract's claims, not the legacy implementation's outputs. This section is a contract checklist with phase ownership; Phase 1 calibrates only the full-machinery outside-in claims that can run against the legacy path.
 
 - **Observed-evidence derivation.** The `data` series equals the simple sum of positive Y deltas across snapshot rows by `retrieved_at`, derivable from raw snapshot rows without consulting any runtime output. Each `rate_by_cohort[].x` and `[].y` equal the Cohort's latest observed snapshot `x` and `y` (or the active-mode prefix `x_frozen` and `y_frozen` when the seam invariant requires it). `evidence_y` per Cohort equals the row's observed `y`.
 - **Saturation-tau slicing.** `projected_y` for an immature Cohort is strictly greater than the Cohort's observed `y`, because `projected_y` is read at `fe.saturation_tau` (not at the Cohort's current age). For a Cohort whose age is at or beyond `fe.saturation_tau`, `projected_y ≈ y`. The test references `fe.saturation_tau` directly from the projection bundle, not a hardcoded number.
@@ -207,92 +221,107 @@ Extend the existing outside-in CLI tests with daily-conversions cases. Tests ass
 
 Tests must use synthetic graphs whose semantic answers are derivable independently of the implementation. Where an exact value is not derivable blind, the assertion is a bound, an ordering, a contract-defined relationship, or a single-Cohort cross-reducer equality, never a hard-coded number copied from a current run.
 
-#### Phase 1b — Run outside-in tests against current main and harden (Tier 4)
-
 Run the phase 1a tests against the current daily-conversions path on `main` (the legacy trajectory enrichment in `api_handlers.py`). Three outcomes are possible per assertion:
 
 - **Pass on legacy.** The legacy path satisfies the invariant. The assertion stays as-is and becomes a regression guard for the cutover.
 - **Fail on legacy because the test is over-tight.** The invariant is genuinely weaker than the assertion expressed it. Loosen the assertion to the minimum bound that still pins the contract. Record the original tighter form in a comment on the test as a future strengthening candidate.
 - **Fail on legacy because the legacy path is wrong.** Mark the test as expected-fail with a written reason, and record the legacy gap in this document's "Known legacy gaps" section (added during phase 1b). The cutover in phase 4 is required to clear that expected-fail.
 
-The phase 1b output is a calibrated invariant suite, a documented list of legacy gaps, and a clear definition of what phase 4 must achieve to be considered correct. No production code changes in phase 1.
+The Phase 1 output is a calibrated invariant suite, a documented list of legacy gaps, and a clear definition of what Phase 4 must achieve to be considered correct. No production code changes in Phase 1.
 
-#### Phase 1c — Structural fast-tier suite (Tiers 1–3)
+Structural test ownership is phase-local:
 
-Add the three fast structural tiers alongside the outside-in suite. Each tier is its own test file, sibling to `test_cohort_factorised_outside_in.py`. Sequencing within the broader 73q work is natural: Tier 1 lands first and drives Phase 3; Tier 2 lands alongside Phases 2 and 3; Tier 3 lands alongside Phase 3 and again at Phase 5a.
+- Phase 2 owns projection-bundle integration tests, because the bundle builder does not exist before Phase 2.
+- Phase 3 owns mock-bundle date-reducer algebra tests and cross-consumer tau/date tests, because the date reducer does not exist before Phase 3.
+- Phase 5a owns surprise-gauge cross-consumer tests.
+- Doc56 retirement happens only after the replacement coverage from Phases 2, 3, and 5a exists.
 
-**Tier 1 — projection-bundle algebra unit tests.** These consume mock projection bundles assembled from numpy arrays. A small helper builds a bundle with a chosen number of Cohorts, particles, and tau slots, populating `ef_x_draws_by_cohort[d, s, τ]`, `ef_y_draws_by_cohort[d, s, τ]`, `ef_forecast_y_by_cohort[d, s, τ]`, strict observed fields, per-Cohort completeness, and projection status to whatever shape the test under examination requires; no real conditioning, no real composition, no DB. The tier then exercises the two reducers (and, after Phase 5a, the scalar projector) on those mocked surfaces and asserts the algebra each is contractually required to implement.
-
-The Tier 1 claims are: tau-reducer aggregation rule (the row at τ equals Σ-of-Y over Σ-of-X across selected Cohorts, divided once per particle, then quantiled across particles); date-reducer per-Cohort identity (the row for Cohort d at τ equals the un-summed FC Y/X ratio for that Cohort, quantiled across particles); single-Cohort cross-reducer equality (with one Cohort the two reducers' FC band outputs match to floating-point on the same draws); multi-Cohort explicit-aggregation rule (the tau row equals the bundle's own Σ-of-Y over Σ-of-X built from the per-Cohort FC arrays the date reducer exposes — never a casual weighted-average form); skipped-Cohort emission (a Cohort with zero `a_pop` produces zeros in the per-Cohort arrays and the date reducer emits a row with null projection fields and explicit provenance rather than dropping it); band geometry on per-Cohort FC draws (`forecast_bands[level][hi] ≥ bands[level][lo]`, monotone nesting across levels); layer-rule application (the constants and rule are imported from the shared layer helper and applied to mock completeness values; the three transitions evidence → forecast → mature are verified across COMPLETENESS_EPSILON and MATURITY_THRESHOLD); projection bounds (`projected_y ≥ y`, `forecast_y ≥ 0`, rate ∈ [0, 1] when X > 0); per-band tau selection (latency-band readouts at evidence-side vs forecast-side split at `eval_age ≥ band_tau`).
-
-Tier 1 is cheap enough to run in every CI invocation and fast enough to TDD against during Phase 3 development.
-
-**Tier 2 — projection-bundle integration tests.** These build a real projection bundle from a hand-rolled in-memory graph (no DB) and assert properties of the build itself, not of any reducer. The fixtures are tiny: typically three to four edges, five to ten anchor days, a handful of snapshots constructed in code rather than fetched from the DB. The bundle is built by calling the extracted shared helper that owns the current `compute_cohort_maturity_rows_v3` preparation path, not by calling the public row function and scraping rows.
-
-The Tier 2 claims are: identity-carrier degeneracy (window mode and cohort(A=X) on the same graph produce structurally equivalent composed surfaces — `composed_carrier is None` in both, and the per-Cohort FC arrays the bundle exposes are identical to within the carrier-mode reproducibility tolerance); edge-list reorder invariance (the bundle's runtime is structurally identical under permutation of the input edge list — same composed_carrier, same composed_subject, same conditioned_primitive_map keys, same draws); multi-hop subject preservation (a multi-hop subject span produces a `composed_subject` whose draws are the per-edge convolution, not the terminal-edge CDF — the substrate-level guarantee invariant 5 requires); `fe.saturation_tau` plumbing (the value the bundle exposes matches the value the date reducer reads, and matches the formula `max(max_tau, ceil(2 × t95))` capped at 400); per-Cohort projection horizon alignment (after Phase 2, the per-Cohort arrays cover `fe.saturation_tau`, not just `fe.max_tau`); latency-band tau accessor consistency (the canonical accessor returns the same set both reducers consume — no divergence between the tau-reducer's band tau and the date-reducer's band tau).
-
-Tier 2 catches bundle-build-time defects that Tier 1's mock bundles cannot expose because Tier 1 assumes the bundle is correct.
-
-**Tier 3 — cross-consumer projection tests via shared bundle.** These inject a known projection bundle (mock or fixture-built) into the handler shims and assert that all consumers — the cohort-maturity tau reducer, the new date reducer, and post-5a the surprise_gauge scalar projector — produce coherent reads of the same `(Cohort, particle, τ)` surfaces. The structural claim being tested is invariant 1 (one machinery) plus invariant 9 (projection does not re-decide semantics) at integration level: if every consumer routes through the same bundle, they cannot numerically disagree on the same quantity.
-
-The Tier 3 claims are: single-bundle cross-consumer reading (cohort_maturity_v3's FC row at τ = saturation_tau and daily_conversions's `projected_y` / `forecast_bands` for the single-Cohort case read from the same per-Cohort FC arrays and agree to floating-point — replaces the doc-56 `cf_p_mean_matches_v3_p_infinity` empirical matrix with a surface-specific claim); scalar projector coherence (post-5a, surprise_gauge's `p` and `completeness` z-score inputs read from `runtime.public_moments`, per-Cohort completeness, and `runtime.unconditioned_overlays['predictive']`, not from the legacy trajectory engine); response-shape invariants (`cf_mode`, `cf_reason`, `promoted_source` are populated identically on all consumers when emitted at all).
-
-Tier 3 lands in two waves: first alongside Phase 3 covering tau reducer and date reducer; second alongside Phase 5a covering the surprise_gauge scalar projector. The bayesian-sidecar variants are covered as additional fixtures within these tests rather than as separate test files.
-
-Phase 1c is complete when the three tiers exist as separate test files (sibling to `test_cohort_factorised_outside_in.py`), each runs in its named cost envelope on CI, and the assertions named above are all in place and green against the architecture as it stands at each tier's landing phase.
-
-#### Phase 1d — Retire `test_doc56_phase0_behaviours.py`
+#### Doc56 Reassignment Ledger
 
 The doc-56 file dates from the v1→v2/v3 cut-over period and was framed as "phase-0 cross-consumer cut-over regression guard". The doc-64 authoring receipt in the file already retires the doc-56 framing in favour of Family C (cross-consumer agreement). 73q completes that retirement by absorbing each remaining claim into the new test architecture and deleting the file.
 
 Each of the seven tests in the file is reassigned explicitly so no semantic claim is silently lost:
 
-- **`test_cf_and_v3_chart_carrier_tier_agree`** — claim is about `model_resolver` carrier-tier selection, not about CF runtime semantics. Moved to a new `test_model_resolver_carrier_tier.py` unit test (millisecond cost, no pipeline). 73q ships the moved test in Phase 1d.
-- **`test_cf_p_mean_matches_v3_p_infinity`** — structurally redundant after 73q. The replacement is Tier 3's surface-specific cross-consumer test: scalar/public-moment consumers and row/date reducers read from the shared projection bundle or runtime public moments rather than independently reconstructing p@∞. Deleted with no replacement in the doc-56 file.
-- **`test_query_scoped_identity_carrier_collapses_public_evidence_basis`** — claim is about identity-carrier degeneracy. Replaced by Tier 2's identity-carrier degeneracy test, which asserts the same property at projection-bundle level rather than at chart-row level (cheaper, sharper). Deleted.
-- **`test_whole_graph_cf_is_invariant_under_edge_reorder`** — claim is about runtime/projection determinism under input permutation. Replaced by Tier 2's edge-reorder invariance test, which exercises the projection-bundle builder directly rather than running two full pipelines. Deleted.
-- **`test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split`** — currently xfail-strict pending Phase 5a (per the ledger below). Rewritten in Phase 5a against the runtime-backed surprise_gauge as a Tier 3 cross-consumer test or as a Tier 4 outside-in case. Deleted from the doc-56 file at that point.
-- **`test_chart_and_daily_conversions_do_not_collapse_window_and_cohort`** — the current claim ("both consumers expose a window/cohort split") is a weaker form of what 73q makes available. Replaced by two stronger assertions: Tier 1's single-Cohort cross-reducer equality (cohort_maturity row at τ = saturation_tau equals daily_conversions row for that Cohort to floating-point) and Tier 4's mode invariants (window vs cohort produce demonstrably different per-Cohort projections under the shared projection bundle). Deleted.
-- **`test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split`** — currently xfail-non-strict (stale under WP8 per the existing pytest marker). The structural claim (multi-hop subject preservation, downstream split survival) is covered more directly by Tier 2's multi-hop subject preservation test and Tier 1's mode-invariant assertions. Deleted (no replacement in this file; the bayesian-sidecar code path itself is exercised as a fixture variant within the Tier 3 cross-consumer tests).
+- **`test_cf_and_v3_chart_carrier_tier_agree`** — claim is about `model_resolver` carrier-tier selection, not about CF runtime semantics. Move to a new `test_model_resolver_carrier_tier.py` unit test (millisecond cost, no pipeline).
+- **`test_cf_p_mean_matches_v3_p_infinity`** — structurally redundant after 73q. The replacement is Phase 3's surface-specific cross-consumer test: scalar/public-moment consumers and row/date reducers read from the shared projection bundle or runtime public moments rather than independently reconstructing p@∞. Deleted with no replacement in the doc-56 file.
+- **`test_query_scoped_identity_carrier_collapses_public_evidence_basis`** — claim is about identity-carrier degeneracy. Replaced by Phase 2's identity-carrier projection-bundle test, which asserts the same property at bundle level rather than at chart-row level (cheaper, sharper). Deleted.
+- **`test_whole_graph_cf_is_invariant_under_edge_reorder`** — claim is about runtime/projection determinism under input permutation. Replaced by Phase 2's edge-reorder projection-bundle test, which exercises the bundle builder directly rather than running two full pipelines. Deleted.
+- **`test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split`** — currently xfail-strict pending Phase 5a (per the ledger below). Rewritten in Phase 5a against the runtime-backed surprise_gauge as a Phase 5a cross-consumer test or outside-in case. Deleted from the doc-56 file at that point.
+- **`test_chart_and_daily_conversions_do_not_collapse_window_and_cohort`** — the current claim ("both consumers expose a window/cohort split") is a weaker form of what 73q makes available. Replaced by Phase 3's single-Cohort cross-reducer equality (cohort_maturity row at τ = saturation_tau equals daily_conversions row for that Cohort to floating-point) and Phase 1/4 outside-in mode invariants (window vs cohort produce demonstrably different per-Cohort projections under the shared projection bundle). Deleted.
+- **`test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split`** — currently xfail-non-strict (stale under WP8 per the existing pytest marker). The structural claim (multi-hop subject preservation, downstream split survival) is covered more directly by Phase 2's multi-hop subject preservation test and Phase 3's mode-invariant assertions. Deleted (no replacement in this file; the bayesian-sidecar code path itself is exercised as a fixture variant within the Phase 3 cross-consumer tests).
 
-Phase 1d is complete when the file is deleted, the moved and replaced tests exist in their new homes and run green, and a static search shows no remaining references to the seven test names anywhere in the codebase or in CI manifests. The runtime cost saved is several minutes of CI per invocation.
+Doc56 retirement is **not** Phase 1 acceptance. It closes only after the replacement coverage named above exists in the phases that own it, including Phase 5a for the surprise-gauge test. Until then, this ledger is a dependency map, not a checkbox.
 
 Phase 1 acceptance tests:
 
-- Tier 1 mock-bundle reducer tests exist and fail against a no-op date reducer. They cover `projected_y`, `forecast_y`, `forecast_bands`, `completeness`, `layer`, `latency_bands`, skipped-Cohort rows, and multi-Cohort mass-first aggregation.
-- Tier 2 projection-bundle integration tests exist for identity carrier, active carrier, and multi-hop subject fixtures. They do not use DB and do not call public row output as their oracle.
-- Tier 3 cross-consumer tests exist for single-Cohort tau/date agreement and explicit multi-Cohort `ΣY/ΣX` aggregation.
-- Tier 4 outside-in daily-conversions cases are authored or calibrated, with every legacy failure either passing, explicitly expected-failing with a named legacy gap, or narrowed to the weakest assertion that still expresses the contract.
-- `test_doc56_phase0_behaviours.py` is either deleted per the reassignment table or every remaining test in it has a named blocking phase and replacement home.
+- Outside-in daily-conversions cases are authored or calibrated, with every legacy failure either passing, explicitly expected-failing with a named legacy gap, or narrowed to the weakest assertion that still expresses the contract.
+- The legacy-gap ledger names the exact Phase 4 assertions that must flip when daily conversions moves onto the projection bundle.
+- The doc56 reassignment ledger names the future owner phase for every remaining doc56 claim.
+- No projection-bundle code, date reducer, `api_handlers.py` daily-conversions wiring, or doc56 deletion is required or allowed for Phase 1 closure.
+- **No-branch check:** Phase 1 makes no production code changes, so no new guards, conditionals, fallback branches, or mode/type branches are introduced.
+
+#### Known legacy gaps (Phase 1 calibration output, 27-May-26)
+
+Calibrating the daily-conversions field contract against the current legacy enrichment path surfaced **two legacy gaps** (both `xfail(strict=False)`, confirmed XFAIL 27-May-26) and **one passing regression guard**. The gaps are the exact assertions the Phase 4 cutover must flip from `xfail` to passing. All three live in `test_conditioned_forecast_parity.py::TestPhase4AsatVisibility`.
+
+**Legacy gaps — Phase 4 must flip these:**
+
+- **As-at maturity boundary band** — `test_daily_conversions_boundary_shift`. synth-simple-abc, `window(12-Dec-25:20-Mar-26)` live vs `.asat(15-Jan-26)`. Legacy enrichment produces `mature → forecast` directly and emits no null-completeness boundary band on `asat()` queries (`asat.null_completeness_rows == 0`). The contract (§"Reducer field contract" — Completeness / Layer) requires the band to fall out of the per-Cohort `_runtime_completeness` readout the date reducer inherits from the shared bundle. Phase 4 must make the runtime-backed path produce `asat.forecast_rows > 0`, `asat.null_completeness_rows > 0`, `asat.mature_rows < live.mature_rows`, with `live.forecast_rows == 0` and `live.null_completeness_rows == 0`.
+- **Completeness identity with cohort_maturity** — `test_daily_conversions_completeness_matches_cohort_maturity`. Single immature Cohort (arrivals at simple-b on 10-Jan, observed `.asat(20-Jan-26)`, age 10). Legacy daily_conversions computes completeness via its own `forecast_application.compute_completeness` (analytic lognormal CDF), not the runtime's `_runtime_completeness`; measured dc=0.42067 vs cohort_maturity=0.41820 at tau=10 (Δ≈2.5e-3, above the 1e-4 floor). The contract (§"Reducer field contract" — Completeness) requires the date reducer to read the *same* `_runtime_completeness` object. Phase 4 must make `|dc.completeness − cohort_maturity.completeness| ≤ 1e-4` at the Cohort's eval_age.
+
+**Regression guard — passes on legacy, must stay passing:**
+
+- **Window/cohort non-collapse** — `test_daily_conversions_window_cohort_do_not_collapse`. Edge b→c, `window(1-Mar-26:14-Mar-26)` vs `cohort(simple-a,1-Mar-26:14-Mar-26)` (active, A=a≠X=b). Legacy keeps the modes materially distinct (measured max |Δrate| ≈ 0.36; |Δprojected_y| ≈ 1272). The cutover must not collapse them.
+
+**Not calibratable against legacy on current synths:** skipped-Cohort visibility in active mode (a Cohort with no admissible root-window carrier evidence must still emit a row with null projection + `_projection_provenance.reason == 'no_root_window_evidence'`). The dense synth fixtures do not produce a no-carrier-evidence active Cohort, so this invariant cannot be exercised against the legacy path now; it remains a Phase-4 contract requirement (needs a sparse-evidence fixture), not a Phase-1 runnable gap.
+
+Curation note (27-May-26): outside-in is reserved for full-machinery semantic invariants only — not mechanical sanity checks. The remaining contract properties were deliberately *not* authored as outside-in tests: reducer algebra (projection bounds, band geometry, layer-rule thresholds, saturation-tau slicing) is owned by Phase 3 mock-bundle unit tests; single-Cohort cross-reducer agreement by Phase 3; bundle-build properties (multi-hop subject preservation, latency-band tau accessor) by Phase 2.
 
 ### Phase 2 — Projection Bundle Expansion
 
-The CF runtime and selected-Cohort spine currently produce the right aggregate chart surfaces, but the date reducer needs a shared bundle with per-Cohort views. Phase 2 extracts that bundle and adds the accessors required by the field contract above. Phase 2 is internal to the runtime/projection machinery and has zero observable effect on daily conversions, cohort_maturity, or any other current consumer.
+The CF runtime and selected-Cohort spine currently produce the right aggregate chart surfaces, but the date reducer needs a shared bundle with per-Cohort views. Phase 2 extracts that bundle and adds the accessors required by the field contract above. The bundle extraction itself is behaviour-preserving for daily conversions, cohort_maturity, and every other current consumer. One observable change rides along: the concurrent latent-chart-extent work moved the public cohort-maturity **row horizon** from `fe.max_tau` to `latent_extent` (the data-latent reach, ≥ `fe.max_tau`), per §"Saturation tau and latent extent". That is an intended chart-extent change, validated by the outside-in oracle; it is the only observable effect, and daily-conversions response behaviour is unchanged (still on the legacy enrichment path until Phase 4).
 
 Required accessors and refactors. Each is a plumbing or shape change against an existing principled object; none introduce a new mathematical definition or a magic constant.
 
-- **Shared CF projection bundle.** Extract the preparation/projection sequence currently embedded in `compute_cohort_maturity_rows_v3` into a helper that returns `FrameEvidence`, `ResolvedCFRuntime`, selected A-clock evidence, projection bases, `n_by_anchor`, and `SelectedCohortRowProjection`. The public row function becomes "build bundle → tau reducer"; daily conversions becomes "build bundle → date reducer". Neither reducer rebuilds runtime state.
-- **Per-Cohort projection arrays at saturation horizon.** Refactor `model_span_spine.project_selected_cohort_rows` / `SelectedCohortRowProjection` so its natural intermediate is per-Cohort `(N_cohorts, S, T)` arrays for FC `X`, FC `Y`, FC future residuals, and FC rate, with the across-Cohort `(S, T)` aggregate computed at consume time. Return both views on the projection object. The tau reducer sums per-Cohort into the aggregate it already uses for `ef_*`; the date reducer indexes per-Cohort directly. Per-Cohort `ef_rate_draws_by_cohort` is computed as `ef_y_draws_by_cohort / ef_x_draws_by_cohort` with the projection's existing NaN policy. Build the bundle's projection at `fe.saturation_tau` for date-reducer use; the tau reducer still emits only public rows through `fe.max_tau`.
+Before touching production code in this phase, write the focused projection-bundle tests listed below in failing form against the current public surfaces. If any test cannot be written without inventing unstated bundle semantics, pause and add the missing contract to this section first.
+
+- **Shared CF projection bundle.** Extract the preparation/projection sequence currently embedded in `compute_cohort_maturity_rows_v3` into a helper that returns `FrameEvidence`, `ResolvedCFRuntime`, selected retrieval frontier, `n_by_anchor`, `SelectedCohortRowProjection`, and explicit scalar metadata (`resolved`, `cf_mode`, `cf_reason`, `promoted_source`). The public row function becomes "build bundle → tau reducer"; daily conversions becomes "build bundle → date reducer". Neither reducer rebuilds runtime state or scrapes runtime diagnostics for scalar metadata.
+- **Per-Cohort projection arrays at the latent extent.** Refactor `model_span_spine.project_selected_cohort_rows` / `SelectedCohortRowProjection` so its natural intermediate is per-Cohort `(N_cohorts, S, T)` arrays for FC `X`, FC `Y`, FC future residuals, and FC rate, with the across-Cohort `(S, T)` aggregate computed at consume time. Return both views on the projection object. The tau reducer sums per-Cohort into the aggregate it already uses for `ef_*`; the date reducer indexes per-Cohort directly. Per-Cohort `ef_rate_draws_by_cohort` is computed as `ef_y_draws_by_cohort / ef_x_draws_by_cohort` with the projection's existing NaN policy. Build the bundle's projection at `latent_extent` — the data-latent reach (§"Saturation tau and latent extent") — and report `bundle.max_tau = latent_extent`; both the tau reducer and the date reducer read per-Cohort FC through `bundle.max_tau`.
 - **`fe.saturation_tau` plumbed through the projection bundle.** The bundle returns `fe.saturation_tau` so the date reducer reads it without retraversing internals. No new derivation; this is the existing value.
 - **Per-Cohort completeness from `_runtime_completeness`.** Refactor `_runtime_completeness` to expose the per-Cohort values it already computes internally, prior to the across-Cohort weighted reduce. The existing scalar return becomes one view; the per-Cohort array becomes the other. Same underlying CDF object, same horizon, same definition. The cohort_maturity scalar caller is unchanged.
 - **Latency-band tau accessor.** The legacy daily-conversions enrichment computes the band tau set inline in `api_handlers.py` from the resolved latency: `inverse_cdf(0.25/0.50/0.75, mu, sigma) + onset_delta_days`, with `max(1, round(raw))` to discretise and a deduplication step on the resulting integer set. Lift that exact derivation into a projection-bundle accessor so both reducers and any future consumer share one definition. No new derivation. When a band tau exceeds `fe.saturation_tau` the accessor still returns it; the date reducer emits `null` for that band per the field contract.
-- **Layer helper extraction.** Move `MATURITY_THRESHOLD`, `COMPLETENESS_EPSILON`, and the completeness → layer rule out of the legacy `forecast_application.annotate_data_point` surface into a non-legacy helper. Existing callers can be retargeted or left as compatibility wrappers until Phase 7 deletes the old helpers.
-- **Resolved-source provenance.** Confirm `runtime.runtime_provenance.p_conditioning_evidence.source` is populated at runtime construction time and accessible without traversing diagnostic blobs. The `promoted_source` field on the daily-conversions response reads from this. No alternative source.
+- **Layer helper extraction.** Move the `0.95` maturity threshold, `COMPLETENESS_EPSILON`, and the completeness → layer rule out of the legacy `forecast_application.annotate_data_point` surface into a non-legacy helper. Existing callers can be retargeted or left as compatibility wrappers until Phase 7 deletes the old helpers.
+- **Scalar metadata.** Add explicit projection-bundle metadata for `cf_mode`, `cf_reason`, and `promoted_source`, sourced from the resolved model object used to build the runtime. Reducers read these fields directly; they do not inspect `runtime_provenance` internals.
 
 Phase 2 is complete when:
 
 - Existing cohort-maturity outside-in tests pass unchanged through the extracted projection-bundle helper.
 - A focused bundle test proves public aggregate `ef_x_draws`, `ef_y_draws`, `ef_rate_draws`, `ef_forecast_x`, and `ef_forecast_y` are exactly the sum or mass-first reduction of the new per-Cohort arrays.
-- A focused horizon test proves the bundle's per-Cohort FC arrays cover `fe.saturation_tau` when `fe.saturation_tau > fe.max_tau`, while public cohort-maturity rows still emit only through `fe.max_tau`.
+- A focused horizon test proves the bundle's per-Cohort FC arrays and the public cohort-maturity rows both extend to `bundle.max_tau = latent_extent`, which floors at `fe.max_tau` and stays strictly below the `fe.saturation_tau` ceiling on a long-lag fixture (`test_per_cohort_arrays_cover_latent_extent_below_ceiling`, `test_public_rows_stop_at_latent_extent_not_ceiling`).
 - A focused completeness test proves the exported per-Cohort completeness values reduce to the existing scalar `_runtime_completeness` result with the same weights.
 - A focused latency-band accessor test proves both reducers see the same dynamically-labelled band taus and that a band beyond `fe.saturation_tau` remains representable as unavailable rather than clamped.
 - A focused skipped-Cohort test proves active Cohorts with no root-window carrier evidence remain present in bundle metadata with a reason, even if they contribute zero to aggregate FC arrays.
 - A layer-helper test proves the extracted helper exactly matches the legacy `annotate_data_point` thresholds.
+- A focused scalar-metadata test proves the bundle exposes `cf_mode`, `cf_reason`, and `promoted_source` without requiring reducers to inspect `runtime_provenance` internals.
+- **No-branch check:** the bundle builder and `project_selected_cohort_rows` introduce no new guards, conditionals, fallback branches, or mode/hop/latency-specific runtime routes unless explicitly approved. Per-Cohort arrays, skipped-Cohort status, identity carrier, active carrier, single-hop, and multi-hop all flow through the same projection-bundle construction.
 - A static check or focused unit test proves no daily-conversions `api_handlers.py` wiring has changed in Phase 2.
+
+**Phase 2 close-out (reconciled and closed 27-May-26).**
+
+- **Acceptance.** All eight focused criteria above pass; the cohort-maturity outside-in oracle is green (54 passed / 1 xfailed); daily-conversions `api_handlers` wiring is unchanged (still legacy `compute_forecast_trajectory`).
+- **No-branch check — approved retained conditionals.** The bundle builder retains three conditionals, none of which are window/cohort/hop/latency runtime routes; each is approved here:
+  1. The perimeter `is_window` → `population_root` / `temporal_mode` translation at the bundle entry — the *single* location where the temporal distinction is read; below it the substrate is topology-keyed (`population_root == x`). Approved as the perimeter translation point.
+  2. `resolved = resolved_override if resolved_override is not None else resolve_model_params(...)` — input-defaulting: the perimeter (`api_handlers`) passes a pre-resolved model and the `else` computes it when absent. Approved as lazy-init of a real perimeter input.
+  3. `unconditioned_overlay_bases = (..., 'epistemic') if show_model_curve else (...)` — an FE feature flag that builds the extra epistemic overlay only when the model curve is requested. Approved as product logic.
+  All earlier defensive guards (`np.clip` on eval_age, `cdf is None`, the `_latent_chart_extent` validity guards) were removed; the zero-population completeness case is handled algebraically (uniform-weighting degeneration: `weights + float(Σw == 0)`), not by a guard.
+- **Horizon-model reconciliation.** §"Saturation tau and latent extent" was revised this date to match the landed code: `fe.saturation_tau` is the flat-400 composition ceiling, `latent_extent` is the data-latent reach, and the public row horizon is `bundle.max_tau = latent_extent`. The "evaluated at saturation" field-contract language is satisfied at `latent_extent` because the predictive CDF has plateaued by its t95.
+- **Deferred atom — cross-scenario tau extent.** `latent_extent` is computed per CF flow; a multi-scenario overlay needs the `max()` reach across scenarios for a common axis, which is not computed today (flows run one-by-one, so no point sees the whole scenario set). Three resolutions, none in Phase 2 scope: (a) conservative — a low fixed tau-max; (b) aggressive — a high tau-max, paying the per-Cohort projection width; (c) split the spine after the latency map but before the projection passes, compute compose+reach for all scenarios, take the `max()`, then project each at the common horizon — correct and cheap to project, but it persists every scenario's latency map in memory and makes the multi-scenario driver two-pass. Tracked for a future phase/doc.
 
 ### Phase 3 — Date reducer
 
 Add a sibling of the existing tau-axis row builder, in the same module, implementing the field contract above. The date reducer takes the shared projection bundle from Phase 2 and reads from it mechanically: observed row shape from `derive_daily_conversions`, per-Cohort FC projection surfaces from `SelectedCohortRowProjection`, per-Cohort completeness from the completeness view, `fe.saturation_tau`, and the latency-band tau set.
+
+Before implementing the reducer, write mock-bundle date-reducer tests in failing form. The mock bundle should contain only the fields named by the contract. If a test needs information not named in the contract, add that field to the Phase 2 bundle contract before continuing.
 
 For each Cohort the reducer emits one `rate_by_cohort` row whose fields are populated from the contract. The contract names which bundle accessor and which tau index each field reads — the reducer is mechanical relative to that contract. In particular: `projected_y`, `forecast_y`, and `forecast_bands` slice per-Cohort FC surfaces at `fe.saturation_tau`; `completeness` reads the per-Cohort variant of the existing `_runtime_completeness` object at `eval_age`; `layer` uses the extracted shared layer helper; `latency_bands` per band tau use the evidence-vs-forecast split based on `eval_age[i] ≥ band_tau`. Cohort_maturity rows do not carry `layer` or per-Cohort `completeness` fields today; this work does not change that.
 
@@ -306,6 +335,7 @@ Phase 3 is complete when:
 - Date-reducer unit tests over mock bundles pass for every field in the field contract: observed fields, `projected_y`, `forecast_y`, `forecast_bands`, `completeness`, `layer`, `latency_bands`, `cf_mode`, `cf_reason`, and `promoted_source`.
 - Date-reducer tests cover at least: identity/window immature Cohort, active Cohort, multi-hop subject, skipped active Cohort, band tau above saturation, and all-NaN FC rate draws.
 - Cross-reducer tests prove single-Cohort date/tau agreement at `fe.saturation_tau` and multi-Cohort mass-first aggregation from the same per-Cohort arrays.
+- **No-branch check:** the date reducer introduces no new guards, conditionals, or fallback branches unless explicitly approved. It must not rebuild carrier, subject, completeness, latency-band taus, or FC residuals by mode/hop/latency case. Any unavoidable conditional for field availability, projection status, or the public evidence-vs-forecast latency-band display decision must be named in the phase note with the approval that allowed it.
 - A static check proves `api_handlers.py` still uses the legacy daily-conversions enrichment in Phase 3; the date reducer is not production-wired yet.
 
 ### Phase 4 — Wire into daily conversions and retire the legacy path
@@ -321,13 +351,20 @@ Replace the daily-conversions enrichment block in `api_handlers.py` with a singl
 
 Rewrite, do not preserve, any test whose only purpose is to bless `compute_forecast_trajectory` as the daily-conversions enrichment mechanism. Keep the semantic assertions; point them at the runtime-backed projection.
 
+Before wiring production, run the Phase 1 legacy-gap tests against the not-yet-wired reducer path through a direct helper or handler shim. The expected result is that the Phase 1 legacy-gap xfails now pass against the new path before `api_handlers.py` switches over.
+
+Known legacy-path tests that must be rewritten or retired in this phase:
+
+- `test_cf_query_scoped_degradation.py::test_daily_conversions_uses_shared_sweep_surface` currently asserts the legacy trajectory enrichment path despite its name. Keep any valid public response assertions, but point them at the projection-bundle/date-reducer path.
+- Any daily-conversions test that imports, monkeypatches, or indirectly blesses `compute_forecast_trajectory`, one-point `CohortEvidence`, `_maturity_tau = max(t95, 30)`, post-hoc `forecast_y = projected_y - y`, or the `annotate_rows` fallback is a Phase 4 rewrite/delete target.
+
 Keep:
 
 - `derive_daily_conversions` and its observed-delta tests, because the calendar-date `data` series remains observed-only and continues to come from snapshot rows.
 - FE normalisation of `rate_by_cohort` fields in `graphComputeClient.ts`.
 - `compute_forecast_trajectory` itself, because `surprise_gauge` remains outside this plan.
 - `annotate_rows` generally, because other legacy paths still use it; only the daily-conversions fallback is retired here.
-- `cohort_y_at_age`, because the latency-band evidence side reads it. (The bundle already carries per-Cohort observed `y_at_age` in `engine_cohorts[i].obs_y[tau]`; the FE field `cohort_y_at_age` is preserved as the response-shape contract, populated by the date reducer where applicable.)
+- `cohort_y_at_age`, because the latency-band evidence side reads it. This response field remains produced by `derive_daily_conversions`; the date reducer may read it but must not take ownership of producing it.
 
 Phase 4 is complete when:
 
@@ -338,6 +375,7 @@ Phase 4 is complete when:
 - daily-conversions outside-in tests prove the public response still contains `data`, `rate_by_cohort`, `cohort_y_at_age`, `total_conversions`, `date_range`, `cf_mode`, `cf_reason`, and `promoted_source` where applicable.
 - `test_conditioned_forecast_parity.py::TestPhase4AsatVisibility::test_daily_conversions_boundary_shift` has its xfail removed or its contract deliberately updated in this plan.
 - Focused response-normalisation tests prove `graphComputeClient.ts` still preserves `forecast_y`, `projected_y`, `forecast_bands`, and `latency_bands` from `rate_by_cohort`.
+- **No-branch check:** the `api_handlers.py` cutover calls the shared projection-bundle builder plus date reducer once for the request shape. It introduces no new guards, conditionals, or fallback branches unless explicitly approved. It must not retain a legacy fallback branch, a mode-specific forecast path, a per-band trajectory call, or a local reconstruction of FC residual/completeness semantics.
 
 ### Phase 5 — Remaining Consumer Decisions And Legacy-Engine Migration
 
@@ -351,23 +389,26 @@ The work splits into actual migrations (where a legacy call still exists), hold-
 
 The state today, audited by static reads of the relevant modules:
 
-- `surprise_gauge` ([api_handlers.py:130+](graph-editor/lib/api_handlers.py#L130)) calls `compute_forecast_trajectory` directly. After phase 4 it is the **only** remaining public-path consumer of the legacy trajectory engine. Its own docstring records this and names migration as the precondition for deleting the engine.
-- `conversion_funnel` ([runners.py:1519](graph-editor/lib/runner/runners.py#L1519)) consumes a scoped `_whole_graph_cf` response and then runs `funnel_engine`. It is not a legacy trajectory-engine caller, but `funnel_engine` remains a hold-out `ΣY / ΣX` reducer and has its own F/E/E+F display contract.
-- `bridge_view` ([runners.py:365](graph-editor/lib/runner/runners.py#L365)) does not call backend CF directly. Its Reach-decomposition arithmetic reads probabilities from the FE-supplied scenario graph. The old e2e xfail is not really a "shared runtime" issue; it is a display-surface issue because `p.mean` is now canonical/blended and invariant across visibility modes.
+- `surprise_gauge` (`api_handlers.py`) calls `compute_forecast_trajectory` directly. After phase 4 it is the **only** remaining public-path consumer of the legacy trajectory engine. Its own docstring records this and names migration as the precondition for deleting the engine.
+- `conversion_funnel` (`runners.py`) consumes a scoped `_whole_graph_cf` response and then runs `funnel_engine`. It is not a legacy trajectory-engine caller, but `funnel_engine` remains a hold-out `ΣY / ΣX` reducer and has its own F/E/E+F display contract.
+- `bridge_view` (`runners.py`) does not call backend CF directly. Its Reach-decomposition arithmetic reads probabilities from the FE-supplied scenario graph. The old e2e xfail is not really a "shared runtime" issue; it is a display-surface issue because `p.mean` is now canonical/blended and invariant across visibility modes.
 - `conversion_rate` ([conversion_rate_derivation.py](graph-editor/lib/runner/conversion_rate_derivation.py)) is observed-only with epistemic bands resolved from `epistemic_bands.resolve_rate_bands`. It does not call backend CF and does not handle latency edges (gated out per doc 49 §B.2). A CF extension would be a new bin reducer over the same per-Cohort FC arrays, not a side effect of daily conversions.
 
 Phase 5 therefore comprises:
 
 #### Phase 5a — `surprise_gauge` migration off the legacy trajectory engine
 
-Replace the `compute_forecast_trajectory` call in `surprise_gauge` with reads from `ResolvedCFRuntime`. The two scalar variables the gauge computes (`p` and `completeness`, both projected as z-scores from unconditioned vs conditioned means) are sourced from runtime-owned objects:
+Replace the `compute_forecast_trajectory` call in `surprise_gauge` with reads from the same runtime/projection-bundle machinery used by the other forecast-backed reducers. The two scalar variables the gauge computes (`p` and `completeness`, both projected as z-scores from unconditioned vs conditioned means) must have an explicit field mapping before implementation:
 
 - The **conditioned** posterior moments come from `runtime.public_moments` and the per-Cohort completeness exposed for daily-conversions in phase 2.
-- The **unconditioned** moments come from the unconditioned `predictive` overlay already exposed at `runtime.unconditioned_overlays['predictive']` (see `ResolvedCFRuntime.unconditioned_overlays` in [cohort_forecast_v3.py:907](graph-editor/lib/runner/cohort_forecast_v3.py#L907)). This is the runtime-owned prior-only overlay object, not F mode and not the optional `model_curve_*` display overlay. Reusing it for surprise_gauge does not introduce a new unconditioned object.
+- The **unconditioned** moments come from the unconditioned `predictive` overlay already exposed at `runtime.unconditioned_overlays['predictive']`. This is the runtime-owned prior-only overlay object, not F mode and not the optional `model_curve_*` display overlay. Reusing it for surprise_gauge does not introduce a new unconditioned object.
+- The replacement contract must name where the gauge reads: observed conversion rate, conditioned p mean/sd, unconditioned p mean/sd, conditioned completeness mean/sd, and unconditioned completeness mean/sd. If one of these values is not available from current runtime/projection surfaces, Phase 5a must extend the bundle contract before changing `_compute_surprise_gauge`.
 
 The gauge is a scalar projection, not a row reducer, so this migration adds no new date/bin reducer. It removes the last public-path consumer of `compute_forecast_trajectory`. Note: `cohort_forecast_v3.py` still imports `CohortEvidence` from `forecast_state` as a data-container dataclass; phase 5a does not delete `forecast_state` or its symbols. Deletion happens in phase 7 after the v1/v2 cohort-maturity paths have been retired in phase 6 and the residual consumers identified.
 
 The variable definitions for `surprise_gauge` (`p`, `completeness`, the z-score formula, the zone classification thresholds in `classify_zone`) are the existing definitions in `api_handlers.py` and are not redefined by this work. Phase 5a is a substitution of the data source, not a redesign of the gauge.
+
+Before changing `_compute_surprise_gauge`, write the replacement surprise-gauge tests against a mock or fixture-built projection bundle. If the expected `p` or `completeness` z-score source cannot be named without looking at the legacy trajectory return shape, the surprise-gauge reducer contract is underspecified and must be clarified here first.
 
 Phase 5a tests assert that the gauge's two variables, the cf_mode/cf_reason emission, and the unavailable-with-reason error path are unchanged in shape and behaviour against the same synthetic graphs the daily-conversions phase 1 suite uses. The numerical z-score values may shift relative to the legacy trajectory output by the same magnitude phase 4 shifts daily-conversions projection values; the assertions are about contract preservation, not parity.
 
@@ -414,14 +455,15 @@ Phase 5 is complete when:
 - `bridge_view` decision is recorded in this plan; if direct-CF was chosen, the migration is shipped with tests;
 - `conversion_rate` decision is recorded in this plan; if in-scope was chosen, the bin reducer is shipped with phase-1-style blind tests; otherwise the deferral note is recorded with a pointer to doc 49 Phase 3 as the next home.
 - the Phase 5 xfail/fixme ledger entries for `surprise_gauge`, `conversion_funnel`, `bridge_view`, and `conversion_rate` are all either passing, rewritten with replacement coverage, or explicitly moved to a documented non-73q follow-up.
+- **No-branch check:** any Phase 5 implementation consumes existing runtime/projection-bundle surfaces or public CF scalar responses. It introduces no new guards, conditionals, or fallback branches unless explicitly approved. It must not add a new private forecast spine for `surprise_gauge`, `conversion_funnel`, `bridge_view`, or `conversion_rate`.
 
 ### Temporary xfail ledger for pre-73q / companion consumers
 
 The following existing tests are marked `xfail` / `fixme` while 73q or its companion consumer decisions are incomplete. This is intentional skip debt, not closure: each marker must be re-run and either rewritten against the shared projection-bundle contract, converted to a passing test, or retired with replacement coverage named.
 
-- `test_doc56_phase0_behaviours.py::test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split` — currently xfail-strict pending Phase 5a; absorbed into the Phase 1d retirement of `test_doc56_phase0_behaviours.py`. Rewritten in Phase 5a against the runtime-backed `surprise_gauge` as a Tier 3 cross-consumer test or as a Tier 4 outside-in case; the doc-56 file is then deleted with its remaining six tests reassigned per the Phase 1d coverage table.
+- `test_doc56_phase0_behaviours.py::test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split` — currently xfail-strict pending Phase 5a; absorbed into the doc56 reassignment ledger above. Rewritten in Phase 5a against the runtime-backed `surprise_gauge` as a cross-consumer test or outside-in case; the doc-56 file is then deleted with its remaining six tests reassigned per the ledger.
 - `test_funnel_contract.py::TestF4FModeMatchesPathProductOfPromotedMeans::test_f_median_matches_path_product_of_evidence_means` — revisit during Phase 5b. It must either be rewritten against the post-FC `conversion_funnel` outside-in contract or retired in favour of the Phase 5b tests. Its old "73q graph projections" reason is stale; this is a funnel display/reducer contract question.
-- `test_selected_cohort_pop_d_distribution.py::test_per_source_day_forward_fill_preserves_monotonicity_under_sparse` and `test_selected_cohort_pop_d_distribution.py::test_m_select_construction_for_multi_hop_downstream_node` — revisit during Phases 2-3. They must be rewritten if their low-level M-select/Y-prefix assertions still express the shared projection-bundle contract after per-Cohort FC arrays and accessors are introduced; otherwise retire them with the replacement coverage named.
+- Historical references to `test_selected_cohort_pop_d_distribution.py::{test_per_source_day_forward_fill_preserves_monotonicity_under_sparse, test_m_select_construction_for_multi_hop_downstream_node}` — the file is not live in the current tree. Do not carry these as active xfails. Phase 2/3 replacement coverage is the projection-bundle and date-reducer test set above; any archived reference can be closed once that coverage exists.
 - `graph-editor/e2e/shareLiveChart.spec.ts::live share (conserve-mass fixture) produces distinct scenario graphs + non-empty inbound-n (regression)` — revisit during Phase 5c (`bridge_view` decision). The assertion checks that the two scenarios on the analyze request differ on `edge.p.mean` for `switch-registered-to-switch-success` when visibility_mode is `'e'` vs `'f'`. That divergence relied on the pre-73q semantic where `p.mean` was overwritten from `p.evidence.mean` or `p.forecast.mean` according to visibility_mode. Under current semantics `p.mean` is canonical/blended and invariant across visibility modes; visibility-mode divergence now lives in display-layer projections. If bridge remains graph-state-driven, rewrite the test to assert the chosen display-level discriminator. If bridge becomes display-surface-driven, rewrite it against the new bridge output.
 
 73q core is not complete until the daily-conversions and projection-bundle markers above have been cleared. Phase 5 is not complete until the companion funnel/bridge/surprise/conversion-rate markers have likewise been converted, rewritten, or removed with explicit replacement coverage named.
@@ -432,11 +474,11 @@ The legacy chart paths `cohort_maturity_v1` and `cohort_maturity_v2` are indepen
 
 Removal scope, audited by static reads:
 
-- **Backend handlers and dispatch.** Delete `_handle_cohort_maturity_v2` and the `cohort_maturity_v2` branch at [api_handlers.py:652-653](graph-editor/lib/api_handlers.py#L652-L653). Delete the `cohort_maturity_v1` branch at [api_handlers.py:654-655](graph-editor/lib/api_handlers.py#L654-L655) and remove the `cohort_maturity_v1` membership from `_is_cohort_maturity` at [api_handlers.py:2551](graph-editor/lib/api_handlers.py#L2551). The `_handle_snapshot_analyze_subjects` function survives because non-v1 analyses still route through it; only the v1-specific logic inside it is removed.
-- **Subject-resolution mappings.** Delete the `cohort_maturity_v1` and `cohort_maturity_v2` entries in `analysis_subject_resolution.py` (scope-rule and read-mode tables at lines 73-74 and 88-89).
-- **Frontend registries.** Delete the `cohort_maturity_v1` and `cohort_maturity_v2` entries from [analysisTypes.ts](graph-editor/src/components/panels/analysisTypes.ts), [analysisTypeResolutionService.ts](graph-editor/src/services/analysisTypeResolutionService.ts), and the alias mappings at [AnalysisChartContainer.tsx:254-255](graph-editor/src/components/charts/AnalysisChartContainer.tsx#L254-L255). Update [snapshotBootTrace.ts:104](graph-editor/src/lib/snapshotBootTrace.ts#L104) to drop the v1/v2 disjuncts.
-- **Span-evidence emit labels.** [span_evidence.py:45,61,188,210](graph-editor/lib/runner/span_evidence.py) emits `analysis_type: 'cohort_maturity_v2'` in its diagnostic output. Either retarget those to `'cohort_maturity'` or remove the field if it's unused; choose by inspecting the consumer.
-- **Tests.** Delete tests that exclusively cover v1 or v2 surfaces (e.g. `analysisRequestContract.test.ts:150-151,169` lines pinning the v2 contract). Tests that cover behaviour shared with v3 are retargeted to v3 if not already present elsewhere.
+- **Backend handlers and dispatch.** Delete `_handle_cohort_maturity_v2`, the `cohort_maturity_v2` dispatch branch, the `cohort_maturity_v1` dispatch branch, and any helper membership that treats `cohort_maturity_v1` as a live cohort-maturity family member. The `_handle_snapshot_analyze_subjects` function survives because non-v1 analyses still route through it; only the v1-specific logic inside it is removed.
+- **Subject-resolution mappings.** Delete the `cohort_maturity_v1` and `cohort_maturity_v2` entries in `analysis_subject_resolution.py`.
+- **Frontend registries.** Delete the `cohort_maturity_v1` and `cohort_maturity_v2` entries from `analysisTypes.ts`, `analysisTypeResolutionService.ts`, chart-container alias mappings, and snapshot boot tracing.
+- **Span-evidence emit labels.** `span_evidence.py` emits `analysis_type: 'cohort_maturity_v2'` in diagnostic output. Either retarget those to `'cohort_maturity'` or remove the field if it is unused; choose by inspecting the consumer.
+- **Tests.** Delete tests that exclusively cover v1 or v2 surfaces. Tests that cover behaviour shared with the canonical `cohort_maturity` path are retargeted there if not already present elsewhere.
 
 Phase 6 is purely a deletion plus a retargeting of three diagnostic labels. The chart family observable from the FE collapses from `cohort_maturity` / `cohort_maturity_v1` / `cohort_maturity_v2` to a single `cohort_maturity`. No migration of behaviour: v1 and v2 charts have been superseded by v3 since 73n; this just removes the dead routes.
 
@@ -446,6 +488,7 @@ Phase 6 acceptance:
 - The v3 cohort_maturity outside-in tests still pass unchanged.
 - The phase 1 daily-conversions invariant suite still passes (it does not depend on v1/v2 paths).
 - No new dead-code references appear: imports that became unused are also removed.
+- **No-branch check:** v1/v2 retirement introduces aliases or compatibility normalisation only at the perimeter, and only if that compatibility is explicitly retained. It introduces no new guards, conditionals, or fallback branches unless explicitly approved. It must not preserve separate v1/v2 runtime or reducer branches behind the canonical `cohort_maturity` name.
 
 ### Phase 7 — Cleanup sweep
 
@@ -455,8 +498,8 @@ Phase 7 is the cleanup atom that becomes possible once phases 4, 5, and 6 are la
 
 - **`runner/forecast_state.py` symbols.**
   - `compute_forecast_trajectory` and its supporting helpers (`build_node_arrival_cache`, `_resolve_edge_p`, `_compute_completeness_at_age` if no internal residual remains): no public callers after phases 4 and 5a; no v1/v2 callers after phase 6.
-  - `_warn_legacy_pmean_carrier`: still imported at [path_runner.py:113](graph-editor/lib/runner/path_runner.py#L113) and [graph_builder.py:209](graph-editor/lib/runner/graph_builder.py#L209). Phase 7 inspects each call site: if the warning fires for a code path that no longer exists, delete the warning and its call sites; if the warning still applies to live code, keep it and rehome to a non-legacy module.
-  - `CohortEvidence`: still imported by `cohort_forecast_v3.py:4267` as a data container. Phase 7 either rehomes the dataclass to a non-legacy module (e.g. into `cohort_forecast_v3.py` directly or into a new `runner/cohort_evidence.py`) or shrinks `forecast_state.py` down to just this dataclass.
+  - `_warn_legacy_pmean_carrier`: still imported outside `forecast_state.py`. Phase 7 inspects each call site: if the warning fires for a code path that no longer exists, delete the warning and its call sites; if the warning still applies to live code, keep it and rehome to a non-legacy module.
+  - `CohortEvidence`: still imported by `cohort_forecast_v3.py` as a data container. Phase 7 either rehomes the dataclass to a non-legacy module (e.g. into `cohort_forecast_v3.py` directly or into a new `runner/cohort_evidence.py`) or shrinks `forecast_state.py` down to just this dataclass.
   - The remaining `forecast_state.py` is deleted only when every symbol is either deleted or rehomed and the file is empty.
 
 - **`runner/cohort_forecast.py` (v1, 1526 LOC).** Used only by `cohort_forecast_v2.py` and the v1 dispatch path; both gone after phase 6. Deleted whole.
@@ -464,8 +507,8 @@ Phase 7 is the cleanup atom that becomes possible once phases 4, 5, and 6 are la
 - **`runner/cohort_forecast_v2.py` (1210 LOC).** Used only by `_handle_cohort_maturity_v2`; gone after phase 6. Deleted whole.
 
 - **`runner/forecast_application.py` symbols.**
-  - `annotate_rows` and `annotate_data_point`: callers at [api_handlers.py:1210, 2547, 3312](graph-editor/lib/api_handlers.py) sit in v1/v2 chart paths that go away in phase 6. After phase 6 there are no callers; both functions are deleted.
-  - `compute_completeness`: still used by [_append_synthetic_future_frames@api_handlers.py:2400](graph-editor/lib/api_handlers.py#L2400), which is called by both the v1 path (gone) and the v3 path (alive). The v3 path's residual model-derived completeness call is a legitimate item but **not** in 73q's scope: it is named here as a follow-up atom (migrate `_append_synthetic_future_frames` to read runtime-owned completeness instead of model-CDF). `compute_completeness` and `_append_synthetic_future_frames` survive phase 7.
+  - `annotate_rows` and `annotate_data_point`: callers in `api_handlers.py` sit in v1/v2 chart paths or daily-conversions legacy fallback paths that go away earlier in this plan. After those removals, both functions are deleted or reduced to compatibility wrappers with no production callers.
+  - `compute_completeness`: still used by synthetic-future-frame helpers in `api_handlers.py`. The v3 path's residual model-derived completeness call is a legitimate item but **not** in 73q's scope: it is named here as a follow-up atom (migrate synthetic future frames to read runtime-owned completeness instead of model-CDF). `compute_completeness` and the synthetic-frame helper survive phase 7 unless that follow-up lands first.
 
 - **API handler residuals.**
   - The daily-conversions enrichment block (already deleted in phase 4): confirm static absence.
@@ -500,6 +543,7 @@ Each deleted test is checked for any unique semantic assertion not covered elsew
 - No tests reference deleted symbols.
 - TODO.md no longer carries `73n follow-up` items related to this work.
 - Anti-regression invariants are recorded in `INVARIANTS.md` so future work cannot reintroduce the deleted symbols by accident.
+- **No-branch check:** cleanup removes legacy branches rather than hiding them behind wrappers. Any surviving guard, conditional, fallback branch, or compatibility wrapper requires explicit approval, a named non-production caller, and a dated deletion plan.
 
 ## Invariants
 
@@ -534,9 +578,9 @@ The plan as a whole must preserve these controls:
 
 The atom is complete when:
 
-- the phase 1 invariant suite (Tier 4 outside-in) is calibrated and committed;
-- the three fast structural tiers (Tier 1 projection-bundle algebra unit tests; Tier 2 projection-bundle integration tests; Tier 3 cross-consumer projection tests via shared bundle) are in place as separate test files, each running in its named cost envelope on CI, with the assertions listed in Phase 1c all green at each tier's landing phase;
-- `test_doc56_phase0_behaviours.py` is deleted, with each of its seven tests reassigned to its new home per the Phase 1d coverage table or deleted with explicit rationale; a static search shows no remaining references to the seven test names;
+- the Phase 1 outside-in invariant suite is calibrated and committed;
+- the phase-owned structural tests are in place: Phase 2 projection-bundle integration tests, Phase 3 date-reducer and cross-consumer tests, and Phase 5a surprise-gauge replacement coverage;
+- `test_doc56_phase0_behaviours.py` is deleted, with each of its seven tests reassigned to its new home per the doc56 reassignment ledger or deleted with explicit rationale; a static search shows no remaining references to the seven test names;
 - the projection bundle exposes per-Cohort FC draws, FC future residuals, per-Cohort completeness, and a latency-band tau accessor;
 - the date reducer exists alongside the tau reducer over a single shared projection-bundle builder;
 - daily conversions in `api_handlers.py` derives forecast enrichment from the projection bundle plus date reducer, not from the trajectory engine;

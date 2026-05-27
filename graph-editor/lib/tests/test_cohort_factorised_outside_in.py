@@ -551,6 +551,11 @@ def _high_support_taus(rows_by_tau: dict[int, dict[str, Any]]) -> set[int]:
 @functools.lru_cache(maxsize=None)
 def _load_truth(graph_name: str) -> dict[str, Any]:
     truth_path = _TRUTH_DIR / f"{graph_name}.truth.yaml"
+    if not truth_path.exists():
+        # Non-recovery synth fixtures (drift / F-mode chart fixtures) live in
+        # bayes/truth/chart/ so the bayes recovery sweep — which scans only the
+        # top level of bayes/truth/ — does not treat them as recovery targets.
+        truth_path = _TRUTH_DIR / "chart" / f"{graph_name}.truth.yaml"
     assert truth_path.exists(), f"missing truth file: {truth_path}"
     return yaml.safe_load(truth_path.read_text()) or {}
 
@@ -1573,8 +1578,17 @@ _WRP_BC_EDGE = "wrp-b-to-c"
 #
 # The full-window form (12-Dec-25:21-Mar-26) collapses the test to
 # vacuity: local == global, F == E+F everywhere by construction.
+# Window widened (start 20-Feb, end held at 21-Mar) so the late-drift slice
+# is mostly matured: the sim ends day 99 = 21-Mar, so an all-fresh 12-21-Mar
+# window observes only ~23% of its cohorts' conversions and the conditioned
+# local p∞ shrinks toward the global aggregate (anti-vacuity gap collapses).
+# Starting at 20-Feb adds matured cohorts → confident local p∞ (~0.65) → gap
+# ~0.13. The 21-Mar youngest cohort stays fresh so tau_solid_max=1 and the
+# frontier-agreement pole (equals_ef) holds. (The narrower window only passed
+# before the synth_gen overdispersion fix, which used to inflate the local
+# conversions.)
 _FMODE_DRIFT_DSL = (
-    f"{_FMODE_DRIFT_AB}.window(12-Mar-26:21-Mar-26).asat(30-Apr-26)"
+    f"{_FMODE_DRIFT_AB}.window(20-Feb-26:21-Mar-26).asat(30-Apr-26)"
 )
 
 

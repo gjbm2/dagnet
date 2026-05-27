@@ -1494,6 +1494,14 @@ def main():
                 continue
 
             truth_p = truth_edge.get("p", 0)
+            # Drift fixtures have no single static p: p ramps linearly-in-p from
+            # the edge's base `p` to `drift_p_to` across the observable window.
+            # Recovery is run with uniform recency weighting (see param_recovery.py),
+            # so the fit recovers the arrival-weighted mean of that ramp — the
+            # window midpoint (base + drift_p_to) / 2. Target that, not the base.
+            _drift_to = truth.get("simulation", {}).get("drift_p_to")
+            if _drift_to is not None and truth_edge.get("p") is not None:
+                truth_p = (float(truth_edge["p"]) + float(_drift_to)) / 2.0
             truth_mu = truth_edge.get("mu", 0)
             truth_sigma = truth_edge.get("sigma", 0)
             truth_onset = truth_edge.get("onset", 0)

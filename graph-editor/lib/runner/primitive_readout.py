@@ -394,7 +394,6 @@ def compute_resolved_runtime_readout(
     prior_source: Optional[str] = None,
     unconditioned_overlay_bases: Sequence[str] = ('predictive',),
     prebuilt_carrier_arrival_map: Optional[PrefixArrivalMap] = None,
-    is_window: bool = False,
 ) -> ResolvedRuntimeReadoutResult:
     """Assemble the primitive-backed CF runtime for one request."""
     from . import model_span_spine
@@ -427,7 +426,6 @@ def compute_resolved_runtime_readout(
         prior_source=prior_source,
         request_evidence_candidates=request_evidence_candidates,
         unconditioned_overlay_bases=unconditioned_overlay_bases,
-        is_window=is_window,
     )
 
     p_mean = float(spans.composed_subject.span_p_mean)

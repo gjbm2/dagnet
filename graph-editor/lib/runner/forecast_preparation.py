@@ -619,10 +619,13 @@ def prepare_forecast_subject_group(
                 graph=graph_data,
                 query_from_node=str(query_from_node),
                 query_to_node=str(query_to_node),
-                anchor_node_id=str(anchor_node) if anchor_node else None,
                 anchor_from=_af,
                 anchor_to=_at,
-                is_window=bool(is_window),
+                population_root=(
+                    str(anchor_node)
+                    if (anchor_node and not is_window)
+                    else str(query_from_node)
+                ),
                 graph_preference=graph_data.get("model_source_preference"),
                 as_at=as_at,
                 scenario_id=scenario_id,

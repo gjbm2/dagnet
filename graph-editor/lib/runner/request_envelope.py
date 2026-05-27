@@ -19,26 +19,19 @@ machinery:
      `doc 29d §donor-fetch`.
 
 Under the unified design (see
-`docs/current/snapshot-fetch-envelope-design.md`), both extensions
-fall out of the same primitive arrival-map mechanism. The branch on
-`is_window` only selects the binding descriptor for each parameterised
-edge; everything else is uniform.
+`docs/current/snapshot-fetch-envelope-design.md`), both extensions fall
+out of the same primitive arrival-map mechanism, keyed on topology — the
+population root. There is no window/cohort flag: the root sitting at X
+means there is no A→X carrier leg (the former window / cohort(A=X)
+identity case), and the subject map takes identity roots over the public
+window. The root sitting upstream of X means a real carrier leg, and the
+subject's X-day root weights are the carrier's X-arrival days.
 
-Window mode (Appendix A pin in
-`docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`):
-each parameterised subject edge is local-clock-bound at its own source
-node. The first edge keeps the public selected window because it owns
-the displayed denominator. Downstream edges may extend to the evidence
-horizon so the selected-evidence value path can build age-only local
-rate kernels; this is still local-clock evidence, not a propagated
-same-Cohort binding.
-
-Cohort mode: two arrival maps. Subject sub-tree rooted at X with
-identity root weights over the public window; carrier sub-tree rooted
-at A with identity root weights over the public window extended
-backward by the carrier-path latency tail for donor cohorts. Per-edge
-envelope is `[min, max]` over `arrival_weight[source].keys()` from the
-relevant map.
+Subject sub-tree: rooted at X. Carrier sub-tree (only when the root is
+upstream of X): rooted at the population root with identity root weights
+over the public window extended backward by the carrier-path latency tail
+for donor cohorts. Per-edge envelope is `[min, max]` over
+`arrival_weight[source].keys()` from the relevant map.
 
 Per-primitive binding (`primitive_evidence.bind_primitive_evidence`)
 assigns fetched rows a primitive-local clock weight. Over-fetch is
@@ -90,15 +83,12 @@ class RequestEnvelopePlan:
     same `EdgeFetchEnvelope`s — callers that hold either identifier can
     resolve their fetch bounds without re-walking the topology.
 
-    Window mode populates `subject_arrival_map = None` and
-    `carrier_arrival_map = None`: the per-edge envelopes are the public
-    window for every parameterised subject edge under local-clock
-    binding (Appendix A). Cohort mode populates `subject_arrival_map`
-    (rooted at X) and, when `A != X`, `carrier_arrival_map` (rooted at
-    A with backward donor extension).
+    The plan carries `subject_arrival_map` (rooted at X) whenever subject
+    edges resolve. `carrier_arrival_map` is populated only when the
+    population root sits upstream of X (a real A→X leg); window and
+    cohort(A=X) leave it `None` — a zero-length carrier, not a mode flag.
     """
 
-    is_window: bool
     public_anchor_from: _date
     public_anchor_to: _date
     subject_envelopes: Tuple[EdgeFetchEnvelope, ...]
@@ -269,22 +259,24 @@ def _envelope_from_arrival_map(
 
 def _fingerprint(
     *,
-    is_window: bool,
     query_from_node: str,
     query_to_node: str,
-    anchor_node_id: Optional[str],
+    population_root: str,
     anchor_from: _date,
     anchor_to: _date,
     graph_preference: Optional[str],
     context_key: Optional[str],
     context_selector: Optional[str],
 ) -> str:
+    # The window/cohort token is latent in the topology: the population root
+    # sitting at X means no carrier leg (the former window / cohort(A=X)
+    # identity case). No is_window flag is threaded in.
     parts = [
         "request_envelope.v1",
-        "window" if is_window else "cohort",
+        "window" if str(population_root) == str(query_from_node) else "cohort",
         str(query_from_node),
         str(query_to_node),
-        str(anchor_node_id or ""),
+        str(population_root),
         anchor_from.isoformat(),
         anchor_to.isoformat(),
         str(graph_preference or "best_available"),
@@ -307,10 +299,9 @@ def build_request_envelope_plan(
     graph: Mapping[str, Any],
     query_from_node: str,
     query_to_node: str,
-    anchor_node_id: Optional[str],
     anchor_from: _date,
     anchor_to: _date,
-    is_window: bool,
+    population_root: str,
     graph_preference: Optional[str] = None,
     as_at: Optional[str] = None,
     scenario_id: Optional[str] = None,
@@ -324,23 +315,19 @@ def build_request_envelope_plan(
     contains `EdgeFetchEnvelope`s keyed by edge identity for every
     parameterised subject and carrier edge in the request topology.
 
-    Window mode produces a public-window envelope for the first subject
-    edge and evidence-horizon envelopes for downstream subject edges,
-    with no shared arrival map. Downstream widening supplies local
-    age-only rate kernels; it does not bind rows to a propagated X
-    cohort.
-
-    Cohort mode produces:
-      - subject envelopes from the X-rooted arrival map (forward
-        extension only — subject root weights are identity over the
-        public window with no backward extension);
-      - carrier envelopes from the A-rooted arrival map with root
-        weights extended backward by `max(t95 + onset)` over the
+    The shape is keyed on `population_root` (no window/cohort flag):
+      - subject envelopes always come from the X-rooted arrival map
+        (forward extension only — subject root weights are identity over
+        the public window when there is no carrier, the carrier's
+        X-arrival days when there is);
+      - carrier envelopes come from the population-root-rooted arrival map
+        with root weights extended backward by `max(t95 + onset)` over the
         carrier sub-tree's resolved primitives (donor extension per
-        `doc 29d §donor-fetch`).
+        `doc 29d §donor-fetch`). When the root sits at X the A→X span is
+        zero-length, so there is no carrier — the window / cohort(A=X)
+        degeneration.
     """
     fallback = RequestEnvelopePlan(
-        is_window=bool(is_window),
         public_anchor_from=anchor_from,
         public_anchor_to=anchor_to,
         subject_envelopes=(),
@@ -354,44 +341,8 @@ def build_request_envelope_plan(
     if subject_topo is None or not subject_topo.edge_list:
         return fallback
 
-    # Window mode: the first subject edge owns the selected X-window
-    # denominator, so it stays on the public window. Downstream subject
-    # edges supply age-only local evidence kernels for propagated selected
-    # mass; those kernels need local rows through the evidence horizon.
-    if is_window:
-        envs: List[EdgeFetchEnvelope] = []
-        for from_id, to_id, edge_dict in subject_topo.edge_list:
-            edge_uuid, edge_id = _edge_uuid_id(edge_dict, from_id, to_id)
-            downstream_to = _parse_iso(as_at)
-            if downstream_to is None or downstream_to < anchor_to:
-                downstream_to = anchor_to
-            edge_anchor_to = (
-                anchor_to
-                if str(from_id) == str(query_from_node)
-                else downstream_to
-            )
-            envs.append(
-                EdgeFetchEnvelope(
-                    edge_uuid=edge_uuid,
-                    edge_id=edge_id,
-                    role="subject",
-                    anchor_from=anchor_from,
-                    anchor_to=edge_anchor_to,
-                )
-            )
-        return RequestEnvelopePlan(
-            is_window=True,
-            public_anchor_from=anchor_from,
-            public_anchor_to=anchor_to,
-            subject_envelopes=tuple(envs),
-            carrier_envelopes=(),
-            diagnostics={
-                "binding": "window_local_clock",
-                "subject_edge_count": len(envs),
-            },
-        )
-
-    # Cohort mode: subject map rooted at X, carrier map rooted at A.
+    # Subject edges resolve identically regardless of where the population
+    # root sits — the arrival map is a timing object. Build them once.
     subject_resolutions, subject_edges = _build_resolutions_for_subtree(
         graph=graph,
         from_node=str(query_from_node),
@@ -400,20 +351,18 @@ def build_request_envelope_plan(
         graph_preference=graph_preference,
     )
 
-    has_carrier = bool(
-        anchor_node_id
-        and str(anchor_node_id) != str(query_from_node)
+    # Always build the A→X carrier from the population root. When the root
+    # sits at X (the former window / cohort(A=X) case) the span is
+    # zero-length and `_build_resolutions_for_subtree` returns nothing — the
+    # carrier dissolves by topology degeneration, with no guard. Downstream,
+    # an empty carrier yields no carrier map and identity subject roots.
+    carrier_resolutions, carrier_edges = _build_resolutions_for_subtree(
+        graph=graph,
+        from_node=str(population_root),
+        to_node=str(query_from_node),
+        temporal_mode="cohort",
+        graph_preference=graph_preference,
     )
-    carrier_resolutions: List[Tuple[TransitionIdentity, ResolvedModelParams]] = []
-    carrier_edges: List[Tuple[str, str, Mapping[str, Any]]] = []
-    if has_carrier:
-        carrier_resolutions, carrier_edges = _build_resolutions_for_subtree(
-            graph=graph,
-            from_node=str(anchor_node_id),
-            to_node=str(query_from_node),
-            temporal_mode="cohort",
-            graph_preference=graph_preference,
-        )
 
     diagnostics: Dict[str, Any] = {
         "binding": "cohort_anchored_clock",
@@ -423,10 +372,9 @@ def build_request_envelope_plan(
     draw_count = current_mc_draws()
 
     fingerprint = _fingerprint(
-        is_window=is_window,
         query_from_node=str(query_from_node),
         query_to_node=str(query_to_node),
-        anchor_node_id=str(anchor_node_id or ""),
+        population_root=str(population_root),
         anchor_from=anchor_from,
         anchor_to=anchor_to,
         graph_preference=graph_preference,
@@ -445,7 +393,7 @@ def build_request_envelope_plan(
     # the carrier surface near-empty for cohort() queries.
     carrier_arrival_map: Optional[PrefixArrivalMap] = None
     donor_lookback_days = 0
-    if has_carrier and carrier_resolutions:
+    if carrier_resolutions:
         donor_lookback_days = _resolved_path_tail_days(carrier_resolutions)
         diagnostics["donor_lookback_days"] = donor_lookback_days
         carrier_root_weights = _identity_root_weights(
@@ -453,7 +401,7 @@ def build_request_envelope_plan(
         )
         carrier_identity = PrefixArrivalIdentity(
             scenario_id=str(scenario_id or ""),
-            request_root=str(anchor_node_id),
+            request_root=str(population_root),
             context_key=context_key,
             context_selector=context_selector,
             regime_key=None,
@@ -477,7 +425,7 @@ def build_request_envelope_plan(
                     carrier_target_nodes.append(n)
         carrier_arrival_map = build_prefix_arrival_map(
             graph=dict(graph),
-            root_node_id=str(anchor_node_id),
+            root_node_id=str(population_root),
             root_day_weights=carrier_root_weights,
             transitions=carrier_transitions,
             identity=carrier_identity,
@@ -499,11 +447,7 @@ def build_request_envelope_plan(
     # remain correct.
     subject_arrival_map: Optional[PrefixArrivalMap] = None
     if subject_resolutions:
-        if (
-            has_carrier
-            and carrier_arrival_map is not None
-            and str(anchor_node_id) != str(query_from_node)
-        ):
+        if carrier_arrival_map is not None:
             x_arrivals = carrier_arrival_map.get(str(query_from_node))
             if x_arrivals is not None and not x_arrivals.is_degraded and x_arrivals.weights:
                 # Support mask, not distribution. See cohort_forecast_v3.py
@@ -554,7 +498,7 @@ def build_request_envelope_plan(
             f"first={_srw_keys[0] if _srw_keys else None} "
             f"last={_srw_keys[-1] if _srw_keys else None} "
             f"sum={sum(subject_root_weights.values()) if subject_root_weights else 0.0:.4f} "
-            f"source={'carrier_X_arrivals' if has_carrier and carrier_arrival_map is not None and str(anchor_node_id) != str(query_from_node) and (carrier_arrival_map.get(str(query_from_node)) is not None and not carrier_arrival_map.get(str(query_from_node)).is_degraded and carrier_arrival_map.get(str(query_from_node)).weights) else 'identity'}",
+            f"source={'carrier_X_arrivals' if carrier_arrival_map is not None and (carrier_arrival_map.get(str(query_from_node)) is not None and not carrier_arrival_map.get(str(query_from_node)).is_degraded and carrier_arrival_map.get(str(query_from_node)).weights) else 'identity'}",
             flush=True,
         )
         subject_arrival_map = build_prefix_arrival_map(
@@ -639,7 +583,6 @@ def build_request_envelope_plan(
             )
 
     return RequestEnvelopePlan(
-        is_window=False,
         public_anchor_from=anchor_from,
         public_anchor_to=anchor_to,
         subject_envelopes=tuple(subject_envs),

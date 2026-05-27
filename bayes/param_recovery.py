@@ -247,6 +247,28 @@ def main():
                 with open(settings_json_path, "w") as _sf:
                     json.dump(_ext_settings, _sf)
 
+    # --- Drift fixtures: fit with uniform recency weighting ---
+    # A drifting fixture (p ramps base→drift_p_to across the window) has no
+    # single static p. Default recency weighting biases the recovered value
+    # toward the recent (high-drift) end and makes the target depend on the
+    # half-life. Setting the half-life → ∞ makes the fit recover the
+    # arrival-weighted mean of the drift, which the harness targets as
+    # (base_p + drift_p_to) / 2. Stationary fixtures are unaffected (uniform
+    # vs recency weighting gives the same mean when p is constant).
+    if truth.get("simulation", {}).get("drift_p_to") is not None:
+        _recency_override = {"RECENCY_HALF_LIFE_DAYS": 1e9}
+        if settings_json_path and os.path.isfile(settings_json_path):
+            with open(settings_json_path) as _sf:
+                _existing = json.load(_sf)
+            _existing.update(_recency_override)
+            with open(settings_json_path, "w") as _sf:
+                json.dump(_existing, _sf)
+        else:
+            import tempfile
+            settings_json_path = tempfile.mktemp(suffix=".json", prefix="bayes_settings_")
+            with open(settings_json_path, "w") as _sf:
+                json.dump(_recency_override, _sf)
+
     # --- Run harness ---
     # When --phase2-from-dump is set, skip the expensive --fe-payload CLI call.
     # Build a minimal payload with just graph_id and settings, pass via --payload.
@@ -671,6 +693,14 @@ def main():
             truth_val = t.get(truth_key)
             if truth_val is None:
                 continue
+            # Drift fixtures: p ramps base→drift_p_to across the window, so there
+            # is no single static p. The fit is run with uniform recency (see
+            # above), recovering the window-mean drift; target that mean — the
+            # midpoint (base + drift_p_to) / 2 — not the base p.
+            if truth_key == "p":
+                _drift_to = truth.get("simulation", {}).get("drift_p_to")
+                if _drift_to is not None:
+                    truth_val = (float(truth_val) + float(_drift_to)) / 2.0
             post_val = post.get(post_key)
             post_sd = post.get(sd_key)
             if post_val is None:

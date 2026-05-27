@@ -509,6 +509,79 @@ class TestPhase4AsatVisibility:
                 + diagnostic
             )
 
+    @pytest.mark.xfail(
+        reason=(
+            "Legacy gap (73q Phase 1 calibration, 27-May-26). Legacy "
+            "daily_conversions computes per-Cohort completeness via its own "
+            "forecast_application.compute_completeness (analytic lognormal CDF), "
+            "not the runtime's _runtime_completeness MC readout that "
+            "cohort_maturity uses. For a single immature Cohort (age 10) the two "
+            "differ by ~2.5e-3 (dc=0.42067 vs cm=0.41820 at tau=10), above the "
+            "1e-4 completeness floor. 73q's date reducer reads the same "
+            "_runtime_completeness object (plan §Reducer field contract — "
+            "Completeness); Phase 4 must flip this. See plan 'Known legacy gaps'."
+        ),
+        strict=False,
+    )
+    def test_daily_conversions_completeness_matches_cohort_maturity(self) -> None:
+        """Semantic invariant: the date reducer has NO completeness logic of its
+        own — per-Cohort completeness must equal the same runtime CDF readout
+        cohort_maturity exposes, at the Cohort's eval_age (plan §Completeness).
+
+        Non-vacuous by construction: a single Cohort (arrivals at simple-b on
+        10-Jan) observed as-at 20-Jan is age 10 days, so completeness ≈ 0.42,
+        well below the mature ceiling.
+        """
+        if GRAPH != "synth-simple-abc":
+            pytest.skip("fixture defined only for synth-simple-abc")
+        dsl = "from(simple-a).to(simple-b).window(10-Jan-26:10-Jan-26).asat(20-Jan-26)"
+        dc_rows = (_analyse(dsl, analysis_type="daily_conversions").get("result") or {}).get("data") or []
+        cm_rows = (_analyse(dsl, analysis_type="cohort_maturity").get("result") or {}).get("data") or []
+        assert len(dc_rows) == 1, f"expected a single Cohort row, got {len(dc_rows)}"
+        dc_c = dc_rows[0].get("completeness")
+        assert dc_c is not None and 0.0 < dc_c < 1.0, (
+            f"expected a non-vacuous immature completeness, got {dc_c!r}"
+        )
+        # eval_age = 20-Jan − 10-Jan = 10 days.
+        cm_by_tau = {int(r["tau_days"]): r for r in cm_rows if r.get("tau_days") is not None}
+        assert 10 in cm_by_tau, "cohort_maturity returned no tau=10 row to compare"
+        cm_c = cm_by_tau[10].get("completeness")
+        assert cm_c is not None, "cohort_maturity tau=10 completeness missing"
+        # 1e-4 is the documented MC completeness parity floor for this pipeline.
+        assert abs(dc_c - cm_c) <= 1e-4, (
+            f"daily_conversions completeness ({dc_c}) must equal cohort_maturity's "
+            f"_runtime_completeness at eval_age=10 ({cm_c}); |Δ|={abs(dc_c - cm_c):.2e}"
+        )
+
+    def test_daily_conversions_window_cohort_do_not_collapse(self) -> None:
+        """Semantic invariant: active cohort mode (A≠X) answers a different
+        question than window mode on the same edge; the full conditioning +
+        subject-resolution machinery must not collapse them (plan Invariant
+        'Y/X invariant'; doc56 …do_not_collapse_window_and_cohort).
+
+        synth-simple-abc is a→b→c. For edge b→c, cohort(simple-a,…) is active
+        (A=a, X=b, A≠X) while window(…) is edge-local at b. Passes on the legacy
+        path today (max |Δrate| ≈ 0.36) → regression guard for the cutover.
+        """
+        if GRAPH != "synth-simple-abc":
+            pytest.skip("fixture defined only for synth-simple-abc")
+        band = "1-Mar-26:14-Mar-26"
+        edge = "from(simple-b).to(simple-c)"
+        win = (_analyse(f"{edge}.window({band})", analysis_type="daily_conversions").get("result") or {}).get("data") or []
+        coh = (_analyse(f"{edge}.cohort(simple-a,{band})", analysis_type="daily_conversions").get("result") or {}).get("data") or []
+        w = {r["date"]: r for r in win if r.get("date")}
+        c = {r["date"]: r for r in coh if r.get("date")}
+        assert w and c, "both modes must return Cohort rows"
+        shared = sorted(set(w) & set(c))
+        assert shared, "expected overlapping Cohort dates to compare modes"
+        max_drate = max(abs((w[d].get("rate") or 0.0) - (c[d].get("rate") or 0.0)) for d in shared)
+        # Carrier-owned denominator + path-level timing make cohort(A≠X)
+        # materially different from edge-local window; well above MC noise.
+        assert max_drate > 1e-2, (
+            f"window and cohort(A≠X) collapsed on b→c: max |Δrate|={max_drate:.2e} "
+            f"across {len(shared)} shared Cohort dates — active cohort mode must differ"
+        )
+
     def test_whole_graph_cf_lowers_visible_evidence(
         self, graph_data, wg_asat_live, wg_asat,
     ) -> None:
