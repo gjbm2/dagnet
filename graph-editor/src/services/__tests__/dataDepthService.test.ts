@@ -99,6 +99,7 @@ let apiAvailable = false;
 try {
   const probe = await fetch(`${PYTHON_API}/api/health`, { signal: AbortSignal.timeout(1000) }).catch(() => null);
   apiAvailable = probe?.ok ?? false;
+  await probe?.text().catch(() => {});  // drain to release the socket
 } catch { /* not available */ }
 
 // ---------------------------------------------------------------------------

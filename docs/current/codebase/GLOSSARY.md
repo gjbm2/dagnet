@@ -132,6 +132,7 @@ The bead display modes in [BEAD_DISPLAY_MODE.md](BEAD_DISPLAY_MODE.md) are a dif
 - **Value kernel** — The per-edge mass-transfer kernel consumed by span composition.
 - **Coverage** — A simple Cohort applicability scalar used by cohort-maturity display opacity, not a DP-derived mask/support ratio.
 - **Strict evidence** — The unscaled observed evidence display fields `evidence_x`, `evidence_y`, and `rate`.
+- **Selected retrieval frontier / frontier τ per anchor** — The per-anchor observation boundary τ for the selected Cohort set. One query-wide observation frontier date (`_analysis_observation_frontier_date`, derived from the admitted evidence-superset rows) is mapped to each anchor as `(frontier_date − anchor).days`. Below the frontier the FC surface (`ef_*`) is prefix-pinned to strict evidence; above it the unresolved mass is continued on the predictive operator basis. Built by `SelectedRetrievalFrontier` / `_build_selected_retrieval_frontier` (`cohort_forecast_v3.py`); empty-frames cohorts (`tau_observed = -1`) carry no frontier, and `bounds = (min, max)` of the per-anchor τ supplies the row epoch boundaries. Behaviour-preserving re-source of the surface formerly read off `SelectedAClockEvidence`.
 
 ## Cohort/Window roles
 

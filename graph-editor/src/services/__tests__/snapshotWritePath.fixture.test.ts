@@ -200,11 +200,12 @@ function dbParamId(objectId: string): string {
 }
 
 async function deleteTestSnapshots(prefix: string): Promise<void> {
-  await undiciFetch('http://localhost:9000/api/snapshots/delete-test', {
+  const resp = await undiciFetch('http://localhost:9000/api/snapshots/delete-test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ param_id_prefix: prefix }),
   });
+  await resp.text();  // drain to release the keep-alive socket
 }
 
 async function querySnapshotRows(paramId: string): Promise<any[]> {
@@ -340,11 +341,12 @@ async function appendSnapshotsDirect(params: {
 
 async function isPythonReachable(): Promise<boolean> {
   try {
-    await undiciFetch('http://localhost:9000/api/snapshots/inventory', {
+    const resp = await undiciFetch('http://localhost:9000/api/snapshots/inventory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ param_ids: ['test'] }),
     });
+    await resp.text();  // drain to release the socket
     return true;
   } catch {
     return false;

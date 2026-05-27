@@ -520,12 +520,13 @@ async function isPythonGraphComputeReachable(): Promise<boolean> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 1000);
     try {
-      await undiciFetch(url, {
+      const resp = await undiciFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
         signal: controller.signal,
       });
+      await resp.text();  // drain to release the socket
     } finally {
       clearTimeout(timeoutId);
     }

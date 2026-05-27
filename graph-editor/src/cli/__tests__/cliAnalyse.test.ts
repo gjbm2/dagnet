@@ -30,6 +30,7 @@ beforeAll(async () => {
   try {
     const r = await fetch(`${PYTHON_API_BASE}/api/health`, { signal: AbortSignal.timeout(2000) });
     beAvailable = r.ok;
+    await r.text();  // drain to release the socket
   } catch {
     beAvailable = false;
   }
@@ -281,18 +282,19 @@ describe('Snapshot-backed analysis (requires Python BE)', () => {
         rows,
       }),
     });
+    const text = await resp.text();  // always drain to release the socket
     if (!resp.ok) {
-      const err = await resp.text();
-      throw new Error(`Failed to seed snapshots: ${resp.status} ${err}`);
+      throw new Error(`Failed to seed snapshots: ${resp.status} ${text}`);
     }
   }
 
   async function cleanupSnapshots(): Promise<void> {
-    await fetch(`${PYTHON_API_BASE}/api/snapshots/delete-test`, {
+    const resp = await fetch(`${PYTHON_API_BASE}/api/snapshots/delete-test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ param_id_prefix: TEST_PREFIX }),
     });
+    await resp.text();  // drain to release the socket
   }
 
   beforeAll(async () => {

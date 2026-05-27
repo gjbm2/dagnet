@@ -151,6 +151,7 @@ describe('@-menu snapshot diagnostic (zero-mock, real DB)', () => {
 
     try {
       const h = await fetch('http://localhost:9000/api/snapshots/health');
+      await h.text();  // drain to release the socket
       if (!h.ok) throw new Error(`health check returned ${h.status}`);
     } catch (e) {
       console.warn('Python server not available — skipping:', e);

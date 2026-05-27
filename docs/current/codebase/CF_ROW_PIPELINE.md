@@ -13,9 +13,9 @@ This is the chart-evidence engine for `cohort_maturity_v3` and the row surface t
 
 **Defensive coding inside the engine is dangerous and must be avoided.** No `or 0.0`, no `np.clip`, no `try/except: pass`, no `if x is None: return`, no `max(0.0, ...)` clamps on residuals, no schema case-forks (`y` vs `Y`, `str` vs `date`). All defence lives at the perimeter ([INVARIANTS.md](INVARIANTS.md) I-47).
 
-**Branching by case is the recurring failure mode** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58). The row pipeline carries the worst of it — ~10 `if identity_carrier:` branches in the selected-Cohort reducer (audit H-5, partially retired May 2026 when the `_synthesize_identity_carrier_observed_surface` parallel pipeline was folded into the unified `_build_observed_span_evidence_surface` as a zero-edge degeneracy). These remaining branches are **debt to be retired gradually**, not precedent. Identity carrier is **data**, not a route — `composed_carrier = None`, reach=1, CDF=Dirac(0) — and the design target is one code path that degenerates algebraically.
+**Branching by case is the recurring failure mode** ([KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP58). The selected-cohort cutover (26-May-26) closed the worst instance: the legacy reducer's ~10 `if identity_carrier:` branches are gone. `model_span_spine.project_selected_cohort_rows` is **mode-blind** (`test_reducer_is_mode_blind_against_a_mode_field`), and identity carrier is now pure operator degeneracy — the carrier operator degenerates to reach=1, CDF=Dirac(0). The contract stands: one code path that degenerates algebraically; a new `if mode == ...` fork near the centre is wrong factoring, not precedent.
 
-**The maintainer constantly polices these patterns and will revert new instances.** Rules: [CF_ENGINE_DISCIPLINE.md](CF_ENGINE_DISCIPLINE.md). If existing code in this file seems to justify a fallback or a case-fork ("look, the surrounding code already does it"), you are looking at exactly the debt that's being retired. Match the substrate's discipline. The 21 findings in [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) — H-1 monotone-repair clamp at `:3587`, H-4 residual floor at `:5347`, H-5 pervasive identity-carrier branching, M-1 try/except swallows around `runtime.selected_y_prefix` — are all on the remediation list. None are precedent.
+**The maintainer constantly polices these patterns and will revert new instances.** Rules: [CF_ENGINE_DISCIPLINE.md](CF_ENGINE_DISCIPLINE.md). If existing code seems to justify a fallback or a case-fork, treat it as debt, not precedent. The audit findings that lived in the legacy row reducer — H-1 (monotone-repair clamp), H-4 (residual floor), H-5 (identity-carrier branching), M-1 (try/except swallows) — were **closed** by the cutover that deleted that reducer; see [`cf-defensive-coding-audit.md`](../project-generalise/cf-defensive-coding-audit.md). Remaining engine-discipline debt lives in other files (span-core, Bayes).
 
 When in doubt: **let X=0 produce NaN, let missing prefixes refuse cleanly, let downstream consumers see the absent state**. Algebraic degenerate is the contract. The seam invariant (§3 below) is what makes it work end-to-end.
 
@@ -24,79 +24,65 @@ When in doubt: **let X=0 produce NaN, let missing prefixes refuse cleanly, let d
 ## 1. The pipeline at a glance
 
 ```
-                                  RESOLVED RUNTIME (substrate output)
-                                         │
-                                         ▼
+                          RESOLVED RUNTIME (substrate output)
+                                     │
+                                     ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│ 1. Frame evidence                build_cohort_evidence_from_frames │
-│    Raw observed snapshot rows  →  engine_cohorts, cohort_list,     │
-│    epoch boundaries (tau_solid_max, tau_future_max), max_tau.      │
-│    Active-mode: subject prefixes zeroed (X-frames ≠ A-clock).      │
+│ 1. Frame evidence              build_cohort_evidence_from_frames     │
+│    Observed snapshot rows  →  engine_cohorts, cohort_list, epoch     │
+│    boundaries (tau_solid_max, tau_future_max), max_tau.              │
 ├────────────────────────────────────────────────────────────────────┤
-│ 2. Selected base mass         _root_window_carrier_n_by_anchor_day │
-│    Per-anchor a_pop from the first carrier primitive's root-window │
-│    n. Frame-bundle 'a' is NOT admissible. Active mode only.        │
+│ 2. Selected base mass       _root_window_carrier_n_by_anchor_day     │
+│    Per-anchor a_pop from carrier root-window n. Frame-bundle 'a'     │
+│    NOT admissible. Active overwrites a_pop; window/identity keep      │
+│    a_frozen. (§7)                                                    │
 ├────────────────────────────────────────────────────────────────────┤
-│ 3. Source-day mass surface         _build_selected_source_day_mass │
-│    M_select(U, C, u) = N_cohort(C) × g_{A→U}[u − C] for every      │
-│    subject primitive source node U. A→U composed through shared    │
-│    timing algebra. U = X is one element, not a separate path.      │
+│ 3. Operators (two families)   model_span_spine.resolve_request_spans │
+│    Conditioned/model operator: composed_subject / composed_carrier   │
+│    (+ predictive variants). Empirical-evidence operator:             │
+│    composed_empirical_subject / composed_empirical_carrier — strict  │
+│    per-(source-day, age) observed value/support (Phase 6 §4.9).      │
+│    Identity carrier = carrier operator degenerates (reach=1,Dirac0). │
 ├────────────────────────────────────────────────────────────────────┤
-│ 4. Carrier-only X prefix      _build_carrier_only_denominator_prefix│
-│    X_prefix(C, τ) = N_cohort × G_carrier(C, τ) at the denominator  │
-│    node. Sourced from M_select(X) — same carrier reference as Y.   │
+│ 4. Selected retrieval frontier   _build_selected_retrieval_frontier  │
+│    One query-wide analysis-observation date → per-anchor frontier    │
+│    f_c and row epoch bounds. (Atom 4.1)                              │
 ├────────────────────────────────────────────────────────────────────┤
-│ 5. Selected A-clock evidence   _build_selected_a_clock_evidence_   │
-│    Carrier + subject observed surfaces (topology max-flow). Subject│
-│    placement via _join_conditioned_carrier_backmap. Cell amplitude │
-│    from X_prefix and Y_prefix. Per-anchor strict support frontiers.│
+│ 5. Selected-cohort reducer                                           │
+│    model_span_spine.project_selected_cohort_rows. ONE DP core        │
+│    reduces both operators over selected Cohorts × particles →        │
+│    selected_projection: ef_rate_draws (FC continuation),             │
+│    f_rate_draws (model surface), rate_strict / evidence_*_strict     │
+│    (strict empirical Σy/Σx), ef_forecast_*. NaN where X=0.           │
+│    Mode-blind: reads no is_window / identity flag.                   │
 ├────────────────────────────────────────────────────────────────────┤
-│ 6. Rate-attributed Y prefix    _build_rate_attributed_subject_prefix│
-│    Y_prefix(C, τ) = Σ_u M_select(U, C, u) × k_atorbef(u, τ)/n      │
-│    layered through subject chain in topology order. Terminal       │
-│    edge's cumulative IS Y_prefix.                                  │
-├────────────────────────────────────────────────────────────────────┤
-│ 7. Selected-cohort reducer    _selected_cohort_group_rate_draws    │
-│    Per-particle Pop D + Pop C mass on factorised carrier × subject.│
-│    rate(s, τ) = ΣY(s, τ) / ΣX(s, τ); NaN where X=0. The E+F        │
-│    midpoint / fan authority.                                       │
-├────────────────────────────────────────────────────────────────────┤
-│ 8. Row projection                       _project_runtime_rows      │
-│    Aggregates SelectedAClockEvidence per-τ; quantiles the reducer  │
-│    draws (E+F) and overlay draws (F-mode, model-curve); blends     │
-│    rate_blended; emits coverage signals; attaches forecast_y/x.    │
+│ 6. Row projection                       _project_runtime_rows        │
+│    Quantiles the reducer draws; maps selected_projection surfaces to │
+│    row fields; applicability-only coverage; attaches forecast_y/x.   │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-Identity-carrier mode (`population_root == denominator_node` — i.e. `window()` and `cohort(A=X)`) used to bypass steps 2-7 and read prefixes directly off `engine_cohorts.obs_x/obs_y` via a rescue branch in the reducer. Atom-3 stage 4 (May 2026) deleted that branch. **All modes — identity carrier and active — now run through the full pipeline (steps 1-8) and read prefixes from `SelectedAClockEvidence`.** When the candidate pool contains no `subject_from = pop_root` rows with `slice_family = WINDOW`, the prefix-construction layers (2-6) refuse and the reducer reports zero-prefix-from-prior (visible degradation, not silent rescue).
-
-**Known structural debt against this unified model** (`docs/current/cohort-maturity-evidence-coverage-design.md`, [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) H-5):
-
-- The reducer (`_selected_cohort_group_rate_draws`) still has ~10 `if identity_carrier:` branches for Pop D / Pop C arithmetic. These compute correct degenerate values but are case-forks against the AP58 contract; the target factoring expresses them as `composed_carrier=None ⇒ identity reach=1, Dirac arrival` flowing through one formula.
-
-**Recently retired** (May 2026):
-
-- `_synthesize_identity_carrier_observed_surface` parallel pipeline. Folded into `_build_observed_span_evidence_surface` as a zero-edge degeneracy: when `root_node == end_node`, the unified function dispatches to `_build_zero_edge_observed_surface`, which reads `n_weighted` off the primitive rooted at the node. This still has an internal "topology empty?" clause that selects between reading `n_weighted` from the X-rooted primitive vs accumulating `k_weighted` through chain max-flow. Collapsing that final clause requires a design decision about how the carrier observed surface should encode chain-side coverage gaps in active mode (the two readings diverge under incomplete observations).
+The selected-cohort cutover (26-May-26) replaced the legacy per-prefix machinery — the `_SelectedSourceDayMass` / `_CarrierOnlyDenominatorPrefix` / `_RateAttributedSubjectPrefix` dual-prefix family, the `SelectedAClockEvidence` cell surface, and the `_selected_cohort_group_rate_draws` reducer — with **two operators read through one DP core**. Window, cohort, and identity-carrier results are produced by **which operator degenerates**, not by branching: the reducer reads no mode or identity flag (guarded by `test_reducer_is_mode_blind_against_a_mode_field`). Strict observed evidence is owned by the empirical operator; the conditioned operator carries the model and predictive surfaces. The displayed rate is strict `Σy/Σx` plus separate model/forecast surfaces — there is **no** `rate_blended` linear blend and **no** `rate_adjusted` / IPW coverage; `coverage` is a display applicability/freshness signal only. When no admissible window-family evidence resolves, the empirical operator is empty and the reducer reports zero-prefix-from-prior (visible degradation, not silent rescue).
 
 ### 1a. Data flow vs call order
 
-The 8-step listing above describes the **data flow** — what each layer reads and produces. The **call order** inside the public entry `compute_cohort_maturity_rows_v3` is **interleaved** with the primitive substrate (CF_PRIMITIVE_SUBSTRATE.md Stage A):
+The 6-step listing above describes the **data flow** — what each layer reads and produces. The **call order** inside the public entry `compute_cohort_maturity_rows_v3` is **interleaved** with the primitive substrate (CF_PRIMITIVE_SUBSTRATE.md Stage A):
 
 ```
 compute_cohort_maturity_rows_v3:
   1. resolve_model_params                       (resolves priors)
   2. build_cohort_evidence_from_frames          ←  Row layer 1
   3. _aggregate_request_candidates              (flatten evidence to one pool)
-  4. build_resolved_cf_runtime                  ←  Substrate stage A (A1–A5)
+  4. build_resolved_cf_runtime                  ←  Substrate stage A (A1–A5);
+                                                   resolves the conditioned +
+                                                   empirical operators (layer 3)
   5. _root_window_carrier_n_by_anchor_day       ←  Row layer 2
-  6. _build_selected_source_day_mass            ←  Row layer 3
-  7. _build_carrier_only_denominator_prefix     ←  Row layer 4
-  8. _build_selected_a_clock_evidence_from_runtime
-                                                ←  Row layers 5 + 6
-  9. _project_runtime_rows                      ←  Row layers 7 + 8
+  6. _build_selected_retrieval_frontier         ←  Row layer 4
+  7. _project_runtime_rows                      ←  Row layer 6; internally calls
+       └─ model_span_spine.project_selected_cohort_rows   ← Row layer 5
 ```
 
-Row layer 1 runs **before** the substrate, not after. Row layers 5+6 are produced together inside one call; layers 7+8 likewise. The primitive substrate (A1–A5) sits between row layer 1 and row layer 2. This is by design: the substrate consumes the candidate pool the row pipeline already flattened, and the row pipeline then reads runtime objects the substrate produced.
+Row layer 1 runs **before** the substrate, not after. The primitive substrate (A1–A5) sits between row layer 1 and row layer 2 and resolves **both** operator families onto the runtime. The reducer (`project_selected_cohort_rows`) is invoked inside `_project_runtime_rows`, so row layers 5 and 6 share one call. This is by design: the substrate consumes the candidate pool the row pipeline already flattened, and the row pipeline then reads runtime objects the substrate produced.
 
 ### 1b. Single-pool invariant for evidence
 
@@ -112,74 +98,53 @@ A test or production call that supplies `evidence_candidates=` directly drives t
 
 ---
 
-## 2. The dual-prefix object family
+## 2. The two operators
 
-Active `cohort(A != X)` exposes a four-piece object family. Together they are the **selected** chart evidence — observed cumulative mass paired with rate-attributed projection on the **selected A-clock**, not the X-clock.
+The selected-cohort reducer reads **two operator families** resolved onto the runtime by `model_span_spine.resolve_request_spans`. Both are `ComposedPrimitiveSpan` objects over the carrier (`A→X`) and subject (`X→end`) spans; they differ by what they carry. This replaces the legacy four-piece dual-prefix family (`_SelectedSourceDayMass` / `_CarrierOnlyDenominatorPrefix` / `_RateAttributedSubjectPrefix`) and the `SelectedAClockEvidence` cell surface — all deleted at the cutover.
 
-### 2.1 `_SelectedSourceDayMass` — `M_select(U, C, u)`
+### 2.1 Conditioned / model operator — `composed_subject` / `composed_carrier`
 
-For each subject primitive source node U (including U=X as one element of the set), `M_select(U, C, u_U) = N_cohort(C) × g_{A→U}[u_U − C]`. `g_{A→U}` is the per-day arrival increment of the A→U distribution from the **shared timing algebra** (the same composer `prefix_arrival.py` uses for the runtime's carrier and subject arrival maps). Reach-preserving: `Σ_τ g_{A→U}[τ] = reach_{A→U}`, so `Σ_τ M_select(U, C, τ) = N_cohort × reach_{A→U}` is the actual physical selected-cohort mass that arrives at U.
+The query-conditioned model surface: per-draw `p × CDF` timing built from the conditioned primitives (the posterior after evidence updates the prior at the single conditioning locus, I-48). Predictive variants (`composed_subject_predictive` / `composed_carrier_predictive`) carry the predictive-dispersion draws the FC continuation fan opens against. This operator owns the model (`f_*`) and forecast (`ef_*`) surfaces.
 
-Single-hop is U=X plus the terminal subject destination. Multi-hop is U=X plus intermediate subject sources. **One uniform construction**, no branch on hops.
+### 2.2 Empirical-evidence operator — `composed_empirical_subject` / `composed_empirical_carrier`
 
-Source: `cohort-1apr-falling-k-problem-statement.md` §A.1, §A.3 line 153, §A.6 phase 1. I-45.
+The strict observed-evidence surface: per-(source-day, age) observed value and support read directly from `ConditionedTransitionPrimitive` evidence rows (Phase 6 §4.9). It is endpoint-exact — strict counts, not model smoothing — and owns the strict `rate_strict` / `evidence_*_strict` surfaces. Under §4.9 the empirical value kernel is already zero at absent cells, so it carries the observed prefix without a separate cell-presence object.
 
-### 2.2 `_CarrierOnlyDenominatorPrefix` — `X_prefix(C, τ)`
+### 2.3 Identity carrier is operator degeneracy
 
-`X_prefix(C, τ) = N_cohort(C) × G_carrier(C, τ)` at the denominator node X. Sourced by integrating `M_select(X, C, ·)` per anchor day — **same carrier reference as Y_prefix**. Plateaus at `N_cohort × reach_{A→X}`.
+`window()` and `cohort(A=X)` have population already at X, so the **carrier** operators (conditioned and empirical) degenerate to reach = 1, Dirac(0) arrival — the carrier convolution is a pass-through. There is no separate identity object and no parallel observed-surface synthesis; the reducer drives the degenerate carrier through the same DP as a non-trivial one.
 
-Critical: this must use the **prior** carrier-only A→X composition (from M_select), NOT the joint-conditioned `composed_carrier`. The joint object re-smooths evidence with the posterior it is meant to inform. §A.3.
+### 2.4 Base mass and frontier
 
-### 2.3 `_RateAttributedSubjectPrefix` — `Y_prefix(C, τ)`
-
-The terminal subject primitive's per-source-day rate-attributed cumulative count, summed across source days **after** per-source-day carry-forward. Built layer-by-layer in subject-chain topology order: each primitive U→V accumulates per-(C, source_day, τ) buckets, the per-cell contribution is `M_select(U, C, u) × k_atorbef(u, τ) / n_atorbef(u, τ)`. The terminal primitive's per-(C, τ) cumulative is Y_prefix.
-
-Single-hop is chain-of-length-1: the first primitive is also the terminal. Composition pattern uniform. §A.1 §159.
-
-Two evaluation modes coexist (`use_evidence_local_ledger=True` for identity carrier, deterministic rate push-forward; `False` for active, M_select-keyed propagation). The audit's H-1 monotone-repair clamp lives at `:3587` inside this builder — see [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md).
-
-### 2.4 `SelectedAClockEvidence` — the cell surface
-
-`SelectedAClockEvidenceCell(anchor_day, τ, x_at_query_x, y_at_subject_end, carrier_landing_coverage, subject_landing_coverage)` — one cell per `(anchor, τ)` where any role has observed support at-or-before τ.
-
-Cell **presence** is observed-evidence-driven (carrier observed surface or subject observed surface or Y_prefix has a landing). Cell **amplitude** reads from `X_prefix` and `Y_prefix`. The two concerns are decoupled — §A.1 §157: "the carrier observed surface gates whether a cell exists; X_prefix carries amplitude."
-
-`strict_support_by_anchor` records per-anchor `(carrier_fresh_tau, carrier_value_tau, subject_tau, paired_tau)` from observed-surface landings where `landing_coverage > 0`. Forward-fill is for value, never for coverage. `analysis_observation_frontier_date` is the **single** query-wide as-of datum, capped by explicit asat or today. See `selected-a-clock-retrieval-frontier-provenance-proposal.md`.
+Two side inputs feed the reducer alongside the operators: the per-anchor base mass `a_pop` (§7) and the selected retrieval frontier `f_c` (§6, Atom 4.1) — the one query-wide analysis-observation date (`_analysis_observation_frontier_date`, capped by asat/today) mapped to each Cohort's age, which also sets the row epoch bounds.
 
 ---
 
 ## 3. The seam invariant
 
-The reducer (`_selected_cohort_group_rate_draws`) and the row builder (`aggregate_by_tau`) **MUST** read the **same** selected prefix object for every selected cohort. This is the "seam invariant" (§A.4): if they read different prefixes, the chart's `midpoint` and `evidence_y/evidence_x` numerically diverge across the epoch boundary even when they should agree.
+In the legacy pipeline the reducer and the row builder had to read the **same** selected prefix object or the chart's `midpoint` and `evidence_y/evidence_x` would diverge across the epoch boundary even where they should agree. The cutover makes this structural: `project_selected_cohort_rows` emits the strict evidence surface (`rate_strict`, `evidence_*_strict`) and the FC continuation (`ef_*`) from **one DP core over the same two operators**, so the evidence layer and the forecast layer share a single source by construction. There is no second prefix object to keep in sync — the seam cannot gap.
 
-The seam is enforced at `cohort_forecast_v3.py:4751-4761`:
-
-> "in active mode the reducer's `x_frozen` / `y_frozen` and the row builder's `aggregate_by_tau` must read the SAME selected prefix object. When `selected_a_clock_evidence` is provided, it is authoritative for every selected cohort; the legacy `engine_cohort.obs_x/obs_y` fallback is refused to prevent the seam from gapping."
-
-Active cohorts without selected cells become **zero-prefix, frontier 0** (whole `a_pop` projected from the prior through the model arm) — NOT a fallback to `engine_cohort.obs_x/obs_y` (which is the legacy frame-derived path the active builder explicitly supersedes).
-
-The seam runs through every active row: cells in `SelectedAClockEvidence` ↔ prefixes consumed by the reducer ↔ buckets aggregated for the E rows.
+Cohorts with no admissible evidence are **zero-prefix, frontier 0** (whole `a_pop` projected from the prior through the conditioned operator) — not a fallback to the legacy frame-derived `engine_cohort.obs_x/obs_y`.
 
 ---
 
 ## 4. The selected-cohort reducer
 
-`_selected_cohort_group_rate_draws` is the E+F trajectory authority — the per-particle group `ΣY(τ) / ΣX(τ)` after observed prefixes, Pop D, Pop C, carrier continuation, and subject progression have all been projected into mass.
+`model_span_spine.project_selected_cohort_rows` is the E+F trajectory authority — the per-particle group `ΣY(τ) / ΣX(τ)` after observed prefixes (empirical operator), Pop D, Pop C, carrier continuation, and subject progression (conditioned operator) have all been projected into mass through one DP core. It is **mode-blind**: it reads no `is_window` / `identity_carrier` flag (`test_reducer_is_mode_blind_against_a_mode_field`); window/cohort/identity are produced by which operator degenerates.
 
 For each selected cohort `d`, particle `s`, row age τ:
 
 | τ relative to frontier | What happens |
 |---|---|
-| `τ ≤ frontier_d` | Observed prefix: `X_total[s, τ] += obs_x[τ]`, `Y_total[s, τ] += obs_y[τ]`. Deterministic across particles. |
-| `τ > frontier_d`, identity carrier | `X_total[s, τ] += x_frozen` (forward-fill). Pop D residual via subject-only calibrated CDF ratio anchored at frontier: `Y_pop_D[s, τ] = (x_frozen − y_frozen) × R_y_d`. Pop C empty (`window()` defines later X-arrivals out of cohort; identity `A=X` has no carrier). |
-| `τ > frontier_d`, active carrier | `X_total[s, τ] += x_frozen + (a_pop − x_frozen) × R_x` where `R_x = (G(τ) − G(f))/(1 − G(f))` is the conditional carrier residual. Pop D mixed over pre-frontier arrival distribution (each arrival slice has its own subject-clock age at frontier). Pop C = future X-arrivals × subject progression: `Y_pop_C` is the convolution of conditional post-frontier carrier increments `arr_inc` with the **unshifted** subject CDF `H_subj_unshifted` (Pop C members are fresh at X on arrival, subject clock starts at zero). |
+| `τ ≤ frontier_d` | Observed prefix from the empirical operator: `X_total[s, τ] += obs_x[τ]`, `Y_total[s, τ] += obs_y[τ]`. Deterministic across particles. |
+| `τ > frontier_d`, carrier degenerate (window / `A=X`) | `X_total[s, τ] += x_frozen` (forward-fill). Pop D residual via subject-only conditional CDF ratio anchored at frontier: `Y_pop_D[s, τ] = (x_frozen − y_frozen) × R_y_d`. Pop C empty (no carrier arrivals out of cohort). |
+| `τ > frontier_d`, carrier non-trivial (active) | `X_total[s, τ] += x_frozen + (a_pop − x_frozen) × R_x` where `R_x = (G(τ) − G(f))/(1 − G(f))` is the conditional carrier residual. Pop D mixed over the pre-frontier arrival distribution (each slice has its own subject-clock age at frontier). Pop C = future X-arrivals × subject progression: conditional post-frontier carrier increments convolved with the **unshifted** subject CDF (Pop C members are fresh at X on arrival, subject clock starts at zero). |
 
-Notable code-level subtleties:
+Contract notes:
 
-- **Pop D uses `x_frozen` as upper bound, not `a_pop`.** The empirical `rate` row aggregates `Σy/Σx` with `obs_x` carry-forward past the frontier, so the per-particle reducer's denominator basis must match across the epoch A→B boundary. Substituting `a_pop` here produced a vertical cliff in conditioned (E+F) midpoint at `τ = tau_solid_max + 1`. `cohort_forecast_v3.py:4869-4882`.
-- **Identity carrier `X_total[:, future_slice] += x_frozen`, not `a_pop`.** Same boundary-continuity rationale. `:4929-4942`.
+- **Pop D uses `x_frozen` as upper bound, not `a_pop`.** The empirical `rate` row aggregates `Σy/Σx` with `obs_x` carry-forward past the frontier, so the per-particle denominator basis matches across the epoch A→B boundary. Substituting `a_pop` produced a vertical cliff in E+F midpoint at `τ = tau_solid_max + 1`.
 - **NaN where `X_total = 0`, not zero.** Row quantiles ignore NaN cells and return `None` only when every particle is undefined at that age. Rate-cell NaN propagation is the contract.
-- **No Y ≤ X cap at display layer.** X_prefix and Y_prefix share one `M_select(X)` reference; by construction `Y_prefix(C, τ) ≤ X_prefix(C, τ)` because every Y contribution is `mass × k/n` with `k/n ≤ 1` and X is `Σ_{u≤τ} mass`. Reintroducing the cap would silently repair a regression. §A.6 phase 6.
+- **No `Y ≤ X` cap at the display layer.** By construction `Y(C, τ) ≤ X(C, τ)` — every Y contribution is `mass × k/n` with `k/n ≤ 1` and X is `Σ_{u≤τ} mass`. Reintroducing a cap would silently repair a regression.
 
 ---
 
@@ -192,7 +157,7 @@ Notable code-level subtleties:
 | `midpoint`, `fan_*`, `fan_bands`, `projected_rate` | `selected_projection.ef_rate_draws` (the spine's FC continuation surface, predictive operator basis) | **Forecast layer in E+F mode**. Prefix-pinned to strict evidence through each Cohort's frontier; predictive fan opens only after the frontier. Rendered in epochs B/C; suppressed in epoch A. |
 | `forecast_x`, `forecast_y` | `selected_projection.ef_forecast_x` / `ef_forecast_y` (future residual emitted directly by the FC continuation DP) | Active-carrier future-only residual count fields. No post-hoc subtraction of strict evidence from full model means. |
 | `model_midpoint`, `model_fan_*`, `model_bands` | `selected_projection.f_rate_draws` (the spine's unspliced query-conditioned model surface, epistemic operator basis) | **Conditioned model surface; F mode renders this**. |
-| `model_curve_midpoint`, `model_curve_*`, `model_curve_bands` | `_composed_pair_per_tau_rate_draws` on `runtime.unconditioned_overlays['epistemic']` | **Optional model overlay** — existing unconditioned model curve with epistemic bands. Not a display mode; opt-in via the display setting `show_model_curve` and rendered alongside the active mode. |
+| `model_curve_midpoint`, `model_curve_*`, `model_curve_bands` | `runtime.unconditioned_overlays['epistemic']` | **Optional model overlay** — existing unconditioned model curve with epistemic bands. Not a display mode; opt-in via the display setting `show_model_curve` and rendered alongside the active mode. |
 
 Observed-evidence fields are separate from projection:
 
@@ -223,7 +188,7 @@ Three epochs run across τ:
 
 `tau_solid_max` is `min(frontier_age)` across **selected** cohorts (the shallowest observed depth, not the youngest cohort's frontier — staleness varies per anchor). `tau_future_max` is `(sweep_to_d − anchor_from_d).days` — the oldest cohort's calendar age. Both are intentionally decoupled from per-cohort `data_retrieved_at` to preserve the `tau_solid_max ≤ tau_future_max` invariant the row builder and chart both rely on.
 
-When `selected_a_clock_evidence` is present with cells, `row_tau_solid_max` and `row_tau_future_max` are recomputed from the selected frontier bounds (`frontier_tau_bounds`). The frontier on the selected A-clock can differ from the frame-derived frontier.
+When the selected retrieval frontier resolves (an admitted-evidence observation date is present), `row_tau_solid_max` and `row_tau_future_max` are recomputed from its bounds (`SelectedRetrievalFrontier.bounds`, §2.4 / Atom 4.1). The retrieval frontier can differ from the frame-derived frontier.
 
 ### 6.1 Display-mode epoch mapping
 
@@ -254,17 +219,7 @@ Provenance is recorded per anchor: `'root_window_carrier_n'` / `'empty_frames_pr
 
 ---
 
-## 8. The midpoint shift
-
-`_RateAttributedSubjectPrefix` integration applies a `midpoint_shift = 0.5` ONLY at the first subject layer (`U == query_denominator_X`) and ONLY when M_select places mass at multiple source days. The shift compensates for mass spread within the bucket-day axis: when `M_select(X, anchor)` is a Dirac at a single source day there is no interval to integrate; when it spans multiple days the integration is over `[s, s+1)` per day and the midpoint approximates the integral as `rate(τ − 0.5)`.
-
-Downstream subject layers have already been placed by composed A→U timing — applying the shift again double-corrects the chain. Computed once per `(edge, anchor)` from the M_select shape so identity / single-source active / dense-spread active all flow through one expression without mode-flag forks. Code: `_build_rate_attributed_subject_prefix:3816`.
-
-A separate three-point central curvature correction in `_interpolated_rate_at:3232-3251` handles the convexity bias from linear interpolation on a lognormal CDF — the chart-vs-oracle "rising-flank +3%" symptom in `cohort-outside-in-post-73n-regression-tracker.md`.
-
----
-
-## 9. Sentinels and degeneracies
+## 8. Sentinels and degeneracies
 
 `frontier_age = -1` (the `tau_observed = -1` empty-frames sentinel) propagates from `build_cohort_evidence_from_frames`'s synthesised default through to `engine_cohort.frontier_age` and `engine_cohort.eval_age` separately. `eval_age = max(frontier_age, 0)` because completeness "at frontier" is undefined when there is no frontier. The reducer's observed-prefix loop iterates zero times under the sentinel and the future arm covers `τ = 0..T-1` against the prior — natural Bayesian degeneracy (posterior = prior).
 
@@ -274,31 +229,32 @@ A separate three-point central curvature correction in `_interpolated_rate_at:32
 
 ---
 
-## 10. What `_project_runtime_rows` does NOT do
+## 9. What `_project_runtime_rows` does NOT do
 
 - **Does not condition.** All conditioning is in `primitive_conditioning.condition_primitive`. See [INVARIANTS.md](INVARIANTS.md) I-48.
 - **Does not re-run subset policy.** The doc-52 blend is at the primitive layer, not the projection layer. See [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) §3.7.
 - **Does not re-decide semantics.** I-46. Row schema reads already-resolved runtime objects. If a projection needs information the runtime doesn't expose, fix the runtime — never synthesise the missing piece in the projection.
-- **Does not invent or mutate `M_select`.** That is a runtime-resolved object (§A.6 phase 1). The projection reads `runtime.selected_source_day_mass`.
+- **Does not invent or mutate the operators.** The conditioned and empirical operators are runtime-resolved (`model_span_spine.resolve_request_spans`). The projection reads them through `project_selected_cohort_rows`; it does not rebuild span mass or re-resolve evidence.
 - **Does not patch active rows from local subject evidence.** X-clocked target frames are zeroed by `build_cohort_evidence_from_frames` in active mode. Selected A-clock observations only. Frame-bundle `a` is not an admissible fallback.
 - **Does not run the legacy trajectory engine.** `forecast_state.compute_forecast_trajectory` is post-73n legacy with two surviving callers; the v3 row builder does not reach it. See [CF_HOLD_OUT_ENGINES.md](CF_HOLD_OUT_ENGINES.md).
 
 ---
 
-## 11. Diagnostic surfaces
+## 10. Diagnostic surfaces
 
-`emit_diagnostics=True` (CLI `--diag`) populates several forensic side-channels:
+`emit_diagnostics=True` (CLI `--diag`) populates several forensic side-channels on `rows[0]`:
 
-- `rows[0]['_selected_cohort_projection']` — per-cohort `i`, `frontier`, `a_pop`, `x_frozen`, `y_frozen`, `Y_pop_d_med`, `Y_pop_c_med`, `from_selected`.
-- `rows[0]['_selected_a_clock_evidence']` — full cell dump, `rate_attributed_dual_eval_by_edge` (production / midpoint / integer / ff_integer conventions), carrier and subject observed-surface provenance, per-row placement lineage. Large enough to overflow V8's string limit on multi-hop active queries — emit only with `--diag`.
-- `rows[0]['_a_pop_provenance']` — per-anchor `root_window_carrier_n` / `no_root_window_evidence` / `empty_frames_prior`.
-- `rows[0]['_projection_basis']` — `has_observed_frontier`, `model_mass`, `model_mass_source` per cohort.
+- `_row_evidence_source` — provenance pointer recording that `evidence_x` / `evidence_y` / `rate` are emitted from `model_span_spine.project_selected_cohort_rows` (the empirical spine `selected_projection`), not from any legacy `SelectedAClockEvidence` object.
+- `_empirical_spine_diagnostics` — the spine reducer's `selected_projection.diagnostics` (per-operator and per-DP-core forensic detail).
+- `_selected_cohort_projection` — per-cohort spine projection summary (`frontier`, `a_pop`, `x_frozen`, `y_frozen`, Pop-D / Pop-C medians), when available.
 
-Without `--diag` these are absent — the production payload is much smaller.
+`rows[0]['_a_pop_provenance']` — per-anchor `root_window_carrier_n` / `empty_frames_prior` / `no_root_window_evidence` — is attached whenever base-mass provenance exists, independent of `--diag`.
+
+Without `--diag` the `--diag`-only surfaces are absent — the production payload is much smaller. The legacy `_selected_a_clock_evidence` cell dump and `_projection_basis` forensic field were removed at the selected-cohort cutover.
 
 ---
 
-## 12. Where to read next
+## 11. Where to read next
 
 - [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) — what produces the `ResolvedCFRuntime` this pipeline consumes.
 - [FORECAST_RUNTIME_ARCHITECTURE.md](FORECAST_RUNTIME_ARCHITECTURE.md) — runtime fields the row builder reads.

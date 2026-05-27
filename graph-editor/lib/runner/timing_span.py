@@ -119,7 +119,7 @@ def compose_timing_span_from_densities(
 
     horizon_ratio = float(finite_reach / reach) if reach > 0 else 0.0
 
-    conditional_cdf = np.clip(density_cdf / reach, 0.0, 1.0)
+    conditional_cdf = density_cdf / reach
     topology_case = 'identity' if not topo.edge_list else 'composed'
     resolved_transition_source = (
         'identity' if topology_case == 'identity' else transition_source
@@ -280,7 +280,7 @@ def compose_timing_span_from_transition_primitives_with_mc(
         reach=timing.reach,
         conditional_cdf=timing.conditional_cdf,
         density_cdf=timing.density_cdf,
-        mc_cdf=np.clip(np.asarray(mc_cdf, dtype=float), 0.0, 1.0),
+        mc_cdf=np.asarray(mc_cdf, dtype=float),
         max_tau=timing.max_tau,
         topology_case=timing.topology_case,
         horizon_ratio=timing.horizon_ratio,
@@ -1213,35 +1213,6 @@ def _has_latency_density(
     densities: Mapping[Tuple[str, str], np.ndarray],
 ) -> bool:
     return any(float(np.sum(d[1:])) > 0.0 for d in densities.values())
-
-
-def _degraded_timing(
-    *,
-    root_node_id: str,
-    end_node_id: str,
-    max_tau: int,
-    transition_source: str,
-    note: str,
-    topology: Optional[SpanTopology] = None,
-) -> TimingSpan:
-    return TimingSpan(
-        root_node_id=str(root_node_id),
-        end_node_id=str(end_node_id),
-        reach=0.0,
-        conditional_cdf=None,
-        density_cdf=None,
-        mc_cdf=None,
-        max_tau=max_tau,
-        topology_case='degraded',
-        horizon_ratio=0.0,
-        composed_edges=len(topology.edge_list) if topology is not None else 0,
-        has_latency_edge=False,
-        transition_source=transition_source,
-        provenance={
-            'binding_policy': 'timing_span.density.v1',
-            'note': note,
-        },
-    )
 
 
 __all__ = [

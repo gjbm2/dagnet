@@ -12,7 +12,7 @@ Atom 4c.C: this module is now a thin adapter over the canonical
 
 2. Delegates to the canonical core with caller-declared
    ``execution_policy``. Production callers in
-   ``model_span_spine._project_frontier_shadow_surfaces`` declare
+   ``model_span_spine._project_frontier_continuation_surfaces`` declare
    ``TOEPLITZ_APPLY`` because the predictive and residual providers
    expose ``batched_op`` — the operator-apply contract the
    ``TOEPLITZ_APPLY`` applier consumes directly.
@@ -198,7 +198,7 @@ def run_dp_from_node_source_ledgers(
     the basis-keyed continuation surface from the canonical trace.
 
     Production callers in
-    ``model_span_spine._project_frontier_shadow_surfaces`` declare
+    ``model_span_spine._project_frontier_continuation_surfaces`` declare
     ``DPExecutionPolicy.TOEPLITZ_APPLY``. The predictive and residual
     providers expose ``batched_op(ce, source_basis, source_mass_3d) ->
     (out_3d, out_basis)`` — the canonical TOEPLITZ_APPLY applier

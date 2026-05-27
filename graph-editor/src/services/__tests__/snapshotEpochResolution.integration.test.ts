@@ -54,15 +54,17 @@ async function appendRows(
   sliceKey: string,
   retrievedAt: string,
   anchorDays: string[],
+  signal?: AbortSignal,
 ): Promise<void> {
   const rows = anchorDays.map(day => ({
     anchor_day: day,
     X: 100,
     Y: 50,
   }));
-  await undiciFetch(`${API}/api/snapshots/append`, {
+  const resp = await undiciFetch(`${API}/api/snapshots/append`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       param_id: paramId,
       canonical_signature: JSON.stringify({ c: coreHash, x: {} }),
@@ -74,6 +76,11 @@ async function appendRows(
       rows,
     }),
   });
+  // Drain the body so undici releases the keep-alive socket immediately. An
+  // unconsumed response holds the connection open and leaks sockets across the
+  // parallel suite, which starves the shared dev server under load.
+  const text = await resp.text();
+  if (!resp.ok) throw new Error(`snapshots/append HTTP ${resp.status}: ${text}`);
 }
 
 async function batchRetrievals(
@@ -89,12 +96,37 @@ async function batchRetrievals(
   return body.results || [];
 }
 
-async function cleanup(): Promise<void> {
-  await undiciFetch(`${API}/api/snapshots/delete-test`, {
+async function cleanup(signal?: AbortSignal): Promise<void> {
+  const resp = await undiciFetch(`${API}/api/snapshots/delete-test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({ param_id_prefix: TEST_PREFIX }),
   });
+  await resp.text();  // drain to release the socket
+}
+
+/**
+ * Retry a single seed call against transient contention. The dev server runs
+ * its DB writes synchronously on the uvicorn event loop, so a heavy query in a
+ * concurrent test file can briefly block every request here. Each attempt gets
+ * its own timeout; a stalled attempt is aborted and retried (by which point the
+ * blocking op has usually cleared). Exhausting all attempts throws — the server
+ * is up (we checked health) but genuinely can't serve us, which is a real
+ * failure, not something to skip.
+ */
+async function withRetry(label: string, fn: (signal: AbortSignal) => Promise<void>, attempts = 4): Promise<void> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await fn(AbortSignal.timeout(15000));
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 300 * (i + 1)));
+    }
+  }
+  throw new Error(`${label} failed after ${attempts} attempts: ${(lastErr as Error)?.message}`);
 }
 
 const sorted = (arr: string[]) => [...arr].sort();
@@ -105,16 +137,20 @@ const sorted = (arr: string[]) => [...arr].sort();
 
 describe('snapshot epoch resolution (real DB)', () => {
   beforeAll(async () => {
+    // Skip ONLY when the server isn't running (e.g. a dev machine without it).
+    // A bounded health check distinguishes "not running" (skip) from "running
+    // but momentarily slow" (seed below, with retries).
     try {
-      const h = await undiciFetch(`${API}/api/snapshots/health`);
-      if (!(await h.json() as any).status) throw new Error();
+      const h = await undiciFetch(`${API}/api/snapshots/health`, { signal: AbortSignal.timeout(5000) });
+      if (!(await h.json() as any).status) throw new Error('no status');
     } catch {
-      console.warn('Python server not available — skipping');
+      console.warn('Python server not running — skipping epoch resolution integration tests');
       return;
     }
 
-    // Clean up any previous run
-    await cleanup();
+    // Server is up. Seed with per-call retries so transient contention
+    // self-heals; a genuine inability to seed throws (real failure, not a skip).
+    await withRetry('cleanup', (s) => cleanup(s));
 
     // Seed epochs:
     //
@@ -131,17 +167,17 @@ describe('snapshot epoch resolution (real DB)', () => {
     //   Day 8 overlaps with epoch B
 
     // Epoch A: H0 on days 1-3
-    await appendRows(PARAM_ID, H0, 'window(-30d:)', '2026-04-01T06:00:00Z', ['2026-03-01', '2026-03-02', '2026-03-03']);
+    await withRetry('append H0', (s) => appendRows(PARAM_ID, H0, 'window(-30d:)', '2026-04-01T06:00:00Z', ['2026-03-01', '2026-03-02', '2026-03-03'], s));
     // Epoch A: H0' on days 3-5 (H0' = H0 after event def change)
-    await appendRows(PARAM_ID, H0_PRIME, 'window(-30d:)', '2026-04-01T09:00:00Z', ['2026-03-03', '2026-03-04', '2026-03-05']);
+    await withRetry('append H0prime', (s) => appendRows(PARAM_ID, H0_PRIME, 'window(-30d:)', '2026-04-01T09:00:00Z', ['2026-03-03', '2026-03-04', '2026-03-05'], s));
 
     // Epoch B: H1 on days 4-7
-    await appendRows(PARAM_ID, H1, 'context(channel:google).window(-30d:)', '2026-04-02T06:00:00Z', ['2026-03-04', '2026-03-05', '2026-03-06', '2026-03-07']);
+    await withRetry('append H1', (s) => appendRows(PARAM_ID, H1, 'context(channel:google).window(-30d:)', '2026-04-02T06:00:00Z', ['2026-03-04', '2026-03-05', '2026-03-06', '2026-03-07'], s));
     // Epoch B: H1' on days 7-8
-    await appendRows(PARAM_ID, H1_PRIME, 'context(channel:google).window(-30d:)', '2026-04-02T09:00:00Z', ['2026-03-07', '2026-03-08']);
+    await withRetry('append H1prime', (s) => appendRows(PARAM_ID, H1_PRIME, 'context(channel:google).window(-30d:)', '2026-04-02T09:00:00Z', ['2026-03-07', '2026-03-08'], s));
 
     // Epoch C: H2 on days 8-10
-    await appendRows(PARAM_ID, H2, 'context(geo:UK).window(-30d:)', '2026-04-03T06:00:00Z', ['2026-03-08', '2026-03-09', '2026-03-10']);
+    await withRetry('append H2', (s) => appendRows(PARAM_ID, H2, 'context(geo:UK).window(-30d:)', '2026-04-03T06:00:00Z', ['2026-03-08', '2026-03-09', '2026-03-10'], s));
 
     ready = true;
   });

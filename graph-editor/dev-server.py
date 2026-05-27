@@ -6,6 +6,7 @@ This simulates Vercel's serverless Python functions for local development.
 Run: python dev-server.py
 """
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 import sys
 import os
@@ -135,7 +136,7 @@ async def snapshots_query(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_query
-        return handle_snapshots_query(data)
+        return await run_in_threadpool(handle_snapshots_query, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -152,7 +153,7 @@ async def snapshots_delete_test(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_delete_test
-        return handle_snapshots_delete_test(data)
+        return await run_in_threadpool(handle_snapshots_delete_test, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -169,7 +170,7 @@ async def snapshots_inventory(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_inventory
-        return handle_snapshots_inventory(data)
+        return await run_in_threadpool(handle_snapshots_inventory, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -186,7 +187,7 @@ async def snapshots_batch_retrieval_days(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_batch_retrieval_days
-        return handle_snapshots_batch_retrieval_days(data)
+        return await run_in_threadpool(handle_snapshots_batch_retrieval_days, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -203,7 +204,7 @@ async def snapshots_batch_anchor_coverage(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_batch_anchor_coverage
-        return handle_snapshots_batch_anchor_coverage(data)
+        return await run_in_threadpool(handle_snapshots_batch_anchor_coverage, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -220,7 +221,7 @@ async def snapshots_batch_retrievals(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_batch_retrievals
-        return handle_snapshots_batch_retrievals(data)
+        return await run_in_threadpool(handle_snapshots_batch_retrievals, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -237,7 +238,7 @@ async def snapshots_retrievals(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_retrievals
-        return handle_snapshots_retrievals(data)
+        return await run_in_threadpool(handle_snapshots_retrievals, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -254,7 +255,7 @@ async def snapshots_delete(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_delete
-        return handle_snapshots_delete(data)
+        return await run_in_threadpool(handle_snapshots_delete, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -271,7 +272,7 @@ async def snapshots_query_full(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_query_full
-        return handle_snapshots_query_full(data)
+        return await run_in_threadpool(handle_snapshots_query_full, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -288,7 +289,7 @@ async def snapshots_query_virtual(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_query_virtual
-        return handle_snapshots_query_virtual(data)
+        return await run_in_threadpool(handle_snapshots_query_virtual, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -323,7 +324,7 @@ async def snapshots_append(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_snapshots_append
-        return handle_snapshots_append(data)
+        return await run_in_threadpool(handle_snapshots_append, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -343,7 +344,7 @@ async def sigs_list(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_sigs_list
-        return handle_sigs_list(data)
+        return await run_in_threadpool(handle_sigs_list, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -358,7 +359,7 @@ async def sigs_get(request: Request):
     try:
         data = await request.json()
         from api_handlers import handle_sigs_get
-        return handle_sigs_get(data)
+        return await run_in_threadpool(handle_sigs_get, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

@@ -58,7 +58,7 @@ def _base_provider_from_kernels(
 ):
     """Return a kernel-provider exposing ``batched_op`` so the test can
     declare ``DPExecutionPolicy.TOEPLITZ_APPLY`` — the production
-    strategy ``model_span_spine._project_frontier_shadow_surfaces``
+    strategy ``model_span_spine._project_frontier_continuation_surfaces``
     uses. The provider also exposes the FC scalar contract
     ``(ce, source_index, source_basis) -> (kernel, out_basis)`` for
     legacy direct calls (the canonical core's SCALAR path is not used

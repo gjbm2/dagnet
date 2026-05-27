@@ -723,7 +723,7 @@ Display semantics, three-state trichotomy, coverage definition, alpha-on-blobs i
 
 ## Appendix A — Under review: discretisation kernel construction
 
-**Status**: UNDER REVIEW. Opened 15-May-26 during the selected-Cohort cutover plan derivation ([selected-cohort-projection-cutover-plan.md](selected-cohort-projection-cutover-plan.md) Stage 2 reasoning block). Not yet resolved; the cutover blocks here until this appendix closes.
+**Status**: UNDER REVIEW. Opened 15-May-26 during the selected-Cohort cutover plan derivation ([selected-cohort-projection-cutover-plan.md](../../archive/project-generalise/selected-cohort-projection-cutover-plan.md) Stage 2 reasoning block). Not yet resolved; the cutover blocks here until this appendix closes.
 
 **Scope**: this appendix governs **continuous model timing kernels**: conditioned primitives, unconditioned model overlays, carrier spans, subject spans, and prefix-arrival maps when their timing comes from a continuous latency CDF. It does not apply a midpoint or quadrature correction to empirical evidence rows. Snapshot evidence rows are already calendar-bucket observations.
 

@@ -120,11 +120,12 @@ historical. Resolve them under this folder:
 ## Picking this up later
 
 1. Read [model-first-strict-span-cutover-plan-13-May-26.md](model-first-strict-span-cutover-plan-13-May-26.md)
-   first for the strict execution sequence, then
-   [selected-cohort-projection-cutover-plan.md](selected-cohort-projection-cutover-plan.md)
-   for the remaining selected-Cohort row cutover. The latter is the clean
-   implementation plan for moving from the promoted spine to a completed
-   refactored row flow without recreating mode-sliced reducer branches.
+   first for the strict execution sequence. The selected-Cohort row cutover
+   that followed it is **complete (27-May-26)** and archived at
+   [../../archive/project-generalise/selected-cohort-projection-cutover-plan.md](../../archive/project-generalise/selected-cohort-projection-cutover-plan.md):
+   the mode-blind `model_span_spine.project_selected_cohort_rows` reducer
+   replaced the legacy mode-sliced row machinery in production, with no
+   recreated reducer branches.
 2. Treat the candidate artefacts below as historical context. The promoted
    production core now lives under `graph-editor/lib/runner/`; do not resume
    work from the candidate files.

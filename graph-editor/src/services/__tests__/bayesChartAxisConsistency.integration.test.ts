@@ -158,6 +158,7 @@ async function isBEAvailable(): Promise<boolean> {
     const tid = setTimeout(() => controller.abort(), 1000);
     try {
       const resp = await undiciFetch(`${PYTHON_BASE_URL}/`, { signal: controller.signal });
+      await resp.text();  // drain to release the socket
       return resp.ok;
     } finally {
       clearTimeout(tid);

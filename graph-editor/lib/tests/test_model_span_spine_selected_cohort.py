@@ -1,6 +1,6 @@
 """Atom 2.4 blind algebraic tests for ``project_selected_cohort_rows``.
 
-Plan: docs/current/project-generalise/selected-cohort-projection-cutover-plan.md
+Plan: docs/archive/project-generalise/selected-cohort-projection-cutover-plan.md
 §"Atom 2.4 — Blind algebraic tests".
 
 Scope: core invariants the reducer must preserve — shape contract,
@@ -666,15 +666,15 @@ def test_window_multihop_empirical_readout_uses_same_window_local_lookup():
         composed_subject_predictive=subject,
         composed_empirical_carrier=ec,
         composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30}],
+        selected_cohorts=[{'anchor_day': '2026-03-15', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
 
-    assert projection.evidence_y_strict_by_anchor_tau[0][1] == pytest.approx(
+    assert projection.evidence_y_strict_by_anchor_tau['2026-03-15'][1] == pytest.approx(
         1.0,
         abs=1e-10,
     )
-    assert projection.evidence_y_strict_by_anchor_tau[0][1] != pytest.approx(
+    assert projection.evidence_y_strict_by_anchor_tau['2026-03-15'][1] != pytest.approx(
         9.0,
         abs=1e-10,
     )
@@ -703,20 +703,20 @@ def test_projection_shapes_match_horizon_and_draw_count():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
     T = _HORIZON + 1
     assert isinstance(projection, SelectedCohortRowProjection)
-    assert projection.rate_draws_spliced.shape == (_DRAW_COUNT, T)
-    assert projection.x_draws_spliced.shape == (_DRAW_COUNT, T)
-    assert projection.y_draws_spliced.shape == (_DRAW_COUNT, T)
+    assert projection.ef_rate_draws.shape == (_DRAW_COUNT, T)
+    assert projection.ef_x_draws.shape == (_DRAW_COUNT, T)
+    assert projection.ef_y_draws.shape == (_DRAW_COUNT, T)
     assert projection.applicability_row.shape == (T,)
     assert projection.applicable_cohort_count.shape == (T,)
-    assert projection.evidence_x_strict_by_anchor_tau[0].shape == (T,)
-    assert projection.evidence_y_strict_by_anchor_tau[0].shape == (T,)
+    assert projection.evidence_x_strict_by_anchor_tau['2026-03-15'].shape == (T,)
+    assert projection.evidence_y_strict_by_anchor_tau['2026-03-15'].shape == (T,)
 
 
 # ─── Identity-carrier (window mode) degeneracy ──────────────────────
@@ -740,14 +740,14 @@ def test_identity_carrier_window_x_draws_equal_cohort_size_at_all_tau():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
-    # x_draws_spliced is cumulative — for an identity carrier at τ=0 the
+    # ef_x_draws is cumulative — for an identity carrier at τ=0 the
     # cohort is fully at X; the cumulative stays at N for every τ.
-    np.testing.assert_allclose(projection.x_draws_spliced, N, atol=1e-10)
+    np.testing.assert_allclose(projection.ef_x_draws, N, atol=1e-10)
 
 
 # ─── Single-hop strict evidence saturation ──────────────────────────
@@ -783,12 +783,12 @@ def test_strict_evidence_y_single_hop_matches_observed_k():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': float(n), 'N_pop': float(n), 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': float(n), 'N_pop': float(n), 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
-    strict_y = projection.evidence_y_strict_by_anchor_tau[0]
+    strict_y = projection.evidence_y_strict_by_anchor_tau['2026-03-15']
     # Bucket-K midpoint placement starts moving half the observed mass in
     # the bucket immediately before the endpoint observation.
     assert strict_y[0] == pytest.approx(0.0, abs=1e-12)
@@ -814,13 +814,13 @@ def test_strict_evidence_x_window_mode_equals_cohort_size():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
     np.testing.assert_allclose(
-        projection.evidence_x_strict_by_anchor_tau[0],
+        projection.evidence_x_strict_by_anchor_tau['2026-03-15'],
         N,
         atol=1e-10,
     )
@@ -842,7 +842,7 @@ def test_model_and_empirical_y_surfaces_can_disagree():
     prior is strong; the empirical kernel will read exactly 0.1. The
     saturation gap is large enough to detect.
 
-    Per FC plan Atom 1: ``y_draws_spliced`` is the *spliced* E+F surface,
+    Per FC plan Atom 1: ``ef_y_draws`` is the production E+F surface,
     so at saturation under no ``tau_observed`` clamp it inherits the
     strict empirical numerator. The pure conditioned model surface
     lives on ``f_y_draws`` (unspliced); this is what disagreement is
@@ -910,14 +910,14 @@ def test_model_and_empirical_y_surfaces_can_disagree():
         composed_empirical_carrier=composed_empirical_carrier,
         composed_empirical_subject=composed_empirical_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
     model_y_at_saturation = float(projection.f_y_draws[:, -1].mean())
     empirical_y_at_saturation = float(
-        projection.evidence_y_strict_by_anchor_tau[0][-1]
+        projection.evidence_y_strict_by_anchor_tau['2026-03-15'][-1]
     )
 
     # Empirical saturation: N × k/n = 20 × 0.1 = 2.0 (exact).
@@ -931,25 +931,32 @@ def test_model_and_empirical_y_surfaces_can_disagree():
     assert abs(model_y_at_saturation - empirical_y_at_saturation) > 5.0
 
 
-def test_f_surface_is_unspliced_while_model_surface_is_spliced():
-    """FC plan Atom 1 contract: ``f_x_draws`` / ``f_y_draws`` /
-    ``f_rate_draws`` snapshot the cross-Cohort conditioned model
-    surface *before* the per-Cohort strict-prefix splice that produces
-    ``x_draws_spliced`` / ``y_draws_spliced`` / ``rate_draws_spliced``.
+def test_f_surface_is_unspliced_while_ef_surface_is_prefix_pinned():
+    """FC plan contract: ``f_x_draws`` / ``f_y_draws`` / ``f_rate_draws``
+    snapshot the cross-Cohort conditioned model surface (unspliced),
+    while the production E+F surface ``ef_x_draws`` / ``ef_y_draws`` /
+    ``ef_rate_draws`` is prefix-pinned to strict evidence through each
+    Cohort's frontier.
 
     Pin: with a Cohort whose ``tau_observed`` is strictly less than
     ``tau_max`` and a model surface that visibly disagrees with the
     strict empirical surface,
 
-    - within ``[0, tau_observed]``: ``x_draws_spliced`` / ``y_draws_spliced``
+    - within ``[0, tau_observed]``: ``ef_x_draws`` / ``ef_y_draws``
       equal the per-particle broadcast of the cumulative strict
-      empirical (the splice landed), while ``f_x_draws`` / ``f_y_draws``
+      empirical (prefix-pinned), while ``f_x_draws`` / ``f_y_draws``
       differ;
-    - within ``(tau_observed, tau_max]``: both surfaces agree (no
-      splice past the frontier).
+    - within ``(tau_observed, tau_max]``: the surfaces SEPARATE on the
+      subject leg — ``f_y_draws`` carries the unspliced conditioned
+      model (p ≈ 0.8) and rises well above ``ef_y_draws``, which
+      continues from the strict-empirical prefix endpoint (p ≈ 0.1).
+      The carrier here is an identity span with no post-frontier
+      support, so both ``x`` surfaces stay pinned at ``N`` and the FC
+      continuation adds no further subject mass — ``ef_y_draws`` holds
+      at its frontier value while ``f_y_draws`` does not.
 
-    This is the load-bearing separation Atom 1 introduces; F mode
-    consumes ``f_*`` and E+F mode consumes ``*_draws_model``.
+    This is the load-bearing separation the cutover introduces: F mode
+    consumes ``f_*`` and E+F mode consumes ``ef_*``.
     """
     n_obs = 20
     k_obs = 2
@@ -1014,7 +1021,7 @@ def test_f_surface_is_unspliced_while_model_surface_is_spliced():
         composed_empirical_subject=composed_empirical_subject,
         selected_cohorts=[
             {
-                'anchor_day': 0,
+                'anchor_day': '2026-03-15',
                 'N_anchor': N,
                 'N_pop': N,
                 'tau_max': _HORIZON,
@@ -1024,14 +1031,14 @@ def test_f_surface_is_unspliced_while_model_surface_is_spliced():
         horizon=_HORIZON,
     )
 
-    strict_y = projection.evidence_y_strict_by_anchor_tau[0]
-    strict_x = projection.evidence_x_strict_by_anchor_tau[0]
+    strict_y = projection.evidence_y_strict_by_anchor_tau['2026-03-15']
+    strict_x = projection.evidence_x_strict_by_anchor_tau['2026-03-15']
 
     # Within the spliced prefix [0, tau_observed], every particle of
     # the spliced surface equals the strict empirical cumulative.
     for tau in range(tau_observed + 1):
-        spliced_y_at_tau = projection.y_draws_spliced[:, tau]
-        spliced_x_at_tau = projection.x_draws_spliced[:, tau]
+        spliced_y_at_tau = projection.ef_y_draws[:, tau]
+        spliced_x_at_tau = projection.ef_x_draws[:, tau]
         assert np.allclose(spliced_y_at_tau, strict_y[tau])
         assert np.allclose(spliced_x_at_tau, strict_x[tau])
 
@@ -1049,17 +1056,21 @@ def test_f_surface_is_unspliced_while_model_surface_is_spliced():
     # composed-span timing; require a margin that excludes coincidence.
     assert f_y_mean_at_obs > empirical_y_at_obs + 1.0
 
-    # Past the splice frontier (τ > tau_observed), the spliced and
-    # unspliced surfaces coincide — no second splice.
+    # Past the frontier (τ > tau_observed) the two surfaces SEPARATE on
+    # the subject leg. ``ef_y`` continues from the strict-empirical
+    # prefix endpoint; with an identity carrier and no post-frontier
+    # subject support the FC continuation adds nothing, so ``ef_y``
+    # holds at its frontier value while ``f_y`` carries the unspliced
+    # model well above it. The identity carrier keeps both ``x``
+    # surfaces pinned at ``N``, so those still coincide.
     for tau in range(tau_observed + 1, _HORIZON + 1):
         assert np.allclose(
-            projection.y_draws_spliced[:, tau],
-            projection.f_y_draws[:, tau],
-        )
-        assert np.allclose(
-            projection.x_draws_spliced[:, tau],
+            projection.ef_x_draws[:, tau],
             projection.f_x_draws[:, tau],
         )
+        ef_y_mean = float(projection.ef_y_draws[:, tau].mean())
+        f_y_mean = float(projection.f_y_draws[:, tau].mean())
+        assert f_y_mean > ef_y_mean + 1.0
 
 
 # ─── Per-anchor decomposition ────────────────────────────────────────
@@ -1087,7 +1098,7 @@ def test_two_anchor_aggregation_sums_model_surfaces():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 1.0, 'N_pop': 1.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 1.0, 'N_pop': 1.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1099,25 +1110,28 @@ def test_two_anchor_aggregation_sums_model_surfaces():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 3.0, 'N_pop': 3.0, 'tau_max': 30, 'tau_observed': 30},
-            {'anchor_day': 7, 'N_anchor': 5.0, 'N_pop': 5.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 3.0, 'N_pop': 3.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 5.0, 'N_pop': 5.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
 
-    # x_draws_spliced at unit cohort × 8 total = pair aggregated x_draws.
+    # ef_x_draws at unit cohort × 8 total = pair aggregated x_draws.
     np.testing.assert_allclose(
-        proj_pair.x_draws_spliced,
-        8.0 * proj_single.x_draws_spliced,
+        proj_pair.ef_x_draws,
+        8.0 * proj_single.ef_x_draws,
         rtol=1e-10,
     )
     np.testing.assert_allclose(
-        proj_pair.y_draws_spliced,
-        8.0 * proj_single.y_draws_spliced,
+        proj_pair.ef_y_draws,
+        8.0 * proj_single.ef_y_draws,
         rtol=1e-10,
     )
-    # Two anchors in the by_anchor maps.
-    assert set(proj_pair.evidence_x_strict_by_anchor_tau) == {0, 7}
+    # Both cohorts share one anchor day, so the by_anchor map carries a
+    # single key. The aggregation property under test is N-linearity of the
+    # aggregate surface (3 + 5 = 8× the unit cohort), which is independent
+    # of how many distinct anchors contribute.
+    assert set(proj_pair.evidence_x_strict_by_anchor_tau) == {'2026-03-15'}
 
 
 # ─── Mode-blindness: no internal mode branching ──────────────────────
@@ -1144,7 +1158,7 @@ def test_reducer_is_mode_blind_against_a_mode_field():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1157,7 +1171,7 @@ def test_reducer_is_mode_blind_against_a_mode_field():
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
             {
-                'anchor_day': 0,
+                'anchor_day': '2026-03-15',
                 'N_anchor': 10.0,
                 'N_pop': 10.0,
                 'tau_max': 30,
@@ -1172,18 +1186,18 @@ def test_reducer_is_mode_blind_against_a_mode_field():
         horizon=_HORIZON,
     )
 
-    np.testing.assert_array_equal(clean.x_draws_spliced, noisy.x_draws_spliced)
-    np.testing.assert_array_equal(clean.y_draws_spliced, noisy.y_draws_spliced)
+    np.testing.assert_array_equal(clean.ef_x_draws, noisy.ef_x_draws)
+    np.testing.assert_array_equal(clean.ef_y_draws, noisy.ef_y_draws)
     np.testing.assert_array_equal(
-        clean.evidence_y_strict_by_anchor_tau[0],
-        noisy.evidence_y_strict_by_anchor_tau[0],
+        clean.evidence_y_strict_by_anchor_tau['2026-03-15'],
+        noisy.evidence_y_strict_by_anchor_tau['2026-03-15'],
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Stage 2(b) — Phase 6 §6.1 / §6.2 / §5.6 invariant battery
 #
-# Plan: docs/current/project-generalise/selected-cohort-projection-cutover-plan.md
+# Plan: docs/archive/project-generalise/selected-cohort-projection-cutover-plan.md
 # §"Stage 2(b) — outstanding work" + the original Atom 2.4 spec.
 # Contract: strict empirical evidence remains observed k/n on the selected
 # clock while model surfaces remain conditioned value projections.
@@ -1239,8 +1253,8 @@ def test_phase6_inv1_saturation_conservation_single_hop_with_latency():
 
     Setup: prior `Beta(4, 6)` (mean 0.4), σ = 0.8, N = 100. Expected
     f_y_draws.mean at horizon ≈ 100 × 0.4 = 40. `f_y_draws` is the
-    unspliced conditioned model surface; `y_draws_spliced` is the spliced
-    E+F surface after Atom 1.
+    unspliced conditioned model surface; `ef_y_draws` is the production
+    E+F surface (FC continuation).
     """
     carrier, subject, emp_carrier, emp_subject = _build_window_mode_spans(
         candidates_xy=(),
@@ -1255,7 +1269,7 @@ def test_phase6_inv1_saturation_conservation_single_hop_with_latency():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1287,7 +1301,7 @@ def test_phase6_inv1_saturation_conservation_multihop():
         composed_empirical_carrier=emp_carrier,
         composed_empirical_subject=emp_subject,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1308,33 +1322,43 @@ def test_phase6_inv4_time_shift_invariance_in_anchor_day():
     anchor-relative τ axis is preserved in the by_anchor_tau maps).
 
     Setup: single-hop, σ=0 (so the empirical kernel is exactly the
-    per-edge Δrate at integer ages). Cohort of N=10 with anchor=0 vs
-    anchor=5 against the same admitted candidate; the per-anchor τ
-    output is identical (the by_anchor map already factors out the
-    anchor offset — both should saturate at the same value at τ=k=7).
+    per-edge Δrate at integer ages). origin = anchor_day, so a genuine
+    time-shift shifts BOTH the anchor and the admitted evidence by k=5
+    days; the anchor-relative τ output is then identical between the two
+    cohorts (each saturates at the same value at age=7). Sharing one
+    evidence span across two anchors would not be invariant — it only
+    looked invariant under the deleted origin = min(source_day) fallback,
+    which ignored the anchor entirely.
     """
-    candidate = _candidate(
+    candidate_0 = _candidate(
         from_id='X', to_id='Y', observed_date='2026-03-15',
         retrieved_at='2026-03-22', n=10, k=4,  # age 7
     )
-    carrier, subject, ec, es = _build_window_mode_spans(
-        candidates_xy=(candidate,),
+    carrier_0, subject_0, ec_0, es_0 = _build_window_mode_spans(
+        candidates_xy=(candidate_0,),
+    )
+    candidate_5 = _candidate(
+        from_id='X', to_id='Y', observed_date='2026-03-20',
+        retrieved_at='2026-03-27', n=10, k=4,  # age 7, shifted +5 days
+    )
+    carrier_5, subject_5, ec_5, es_5 = _build_window_mode_spans(
+        candidates_xy=(candidate_5,),
     )
     proj_0 = project_selected_cohort_rows(
-        composed_carrier=carrier, composed_subject=subject,
-        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
-        composed_empirical_carrier=ec, composed_empirical_subject=es,
+        composed_carrier=carrier_0, composed_subject=subject_0,
+        composed_carrier_predictive=carrier_0, composed_subject_predictive=subject_0,
+        composed_empirical_carrier=ec_0, composed_empirical_subject=es_0,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
     proj_5 = project_selected_cohort_rows(
-        composed_carrier=carrier, composed_subject=subject,
-        composed_carrier_predictive=carrier, composed_subject_predictive=subject,
-        composed_empirical_carrier=ec, composed_empirical_subject=es,
+        composed_carrier=carrier_5, composed_subject=subject_5,
+        composed_carrier_predictive=carrier_5, composed_subject_predictive=subject_5,
+        composed_empirical_carrier=ec_5, composed_empirical_subject=es_5,
         selected_cohorts=[
-            {'anchor_day': 5, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-20', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1342,8 +1366,8 @@ def test_phase6_inv4_time_shift_invariance_in_anchor_day():
     # output appears under the new key. Empirical strict-Y as a
     # function of anchor-relative τ is invariant under anchor shift.
     np.testing.assert_allclose(
-        proj_0.evidence_y_strict_by_anchor_tau[0],
-        proj_5.evidence_y_strict_by_anchor_tau[5],
+        proj_0.evidence_y_strict_by_anchor_tau['2026-03-15'],
+        proj_5.evidence_y_strict_by_anchor_tau['2026-03-20'],
         atol=1e-10,
     )
 
@@ -1375,7 +1399,7 @@ def test_phase6_inv6_dirac_edge_collapses_to_one_edge_reach():
         composed_empirical_carrier=ec_mh,
         composed_empirical_subject=es_mh,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1388,10 +1412,10 @@ def test_phase6_inv6_dirac_edge_collapses_to_one_edge_reach():
     assert abs(y_mh_at_sat - expected_product) / expected_product < 0.15
 
 
-def test_phase6_inv9_y_draws_spliced_is_cumulative_only():
+def test_phase6_inv9_ef_y_draws_is_cumulative_only():
     """Phase 6 §6.1 invariant 9 — cumulative-vs-incremental boundary.
 
-    ``y_draws_spliced`` is the terminal cumulative; per draw it must be
+    ``ef_y_draws`` is the terminal cumulative; per draw it must be
     monotone non-decreasing in τ. A violation would surface the
     previous attempt's 1-day-shift signature (where internal cumulative
     accumulation leaked through to the reducer).
@@ -1410,15 +1434,15 @@ def test_phase6_inv9_y_draws_spliced_is_cumulative_only():
         composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 50.0, 'N_pop': 50.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 50.0, 'N_pop': 50.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
-    diffs = np.diff(proj.y_draws_spliced, axis=-1)
+    diffs = np.diff(proj.ef_y_draws, axis=-1)
     # Per-(draw, τ) increment must be non-negative.
     assert np.all(diffs >= -1e-12)
     # Same property for the empirical strict cumulative.
-    strict = proj.evidence_y_strict_by_anchor_tau[0]
+    strict = proj.evidence_y_strict_by_anchor_tau['2026-03-15']
     strict_diffs = np.diff(strict)
     assert np.all(strict_diffs >= -1e-12)
 
@@ -1444,13 +1468,13 @@ def test_phase6_inv11_empirical_covered_zero_keeps_strict_y_at_zero():
         composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
     # Covered-zero: empirical strict Y is identically 0 across τ.
     np.testing.assert_allclose(
-        proj.evidence_y_strict_by_anchor_tau[0], 0.0, atol=1e-12,
+        proj.evidence_y_strict_by_anchor_tau['2026-03-15'], 0.0, atol=1e-12,
     )
 
 
@@ -1480,10 +1504,10 @@ def test_phase6_w1_single_edge_window_strict_matches_local_kn():
         composed_carrier=carrier, composed_subject=subject,
         composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30}],
+        selected_cohorts=[{'anchor_day': '2026-03-15', 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
-    strict_y = proj.evidence_y_strict_by_anchor_tau[0]
+    strict_y = proj.evidence_y_strict_by_anchor_tau['2026-03-15']
     # Empirical Y at saturation = N × k/n.
     expected = N * (k / n)
     assert strict_y[-1] == pytest.approx(expected, abs=1e-10)
@@ -1523,7 +1547,7 @@ def test_phase6_w2_multihop_strict_at_saturation_equals_rate_product():
         composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1533,7 +1557,7 @@ def test_phase6_w2_multihop_strict_at_saturation_equals_rate_product():
     # rate-product because the cumulative integrates an empirical kernel
     # whose ages are quantised. The saturation cell is unaffected.
     expected = 10.0 * 0.5 * 0.4
-    strict_at_sat = float(proj.evidence_y_strict_by_anchor_tau[0][-1])
+    strict_at_sat = float(proj.evidence_y_strict_by_anchor_tau['2026-03-15'][-1])
     assert strict_at_sat == pytest.approx(expected, abs=1e-10)
 
 
@@ -1580,7 +1604,7 @@ def test_phase6_w4_window_local_rate_reproduction_no_cross_evidence_folding():
         composed_empirical_carrier=spans_low[2],
         composed_empirical_subject=spans_low[3],
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1591,7 +1615,7 @@ def test_phase6_w4_window_local_rate_reproduction_no_cross_evidence_folding():
         composed_empirical_carrier=spans_high[2],
         composed_empirical_subject=spans_high[3],
         selected_cohorts=[
-            {'anchor_day': 0, 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
+            {'anchor_day': '2026-03-15', 'N_anchor': 10.0, 'N_pop': 10.0, 'tau_max': 30, 'tau_observed': 30},
         ],
         horizon=_HORIZON,
     )
@@ -1599,8 +1623,8 @@ def test_phase6_w4_window_local_rate_reproduction_no_cross_evidence_folding():
     # high: 10 × 0.6 × 0.4 = 2.4
     # Ratio at saturation = (0.6/0.2) = 3.0. Local k/n alteration on X→Y
     # changes the product by exactly that factor — Y→Z is unchanged.
-    low_y = float(proj_low.evidence_y_strict_by_anchor_tau[0][-1])
-    high_y = float(proj_high.evidence_y_strict_by_anchor_tau[0][-1])
+    low_y = float(proj_low.evidence_y_strict_by_anchor_tau['2026-03-15'][-1])
+    high_y = float(proj_high.evidence_y_strict_by_anchor_tau['2026-03-15'][-1])
     assert low_y == pytest.approx(0.8, abs=1e-10)
     assert high_y == pytest.approx(2.4, abs=1e-10)
     assert high_y / low_y == pytest.approx(3.0, abs=1e-10)
@@ -1614,7 +1638,7 @@ def test_same_data_parity_rich_evidence_model_approaches_empirical_at_saturation
 
     With rich evidence and a good parametric fit (α, β proportional to
     k_obs, n_obs−k_obs), the conditioned posterior closely matches the
-    empirical rate. At saturation, ``y_draws_spliced.mean()`` and
+    empirical rate. At saturation, ``ef_y_draws.mean()`` and
     ``evidence_y_strict_by_anchor_tau[anchor][-1]`` agree within
     sampling noise — proving the two surfaces converge at the limit
     even though they're separate operator families.
@@ -1643,11 +1667,11 @@ def test_same_data_parity_rich_evidence_model_approaches_empirical_at_saturation
         composed_carrier=carrier, composed_subject=subject,
         composed_carrier_predictive=carrier, composed_subject_predictive=subject,
         composed_empirical_carrier=ec, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30}],
+        selected_cohorts=[{'anchor_day': '2026-03-15', 'N_anchor': N, 'N_pop': N, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
-    model_y = float(proj.y_draws_spliced.mean(axis=0)[-1])
-    empirical_y = float(proj.evidence_y_strict_by_anchor_tau[0][-1])
+    model_y = float(proj.ef_y_draws.mean(axis=0)[-1])
+    empirical_y = float(proj.evidence_y_strict_by_anchor_tau['2026-03-15'][-1])
     # Empirical saturation: N × k/n = 100 × 0.3 = 30.
     assert empirical_y == pytest.approx(30.0, abs=1e-9)
     # Model: posterior mean ≈ (31 + 30) / (31 + 71 + 100) ≈ 0.302.
@@ -2003,24 +2027,24 @@ def test_phase6_inv5_identity_carrier_degeneracy_across_constructions():
         composed_carrier=carrier_A, composed_subject=subject,
         composed_carrier_predictive=carrier_A, composed_subject_predictive=subject,
         composed_empirical_carrier=ec_A, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
+        selected_cohorts=[{'anchor_day': '2026-03-15', 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
     proj_B = project_selected_cohort_rows(
         composed_carrier=carrier_B, composed_subject=subject,
         composed_carrier_predictive=carrier_B, composed_subject_predictive=subject,
         composed_empirical_carrier=ec_B, composed_empirical_subject=es,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
+        selected_cohorts=[{'anchor_day': '2026-03-15', 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
-    np.testing.assert_array_equal(proj_A.x_draws_spliced, proj_B.x_draws_spliced)
-    np.testing.assert_array_equal(proj_A.y_draws_spliced, proj_B.y_draws_spliced)
+    np.testing.assert_array_equal(proj_A.ef_x_draws, proj_B.ef_x_draws)
+    np.testing.assert_array_equal(proj_A.ef_y_draws, proj_B.ef_y_draws)
     np.testing.assert_array_equal(
-        proj_A.rate_draws_spliced, proj_B.rate_draws_spliced,
+        proj_A.ef_rate_draws, proj_B.ef_rate_draws,
     )
     np.testing.assert_array_equal(
-        proj_A.evidence_y_strict_by_anchor_tau[0],
-        proj_B.evidence_y_strict_by_anchor_tau[0],
+        proj_A.evidence_y_strict_by_anchor_tau['2026-03-15'],
+        proj_B.evidence_y_strict_by_anchor_tau['2026-03-15'],
     )
 
 
@@ -2218,14 +2242,14 @@ def test_phase6_w3_window_vs_cohort_divergence_at_finite_tau_convergence_at_satu
         composed_carrier=carrier_W, composed_subject=subject_W,
         composed_carrier_predictive=carrier_W, composed_subject_predictive=subject_W,
         composed_empirical_carrier=ec_W, composed_empirical_subject=es_W,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
+        selected_cohorts=[{'anchor_day': '2026-03-15', 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
     proj_C = project_selected_cohort_rows(
         composed_carrier=carrier_W, composed_subject=subject_C,
         composed_carrier_predictive=carrier_W, composed_subject_predictive=subject_C,
         composed_empirical_carrier=ec_W, composed_empirical_subject=es_W,
-        selected_cohorts=[{'anchor_day': 0, 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
+        selected_cohorts=[{'anchor_day': '2026-03-15', 'N_anchor': 100.0, 'N_pop': 100.0, 'tau_max': 30, 'tau_observed': 30}],
         horizon=_HORIZON,
     )
 
@@ -2659,15 +2683,15 @@ def test_shadow_surface_pins_to_strict_evidence_through_frontier():
         composed_empirical_subject=composed_empirical_subject,
         selected_cohorts=[
             {
-                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'anchor_day': '2026-03-15', 'N_anchor': 200.0, 'N_pop': 200.0,
                 'tau_max': _HORIZON, 'tau_observed': tau_observed,
             },
         ],
         horizon=_HORIZON,
     )
 
-    strict_x_cum = projection.evidence_x_strict_by_anchor_tau[0]
-    strict_y_cum = projection.evidence_y_strict_by_anchor_tau[0]
+    strict_x_cum = projection.evidence_x_strict_by_anchor_tau['2026-03-15']
+    strict_y_cum = projection.evidence_y_strict_by_anchor_tau['2026-03-15']
     rate_strict = projection.rate_strict
 
     for tau in range(tau_observed + 1):
@@ -2710,11 +2734,9 @@ def test_fully_observed_cohort_collapses_shadow_to_strict_evidence():
       - Y_draw(τ) = Y_obs(τ) for τ ≤ f → all τ;
       - future_X(τ) = future_Y(τ) = 0 for τ ≤ f → all τ.
 
-    The conditioned-model spliced surface `rate_draws_spliced` also
-    inherits the strict prefix (Atom 1 contract) over the whole
-    horizon when `tau_observed = horizon`. Therefore all three
-    surfaces — `ef_rate_draws`, `rate_draws_spliced`, and `rate_strict`
-    — must agree everywhere, and `ef_forecast_*` must be zero
+    When `tau_observed = horizon` the production FC surface inherits the
+    strict prefix over the whole horizon, so `ef_rate_draws` must agree
+    with `rate_strict` everywhere and `ef_forecast_*` must be zero
     everywhere.
     """
     spans = _build_off_model_window_spans()
@@ -2730,7 +2752,7 @@ def test_fully_observed_cohort_collapses_shadow_to_strict_evidence():
         composed_empirical_subject=composed_empirical_subject,
         selected_cohorts=[
             {
-                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'anchor_day': '2026-03-15', 'N_anchor': 200.0, 'N_pop': 200.0,
                 'tau_max': _HORIZON, 'tau_observed': _HORIZON,
             },
         ],
@@ -2744,11 +2766,6 @@ def test_fully_observed_cohort_collapses_shadow_to_strict_evidence():
             projection.ef_rate_draws[:, tau], rate_strict[tau],
             atol=1e-9, rtol=1e-9,
             err_msg=f"fully-observed: ef_rate ≠ rate_strict at τ={tau}",
-        )
-        np.testing.assert_allclose(
-            projection.rate_draws_spliced[:, tau], rate_strict[tau],
-            atol=1e-9, rtol=1e-9,
-            err_msg=f"fully-observed: rate_draws_spliced ≠ rate_strict at τ={tau}",
         )
 
     # Future residuals are zero everywhere.
@@ -2767,11 +2784,11 @@ def test_off_model_post_frontier_shadow_diverges_from_conditioned_model():
     fundamentally different post-frontier algebra from the spliced
     conditioned-model surface:
 
-      - shadow `ef_*` past the frontier: fixed `X_obs(f)` /
+      - the FC `ef_*` surface past the frontier: fixed `X_obs(f)` /
         `Y_obs(f)` plus future continuation propagated from the
         unresolved empirical occupancy ledger through the residual
         predictive operators (§5.4 second & third bullets);
-      - `rate_draws_spliced` past the frontier: the spliced conditioned
+      - `f_rate_draws` past the frontier: the unspliced conditioned
         model curve, which is the conditioned posterior projection
         without reference to the empirical occupancy ledger.
 
@@ -2809,34 +2826,37 @@ def test_off_model_post_frontier_shadow_diverges_from_conditioned_model():
         composed_empirical_subject=composed_empirical_subject,
         selected_cohorts=[
             {
-                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'anchor_day': '2026-03-15', 'N_anchor': 200.0, 'N_pop': 200.0,
                 'tau_max': _HORIZON, 'tau_observed': tau_observed,
             },
         ],
         horizon=_HORIZON,
     )
 
-    # Within the prefix, both surfaces are pinned to rate_strict, so
-    # ef_rate_draws ≈ rate_draws_spliced (cell-wise) by transitivity.
+    # Within the prefix, ef_rate_draws is pinned to the strict empirical
+    # rate.
+    rate_strict = projection.rate_strict
     for tau in range(tau_observed + 1):
+        if not np.isfinite(rate_strict[tau]):
+            continue
         np.testing.assert_allclose(
             projection.ef_rate_draws[:, tau],
-            projection.rate_draws_spliced[:, tau],
+            rate_strict[tau],
             atol=1e-9, rtol=1e-9,
             err_msg=(
-                f"off-model: ef_rate and rate_draws_spliced disagree at τ={tau} "
-                "(within prefix — both should equal rate_strict)"
+                f"off-model: ef_rate not pinned to rate_strict at τ={tau}"
             ),
         )
 
-    # Past the frontier, the two surfaces are different mathematical
-    # objects (frontier-continuation from empirical occupancy vs
-    # spliced conditioned posterior). Assert at least one
-    # post-frontier cell shows a material disagreement.
+    # Past the frontier, the FC surface and the unspliced conditioned
+    # model are different mathematical objects (frontier-continuation
+    # from empirical occupancy vs conditioned posterior projection).
+    # Assert at least one post-frontier cell shows a material
+    # disagreement.
     post_tau_slice = slice(tau_observed + 1, _HORIZON + 1)
     rate_delta = (
         projection.ef_rate_draws[:, post_tau_slice]
-        - projection.rate_draws_spliced[:, post_tau_slice]
+        - projection.f_rate_draws[:, post_tau_slice]
     )
     max_abs_post = float(np.nanmax(np.abs(rate_delta)))
     # 1% absolute rate gap is well above the prefix-pin tolerance and
@@ -2844,7 +2864,8 @@ def test_off_model_post_frontier_shadow_diverges_from_conditioned_model():
     # If the implementation collapses the two surfaces after the
     # frontier, this delta vanishes.
     assert max_abs_post > 0.01, (
-        "off-model: shadow ef_rate did not diverge from rate_draws_spliced "
+        "off-model: FC ef_rate did not diverge from the conditioned model "
+        "f_rate_draws "
         f"after frontier (max post-frontier rate delta = {max_abs_post:.6f}). "
         "The two surfaces must differ when the empirical prefix is far "
         "from the conditioned model — collapsing them is the regression "
@@ -3103,7 +3124,7 @@ def test_atom5_w1_model_consistent_single_hop_window_witness():
         composed_empirical_subject=es,
         selected_cohorts=[
             {
-                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'anchor_day': '2026-03-08', 'N_anchor': 200.0, 'N_pop': 200.0,
                 'tau_max': _HORIZON, 'tau_observed': tau_observed,
             },
         ],
@@ -3204,7 +3225,7 @@ def test_atom5_w2_model_consistent_multi_hop_window_witness():
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
             {
-                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'anchor_day': '2026-03-08', 'N_anchor': 200.0, 'N_pop': 200.0,
                 'tau_max': _HORIZON, 'tau_observed': tau_observed,
             },
         ],
@@ -3322,7 +3343,7 @@ def test_atom5_w3_model_consistent_cohort_identity_witness():
         composed_empirical_carrier=ec, composed_empirical_subject=es,
         selected_cohorts=[
             {
-                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'anchor_day': '2026-03-08', 'N_anchor': 200.0, 'N_pop': 200.0,
                 'tau_max': _HORIZON, 'tau_observed': tau_observed,
             },
         ],
@@ -3537,7 +3558,7 @@ def test_atom5_w5_off_model_prefix_divergence_witness():
         composed_empirical_subject=composed_empirical_subject,
         selected_cohorts=[
             {
-                'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+                'anchor_day': '2026-03-15', 'N_anchor': 200.0, 'N_pop': 200.0,
                 'tau_max': _HORIZON, 'tau_observed': tau_observed,
             },
         ],
@@ -3646,7 +3667,7 @@ def test_atom5_w6_multi_hop_frontier_state_divergence_witness():
 
     tau_observed = 15
     cohort = {
-        'anchor_day': 0, 'N_anchor': 200.0, 'N_pop': 200.0,
+        'anchor_day': '2026-03-08', 'N_anchor': 200.0, 'N_pop': 200.0,
         'tau_max': _HORIZON, 'tau_observed': tau_observed,
     }
 
@@ -3667,8 +3688,8 @@ def test_atom5_w6_multi_hop_frontier_state_divergence_witness():
     # Sanity: terminal Y at frontier should be similar between fixtures
     # — the test is meaningful only if scalar Y_obs(f) ≈ matches across
     # the two fixtures.
-    strict_y_a_at_f = float(proj_a.evidence_y_strict_by_anchor_tau[0][tau_observed])
-    strict_y_b_at_f = float(proj_b.evidence_y_strict_by_anchor_tau[0][tau_observed])
+    strict_y_a_at_f = float(proj_a.evidence_y_strict_by_anchor_tau['2026-03-08'][tau_observed])
+    strict_y_b_at_f = float(proj_b.evidence_y_strict_by_anchor_tau['2026-03-08'][tau_observed])
     assert abs(strict_y_a_at_f - strict_y_b_at_f) < 1.0, (
         f"W6 sanity: terminal Y(f) differs too much between fixtures "
         f"(A={strict_y_a_at_f:.2f} vs B={strict_y_b_at_f:.2f}); "
@@ -3699,7 +3720,7 @@ def test_atom5_multi_cohort_rows_sum_y_and_x_before_division():
     combined with §5.4 fourth bullet ("For multi-Cohort chart rows,
     sum denominators and numerators across selected Cohorts first,
     then divide once. Do not average per-Cohort rates."): the
-    projection's ef_*, f_*, and rate_draws_spliced surfaces must all
+    projection's ef_*, f_*, and rate_strict surfaces must all
     use the ΣY/ΣX reduction across selected Cohorts, never avg(Y/X).
 
     Test discriminates avg-of-ratios from mass-first by using two
@@ -3816,7 +3837,7 @@ def test_atom5_multi_cohort_rows_sum_y_and_x_before_division():
     # boundary at the observed frontier. Both spliced and FC surfaces are
     # prefix-pinned there, so every draw equals the pooled strict row.
     np.testing.assert_allclose(
-        projection.rate_draws_spliced[:, tau_observed],
+        projection.ef_rate_draws[:, tau_observed],
         expected_pooled,
         atol=1e-9,
     )

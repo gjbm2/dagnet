@@ -672,9 +672,16 @@ def test_v3_empty_frames_window_mode_uses_latency_curve():
     assert by_tau[0]['midpoint'] == pytest.approx(0.0, abs=1e-6)
     assert by_tau[10]['evidence_x'] == 0.0
     assert by_tau[10]['evidence_y'] == 0.0
-    projection_basis = rows[0].get('_projection_basis') or []
-    assert projection_basis
-    assert projection_basis[0]['model_mass_source'] == 'unit_empty_frames_rate_basis'
+    # Empty-frames base mass is the `tau_observed = -1` unit prior. The
+    # spine reducer records this on `_a_pop_provenance` (keyed by anchor
+    # day) — the behaviour-preserving replacement for the legacy
+    # `_projection_basis[*]['model_mass_source']` forensic row field deleted
+    # in the selected-cohort cutover (Stage 4). Window and cohort empty
+    # frames share one unified `empty_frames_prior` base-mass synthesis; the
+    # window/cohort curve difference is downstream (subject-only vs
+    # carrier×subject propagation), not in the base-mass provenance.
+    a_pop_provenance = rows[0].get('_a_pop_provenance') or {}
+    assert a_pop_provenance.get(anchor_day) == 'empty_frames_prior'
     assert by_tau[10]['midpoint'] > by_tau[6]['midpoint'] > by_tau[0]['midpoint']
     assert by_tau[20]['midpoint'] > by_tau[10]['midpoint']
 
@@ -833,9 +840,11 @@ def test_v3_empty_frames_cohort_mode_preserves_upstream_carrier():
     cohort_by_tau = {row['tau_days']: row for row in cohort_rows}
     assert cohort_by_tau[12]['evidence_x'] == 0.0
     assert cohort_by_tau[12]['evidence_y'] == 0.0
-    projection_basis = cohort_rows[0].get('_projection_basis') or []
-    assert projection_basis
-    assert projection_basis[0]['model_mass_source'] == 'empty_frames_prior'
+    # See note in test_v3_empty_frames_window_mode_uses_latency_curve: the
+    # spine records empty-frames base-mass synthesis on `_a_pop_provenance`
+    # (legacy `_projection_basis`/`model_mass_source` removed in Stage 4).
+    a_pop_provenance = cohort_rows[0].get('_a_pop_provenance') or {}
+    assert a_pop_provenance.get(anchor_day) == 'empty_frames_prior'
 
     strong_gaps: List[Tuple[int, float, float]] = []
     for tau in range(8, 21, 2):

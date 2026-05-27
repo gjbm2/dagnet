@@ -1104,28 +1104,17 @@ class SelectedCohortRowProjection:
     - **Frontier-conditioned (FC)** (``ef_x_draws``, ``ef_y_draws``,
       ``ef_rate_draws``) — prefix-pinned to strict evidence through
       each Cohort's ``tau_observed`` then continued from the frontier
-      ledger via the predictive residual operator. Atom 6 will remap
-      the public E+F forecast-layer chart fields to read this surface.
+      ledger via the predictive residual operator. Atom 6 remapped the
+      public E+F forecast-layer chart fields (``midpoint`` / ``fan_*`` /
+      ``forecast_*``) to read this surface.
     - **FC future residuals** (``ef_forecast_x``, ``ef_forecast_y``) —
       direct future-only deltas (``ef_x - strict_x``, ``ef_y - strict_y``)
       emitted by the frontier continuation, not subtracted post-hoc.
-
-    Legacy spliced surfaces (``rate_draws_spliced``, ``x_draws_spliced``,
-    ``y_draws_spliced``) remain during the Atom 5→6 transition. They
-    are the conditioned-model value stream with each Cohort's observed
-    prefix spliced in through its ``tau_observed``. Atom 6 retires the
-    spliced surface in favour of ``ef_*``; until then ``midpoint`` /
-    ``fan_*`` / ``forecast_*`` continue to read ``*_spliced``. The
-    spliced fields are NOT "the model surface" — that name is reserved
-    for ``f_*``.
 
     DP-derived coverage and adjusted evidence outputs are intentionally
     absent. ``applicability_row`` is a simple Cohort applicability
     scalar for display alpha.
     """
-    rate_draws_spliced: np.ndarray       # (S, T) — spliced; y_spliced / x_spliced
-    x_draws_spliced: np.ndarray          # (S, T) — spliced; cumulative
-    y_draws_spliced: np.ndarray          # (S, T) — spliced; cumulative
     f_rate_draws: np.ndarray             # (S, T) — unspliced; f_y / f_x
     f_x_draws: np.ndarray                # (S, T) — unspliced; cumulative
     f_y_draws: np.ndarray                # (S, T) — unspliced; cumulative
@@ -1687,7 +1676,7 @@ def _make_predictive_kernel_provider(
     return provider
 
 
-def _project_frontier_shadow_surfaces(
+def _project_frontier_continuation_surfaces(
     *,
     composed_carrier_predictive: ComposedPrimitiveSpan,
     composed_subject_predictive: ComposedPrimitiveSpan,
@@ -2017,19 +2006,16 @@ def _project_frontier_shadow_surfaces(
     }
 
 
-def _origin_day_for_anchor(anchor_day: Any, span: ComposedPrimitiveSpan) -> date:
-    """Calendar origin for source-day-indexed selected-cohort ledgers."""
-    try:
-        if hasattr(anchor_day, 'isoformat'):
-            return date.fromisoformat(str(anchor_day.isoformat())[:10])
-        return date.fromisoformat(str(anchor_day)[:10])
-    except (TypeError, ValueError):
-        source_days = [
-            date.fromisoformat(str(day)[:10])
-            for _ce, primitive in span.empirical_edge_primitives
-            for day in primitive.value_kernel_draws_by_source_day
-        ]
-        return min(source_days) if source_days else date(1970, 1, 1)
+def _origin_day_for_anchor(anchor_day: Any) -> date:
+    """Calendar origin for source-day-indexed selected-cohort ledgers.
+
+    ``anchor_day`` is a ``date`` or ISO-prefixed string by construction
+    (the cohort-list builder), so it parses directly; a malformed value is
+    an upstream contract breach and must crash, not be substituted.
+    """
+    if hasattr(anchor_day, 'isoformat'):
+        return date.fromisoformat(str(anchor_day.isoformat())[:10])
+    return date.fromisoformat(str(anchor_day)[:10])
 
 
 # AP58 / engine-discipline violation — commented out 2026-05-19.
@@ -2102,7 +2088,7 @@ def project_selected_cohort_rows(
     cohort_count = len(selected_cohorts)
     anchor_days = [cohort['anchor_day'] for cohort in selected_cohorts]
     origin_days = [
-        _origin_day_for_anchor(anchor_day, composed_empirical_subject)
+        _origin_day_for_anchor(anchor_day)
         for anchor_day in anchor_days
     ]
     # Two distinct seed surfaces — branchless engine, semantics carried
@@ -2116,7 +2102,7 @@ def project_selected_cohort_rows(
     #
     #   population_seed_flat (= N_pop at τ=0) feeds the CONDITIONED
     #     MODEL trace AND the FC future-root injection
-    #     (``_project_frontier_shadow_surfaces``). Carries the empty-
+    #     (``_project_frontier_continuation_surfaces``). Carries the empty-
     #     frames unit prior so ``f_*`` and ``ef_*`` surfaces produce the
     #     model curve for cohorts without observed evidence.
     #
@@ -2298,25 +2284,11 @@ def project_selected_cohort_rows(
         #   (`_cell_at_or_before(τ)`) before the spine cutover.
         last_tau_max = min(tau_max_by_anchor[cohort_idx], T - 1)
         last_tau_obs = min(tau_observed_by_anchor[cohort_idx], T - 1)
-        x_model_by_anchor[cohort_idx, :, :last_tau_obs + 1] = strict_x_a[
-            :last_tau_obs + 1
-        ][None, :]
-        y_model_by_anchor[cohort_idx, :, :last_tau_obs + 1] = strict_y_a[
-            :last_tau_obs + 1
-        ][None, :]
         applicable[cohort_idx, :last_tau_obs + 1] = 1.0
         tau_indices = np.arange(T)
         clamped = np.minimum(tau_indices, last_tau_max)
         evidence_x_strict += strict_x_a[clamped]
         evidence_y_strict += strict_y_a[clamped]
-
-    x_draws_spliced = x_model_by_anchor.sum(axis=0)
-    y_draws_spliced = y_model_by_anchor.sum(axis=0)
-    rate_draws_spliced = np.divide(
-        y_draws_spliced, x_draws_spliced,
-        out=np.zeros_like(y_draws_spliced),
-        where=x_draws_spliced > 0.0,
-    )
 
     applicable_cohort_count = applicable.sum(axis=0)
     applicability_row = (
@@ -2330,17 +2302,14 @@ def project_selected_cohort_rows(
         where=evidence_x_strict > 0.0,
     )
 
-    # ─── FC SURFACE (shadow, FC plan Atom 4) ───────────────────────
-    # The shadow ef_* surfaces are produced via the FC continuation
-    # pass: per-Cohort frontier-occupancy ledgers (§9.3) propagated
-    # through residual predictive operators (§9.5) under the
-    # source-ledger DP (§9.6), with future-X arrivals fed into
-    # ordinary subject kernels (§5.4 Pop-C handoff). Atom 4 is
-    # diagnostic-only — production chart fields continue to read
-    # `rate_draws_spliced` and `f_*`. Atom 6 remaps the public forecast
-    # layer to `ef_*` once shadow deltas are reviewed.
-    #
-    shadow = _project_frontier_shadow_surfaces(
+    # ─── FC CONTINUATION SURFACE (production E+F forecast layer) ────
+    # The ef_* surfaces are the production E+F forecast layer (Atom 6):
+    # per-Cohort frontier-occupancy ledgers (§9.3) propagated through
+    # residual predictive operators (§9.5) under the source-ledger DP
+    # (§9.6), with future-X arrivals fed into ordinary subject kernels
+    # (§5.4 Pop-C handoff). `_project_runtime_rows` reads `ef_rate_draws`
+    # for midpoint/fan and `ef_forecast_*` for the residual fields.
+    fc = _project_frontier_continuation_surfaces(
         composed_carrier_predictive=composed_carrier_predictive,
         composed_subject_predictive=composed_subject_predictive,
         emp_x_trace=emp_x_trace,
@@ -2352,37 +2321,7 @@ def project_selected_cohort_rows(
         population_seed=population_seed_flat,
     )
 
-    # Shadow-delta diagnostic vs the current spliced E+F rate surface
-    # (rate_draws_spliced). The spliced surface is the conditioned-
-    # model curve with each Cohort's observed prefix spliced through
-    # its frontier; the FC surface is the frontier-conditioned
-    # continuation from the empirical ledger. They are expected to be
-    # close in shape per FC plan §1.1 risk-control premise, but
-    # algebraically distinct. Reporting the delta sets up Atom 4
-    # acceptance: large unexplained shape deltas block.
-    ef_rate = shadow['ef_rate_draws']
-    rate_delta = ef_rate - rate_draws_spliced
-    abs_delta = np.abs(rate_delta)
-    shadow_delta_summary = {
-        'finite_cell_count': int(np.sum(np.isfinite(rate_delta))),
-        'rate_delta_max_abs': float(np.nanmax(abs_delta)),
-        'rate_delta_mean_abs': float(np.nanmean(abs_delta)),
-        'rate_delta_per_tau_mean_abs': [
-            float(np.nanmean(abs_delta[:, t]))
-            for t in range(abs_delta.shape[1])
-        ],
-        'ef_x_total_at_final_tau_mean': float(
-            np.mean(shadow['ef_x_draws'][:, -1])
-        ),
-        'spliced_x_total_at_final_tau_mean': float(
-            np.mean(x_draws_spliced[:, -1])
-        ),
-    }
-
     return SelectedCohortRowProjection(
-        rate_draws_spliced=rate_draws_spliced,
-        x_draws_spliced=x_draws_spliced,
-        y_draws_spliced=y_draws_spliced,
         f_rate_draws=f_rate_draws,
         f_x_draws=f_x_draws,
         f_y_draws=f_y_draws,
@@ -2393,11 +2332,11 @@ def project_selected_cohort_rows(
         evidence_x_strict=evidence_x_strict,
         evidence_y_strict=evidence_y_strict,
         rate_strict=rate_strict,
-        ef_x_draws=shadow['ef_x_draws'],
-        ef_y_draws=shadow['ef_y_draws'],
-        ef_rate_draws=shadow['ef_rate_draws'],
-        ef_forecast_x=shadow['ef_forecast_x'],
-        ef_forecast_y=shadow['ef_forecast_y'],
+        ef_x_draws=fc['ef_x_draws'],
+        ef_y_draws=fc['ef_y_draws'],
+        ef_rate_draws=fc['ef_rate_draws'],
+        ef_forecast_x=fc['ef_forecast_x'],
+        ef_forecast_y=fc['ef_forecast_y'],
         diagnostics={
             'cohort_count': cohort_count,
             'horizon': int(horizon),
@@ -2412,7 +2351,6 @@ def project_selected_cohort_rows(
             ),
             'empirical_x_trace': _summarise_density_trace(emp_x_trace),
             'empirical_y_trace': _summarise_density_trace(emp_y_trace),
-            'fc_shadow_delta': shadow_delta_summary,
         },
     )
 

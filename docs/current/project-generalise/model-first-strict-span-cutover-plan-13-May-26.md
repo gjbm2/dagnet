@@ -26,7 +26,7 @@ Closure requires the acceptance gate, not just code existing. A phase with one m
 
 ## Progress Ledger
 
-Current status after the 14-May-26 F-mode cutover, **revised 14-May-26 to correct a scoping error**: the original Phase 5 was declared complete too quickly. It cut over only the **unconditioned overlay** model surfaces (predictive bands and the epistemic model curve). The **conditioned forecast composition** — the composed subject⊗carrier request-rooted CDF that drives the actual `rate` row column for E+F and the scalar `completeness` — still runs through the bespoke `_composed_pair_request_cdf_draws` helper. That is also model-span algebra (operator-chain composition over already-resolved primitive surfaces) and was wrongly classified as "out of strict span scope" in the original audit. Phase 5 has therefore been split into 5a (unconditioned overlays — done) and 5b (conditioned forecast composition — not started). The evidence operator contract has since closed the design checkpoint; the remaining reducer cutover is specified in [`selected-cohort-projection-cutover-plan.md`](selected-cohort-projection-cutover-plan.md). That plan is the detailed implementation authority for replacing the legacy selected-prefix / Pop C / Pop D row machinery with one selected-Cohort projection flow.
+Current status after the 14-May-26 F-mode cutover, **revised 14-May-26 to correct a scoping error**: the original Phase 5 was declared complete too quickly. It cut over only the **unconditioned overlay** model surfaces (predictive bands and the epistemic model curve). The **conditioned forecast composition** — the composed subject⊗carrier request-rooted CDF that drives the actual `rate` row column for E+F and the scalar `completeness` — still runs through the bespoke `_composed_pair_request_cdf_draws` helper. That is also model-span algebra (operator-chain composition over already-resolved primitive surfaces) and was wrongly classified as "out of strict span scope" in the original audit. Phase 5 has therefore been split into 5a (unconditioned overlays — done) and 5b (conditioned forecast composition — not started). The evidence operator contract has since closed the design checkpoint; the remaining reducer cutover is specified in [`selected-cohort-projection-cutover-plan.md`](../../archive/project-generalise/selected-cohort-projection-cutover-plan.md). That plan is the detailed implementation authority for replacing the legacy selected-prefix / Pop C / Pop D row machinery with one selected-Cohort projection flow.
 
 | Phase | Status |
 |---|---|
@@ -379,7 +379,7 @@ Acceptance gate:
 
 **Status**: not started.
 
-Detailed implementation authority: [`selected-cohort-projection-cutover-plan.md`](selected-cohort-projection-cutover-plan.md).
+Detailed implementation authority: [`selected-cohort-projection-cutover-plan.md`](../../archive/project-generalise/selected-cohort-projection-cutover-plan.md).
 
 Only after Phase 5.5 and the evidence operator contract are accepted should evidence-span implementation start. Do not begin by editing row projection. Do not migrate `_CarrierOnlyDenominatorPrefix` or `_RateAttributedSubjectPrefix` one role at a time. That reproduces the broken branch: two authorities, old prefix classes kept alive, and mode-specific cutover criteria.
 
@@ -429,7 +429,7 @@ Acceptance gate:
 
 **Status**: not started.
 
-Detailed implementation authority: [`selected-cohort-projection-cutover-plan.md`](selected-cohort-projection-cutover-plan.md).
+Detailed implementation authority: [`selected-cohort-projection-cutover-plan.md`](../../archive/project-generalise/selected-cohort-projection-cutover-plan.md).
 
 Phase 7 makes the Phase 6 projection boundary authoritative for public rows. It is a single row cutover, not a cohort cutover followed by a window cutover. If active, A=X, and window cannot move together through the same projection boundary, Phase 6 is incomplete and this phase must stop.
 

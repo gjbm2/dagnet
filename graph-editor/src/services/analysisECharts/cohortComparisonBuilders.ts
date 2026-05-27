@@ -173,7 +173,6 @@ export function buildCohortMaturityEChartsOption(
     tauDays: number;
     baseRate: number | null;
     projectedRate: number | null;
-    rateBlended: number | null;
     applicableCoverage: number | null;
     midpoint: number | null;
     fanUpper: number | null;
@@ -225,7 +224,6 @@ export function buildCohortMaturityEChartsOption(
       tauDays: tau,
       baseRate: parse(r?.rate),
       projectedRate: parse(r?.projected_rate),
-      rateBlended: parse(r?.rate_blended),
       applicableCoverage: parse(r?.applicable_coverage),
       midpoint: parse(r?.midpoint),
       fanUpper: parse(r?.fan_upper),
@@ -530,9 +528,10 @@ export function buildCohortMaturityEChartsOption(
       //              and bounded at tau_future_max so the evidence layer
       //              is absent in epoch C, where only the forecast layer
       //              remains (GLOSSARY epoch mapping; CF_ROW_PIPELINE §6).
-      //              Mirrors the E-mode bound below. Do not read
-      //              `rate_blended` here — bad coverage can replace the
-      //              evidence display with model values.
+      //              Mirrors the E-mode bound below. The E line reads
+      //              strict `rate` only — never a coverage-weighted blend
+      //              (coverage is display freshness, not evidence
+      //              reweighting; see the cutover plan's Stop conditions).
       //
       //   E+F curve — `midpoint` (per-cohort calibrated E+F surface).
       //              Drawn across all epochs so epoch-A variation is visible.
@@ -560,21 +559,6 @@ export function buildCohortMaturityEChartsOption(
         smooth: true,
       });
       if (sDashedEv) seriesOut.push(sDashedEv);
-
-      const blendedEpochAPts = points
-        .filter(p => p.tauDays <= sSolidMax && p.rateBlended !== null)
-        .map(p => ({ value: [p.tauDays, p.rateBlended] as [number, number | null], ...toMeta(p) }));
-      const sBlendedEpochA = mkLine({
-        id: `${scenarioId}::rateBlendedEpochA`,
-        colour,
-        lineType: 'dashed',
-        opacity: 0.55,
-        data: blendedEpochAPts,
-        showSymbol: false,
-        smooth: true,
-        showInLegend: false,
-      });
-      if (sBlendedEpochA) seriesOut.push(sBlendedEpochA);
 
       // Dotted line (epochs B+C): per-cohort calibrated E+F estimate.
       const midpointPts = points.filter(p => p.tauDays >= sSolidMax && p.midpoint !== null).map(p => ({ value: [p.tauDays, p.midpoint] as [number, number | null], ...toMeta(p) }));

@@ -5,6 +5,15 @@
 **Auditor**: read-only audit; no code modified.
 **Guiding principle (per user)**: *"No fallbacks within the engine — all defense, if any needed, should be at the perimeter. The engine is a mathematical object and should degenerate algebraically."*
 
+> **Status update — 26-May-26 (selected-cohort projection cutover).** The cutover deleted the legacy selected-Cohort row machinery in `cohort_forecast_v3.py` (~4000 lines) and replaced the reducer with `model_span_spine.project_selected_cohort_rows`. Several findings below are thereby **closed** — their code no longer exists, so the `cohort_forecast_v3.py:NNNN` line references in those findings now point into deleted ranges:
+> - **H-1** (monotone-repair clamp) — the `_build_rate_attributed_subject_prefix` builder holding the clamp is deleted; the spine reducer is I-47-clean (no value clamps).
+> - **H-4** (`forecast_y` residual floor) — the FC continuation DP now emits `ef_forecast_y`/`ef_forecast_x` directly; there is no post-hoc `max(0.0, forecast − evidence)` subtraction.
+> - **H-5** (identity-vs-active reducer branching) — the reducer is now mode-blind (`test_reducer_is_mode_blind_against_a_mode_field`); `_synthesize_identity_carrier_observed_surface` and the `is_identity_carrier` branches are deleted.
+> - **M-1** (`try/except` diagnostic swallows) — the swallow sites are deleted.
+> - **F-1** is **partially** addressed: the canonical CF ΣY/ΣX path (`_selected_cohort_group_rate_draws`) is now the single spine reducer, but the `daily_conversions_derivation` / `funnel_engine` / `cohort_maturity_derivation` paths remain separate — the four-path unification is still open.
+>
+> Span-core and Bayes findings (H-2, H-6, H-7, …) are untouched by this cutover. See [`selected-cohort-projection-cutover-plan.md`](../../archive/project-generalise/selected-cohort-projection-cutover-plan.md).
+
 ---
 
 ## 1. Scope & Methodology

@@ -1,6 +1,6 @@
 """Empirical evidence operator — Atom 2.2 focused tests.
 
-Plan: docs/current/project-generalise/selected-cohort-projection-cutover-plan.md
+Plan: docs/archive/project-generalise/selected-cohort-projection-cutover-plan.md
 §"Atom 2.2 — Write the new empirical evidence operator".
 
 These tests pin the operator's per-edge kernel construction and the

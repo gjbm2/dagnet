@@ -162,11 +162,12 @@ function dbParamIdFor(objectId: string): string {
 async function deleteTestSnapshotsByPrefix(prefix: string): Promise<void> {
   // dev-server.py exposes /api/snapshots/delete-test for integration cleanup.
   // Safety: backend requires prefix starts with 'pytest-'.
-  await undiciFetch('http://localhost:9000/api/snapshots/delete-test', {
+  const resp = await undiciFetch('http://localhost:9000/api/snapshots/delete-test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ param_id_prefix: prefix }),
   });
+  await resp.text();  // drain to release the keep-alive socket
 }
 
 async function getInventory(paramIds: string[]): Promise<Record<string, any>> {
@@ -733,11 +734,12 @@ const describeLocal = (!isCi && RUN_REAL_AMPLITUDE_E2E && creds) ? describe : de
 async function isPythonSnapshotApiReachable(): Promise<boolean> {
   try {
     // Any HTTP response means the server is reachable (even 400 for validation errors)
-    await undiciFetch('http://localhost:9000/api/snapshots/inventory', {
+    const resp = await undiciFetch('http://localhost:9000/api/snapshots/inventory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ param_ids: ['test'] }),
     });
+    await resp.text();  // drain to release the socket
     return true;
   } catch {
     return false;
@@ -752,7 +754,8 @@ async function isPythonGraphComputeReachable(): Promise<boolean> {
   const url = `${baseUrl}/api/runner/analyze`;
   try {
     // Minimal reachability check; we only care whether the socket is reachable.
-    await undiciFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const resp = await undiciFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    await resp.text();  // drain to release the socket
     return true;
   } catch {
     return false;

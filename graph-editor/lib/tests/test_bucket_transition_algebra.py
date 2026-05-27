@@ -23,11 +23,6 @@ from runner.bucket_transition import (
     endpoint_cdf_to_transition,
     to_span_operator,
 )
-from runner.cohort_forecast_v3 import (
-    _SelectedSourceDayMass,
-    _SubjectChainEvidenceBuckets,
-    _build_evidence_local_rate_attributed_subject_prefix,
-)
 from runner.primitives import TimingFamily
 from runner.span_kernel import ConcreteEdge
 from runner.subject_span_composer import _conditioned_kernel_maps
@@ -150,57 +145,9 @@ def test_model_kernel_supply_uses_endpoint_differencing_for_model_composition():
     np.testing.assert_allclose(propagated['x->y#0'], bucket_expected)
 
 
-def test_rate_attributed_prefix_uses_bucket_k_without_overshoot():
-    """Step empirical rates use bucket-K midpoint placement without overshoot."""
-
-    anchor_day = '2026-04-01'
-    source_day_0 = '2026-04-01'
-    source_day_1 = '2026-04-02'
-    buckets = _SubjectChainEvidenceBuckets(
-        edge_nk_by_source_day={
-            'x-y': {
-                anchor_day: {
-                    source_day_0: {0: (100.0, 0.0), 1: (100.0, 100.0)},
-                    source_day_1: {0: (100.0, 0.0), 1: (100.0, 100.0)},
-                },
-            },
-        },
-        edge_nk_by_local_source_day={
-            'x-y': {
-                source_day_0: {0: (100.0, 0.0), 1: (100.0, 100.0)},
-                source_day_1: {0: (100.0, 0.0), 1: (100.0, 100.0)},
-            },
-        },
-        topology_edges=(('x', 'y', 'x-y'),),
-    )
-    selected_mass = _SelectedSourceDayMass(
-        by_node={
-            'x': {
-                anchor_day: {
-                    source_day_0: 50.0,
-                    source_day_1: 50.0,
-                },
-            },
-        },
-        endpoint_cdf_by_node={},
-        n_cohort_by_anchor={anchor_day: 100.0},
-        anchor_days=(anchor_day,),
-    )
-
-    prefix = _build_evidence_local_rate_attributed_subject_prefix(
-        buckets=buckets,
-        selected_source_day_mass=selected_mass,
-        anchor_days=(anchor_day,),
-        max_tau=2,
-        denominator_node='x',
-        end_node='y',
-        emit_diagnostics=True,
-    )
-
-    assert prefix is not None
-    # With bucket-K midpoint placement, the source-day-1 mass has only
-    # half-bucket exposure by tau=1: source_day_0 contributes 50 and
-    # source_day_1 contributes 25.
-    assert prefix.cumulative_by_anchor[anchor_day][1] == pytest.approx(75.0)
-    assert 'rate_tau_offset' not in prefix.edge_provenance[0]
-    assert prefix.edge_provenance[0]['rate_surface'] == 'source_day_specific'
+# `test_rate_attributed_prefix_uses_bucket_k_without_overshoot` removed at
+# Stage 4 Atom 4.2: it exercised the deleted `_SelectedSourceDayMass` /
+# `_SubjectChainEvidenceBuckets` / `_build_evidence_local_rate_attributed_subject_prefix`
+# legacy quadrature prefix. Bucket-K placement is now owned by the empirical
+# operator; the live bucket_transition contract is covered by the tests above
+# plus the outside-in oracle.

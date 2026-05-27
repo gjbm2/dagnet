@@ -12,6 +12,8 @@
 
 ---
 
+> **Cutover status (26-May-26).** This design predates the selected-cohort projection cutover; two framing updates apply. (1) The strict observed-evidence object referenced below as `SelectedAClockEvidence` is replaced by the **empirical-evidence operator** (`composed_empirical_subject` / `composed_empirical_carrier`), reduced together with the conditioned/model operator through one DP core in `model_span_spine.project_selected_cohort_rows`. The coverage signal of §2 and its computation are unchanged — it is still derived from `root_day_shares` placement with a per-cohort cap. (2) `coverage` remains a **display freshness/applicability signal only**: it drives per-point symbol opacity (§4), never a rate blend. The legacy `rate_blended = empirical × coverage + model × (1 − coverage)` linear blend and the abandoned `rate_adjusted` / IPW coverage replacement are **not** part of the contract — the displayed rate is strict `Σy/Σx` (§3) plus separate model/forecast surfaces. See [`selected-cohort-projection-cutover-plan.md`](project-generalise/selected-cohort-projection-cutover-plan.md).
+
 ## 1. Problem
 
 The cohort maturity chart's evidence display has two related defects:

@@ -49,6 +49,7 @@ describe('getSnapshotCoverageForEdges parity (zero-mock, real DB)', () => {
     if (!fs.existsSync(GRAPH_PATH)) { console.warn('Graph not found — skipping'); return; }
     try {
       const h = await fetch('http://localhost:9000/api/snapshots/health');
+      await h.text();  // drain to release the socket
       if (!h.ok) throw new Error();
     } catch { console.warn('Python server not available — skipping'); return; }
 
