@@ -230,16 +230,28 @@ class TestBundleAggregateConsistency:
         assert np.any(sp.ef_x_draws_by_cohort > 0.0)
 
 
-class TestApiHandlersDailyConversionsUnchanged:
-    """Static check (Phase 2 "complete when"): the daily-conversions
-    enrichment in api_handlers.py is NOT rewired in Phase 2 — it still
-    calls the legacy trajectory engine. Phase 4 owns that cutover."""
+class TestApiHandlersDailyConversionsCutover:
+    """Static check (73q Phase 4 cutover): daily_conversions no longer runs
+    the inline legacy trajectory enrichment in api_handlers.py. It is served
+    by ``_handle_daily_conversions``, which builds the shared
+    ``CFProjectionBundle`` and applies the date reducer. (Inverts the Phase-2
+    canary that asserted the legacy block was still present.)"""
 
-    def test_daily_conversions_still_uses_legacy_trajectory_engine(self):
-        api = os.path.join(
-            os.path.dirname(__file__), '..', 'api_handlers.py',
-        )
+    def _src(self):
+        api = os.path.join(os.path.dirname(__file__), '..', 'api_handlers.py')
         with open(api, 'r') as f:
-            src = f.read()
-        # The inline daily-conversions sweep call must still be present.
-        assert '_sweep = compute_forecast_trajectory(' in src
+            return f.read()
+
+    def test_no_inline_daily_conversions_trajectory_sweep(self):
+        src = self._src()
+        # The legacy inline daily-conversions sweep and its annotate_rows
+        # fallback are deleted. compute_forecast_trajectory itself survives
+        # for surprise_gauge (Phase 5a), so we assert the daily-conversions-
+        # specific markers are gone, not the symbol entirely.
+        assert '_sweep = compute_forecast_trajectory(' not in src
+        assert '_dc_annotated' not in src
+
+    def test_daily_conversions_routes_to_shared_boundary(self):
+        src = self._src()
+        assert 'def _handle_daily_conversions(' in src
+        assert 'return _handle_daily_conversions(data)' in src

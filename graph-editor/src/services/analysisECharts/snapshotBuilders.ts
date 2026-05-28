@@ -90,13 +90,13 @@ export function buildHistogramEChartsOption(data: any, settings: Record<string, 
  *
  * Left Y-axis: 3-layer stacked bar per scenario per cohort date:
  *   1. E (evidence_y) — solid scenario colour
- *   2. F (projected_y − evidence_y) — striated (forecast residual)
- *   3. N remainder (x − projected_y) — very light fill (unconverted)
- *   Total height = N (cohort size x).
+ *   2. F (forecast_y) — striated (forecast residual)
+ *   3. N remainder (projected_x − projected_y) — very light fill
+ *   Total height = terminal FC denominator projected_x.
  *
  * Right Y-axis: two rate lines per scenario:
  *   - Evidence rate (evidence_y / x) — solid, circle markers
- *   - Forecast rate (projected_y / x) — dashed, no markers
+ *   - Forecast rate (projected_y / projected_x) — dashed, no markers
  *   For immature cohorts these diverge; for mature cohorts they converge.
  *
  * Scenario colouring: single visible scenario → #808080 (grey, matching
@@ -145,6 +145,7 @@ export function buildDailyConversionsEChartsOption(
     x: number;
     evidenceY: number;
     forecastResidual: number;
+    projectedX: number;
     projectedY: number;
     evidenceRate: number | null;
     forecastRate: number | null;
@@ -164,7 +165,10 @@ export function buildDailyConversionsEChartsOption(
     const rawX = Number(r?.x ?? 0);
     const rawY = Number(r?.y ?? 0);
     const evidenceY = r?.evidence_y != null ? Number(r.evidence_y) : null;
+    const projectedX = r?.projected_x != null ? Number(r.projected_x) : null;
     const projectedY = r?.projected_y != null ? Number(r.projected_y) : null;
+    const projectedRate = r?.projected_rate != null ? Number(r.projected_rate) : null;
+    const forecastY = r?.forecast_y != null ? Number(r.forecast_y) : null;
 
     // Skip rows with zero cohort size
     if (rawX === 0 && rawY === 0) continue;
@@ -184,7 +188,8 @@ export function buildDailyConversionsEChartsOption(
       pVal = projectedY != null ? projectedY : rawY;
     }
 
-    const forecastResidual = Math.max(0, pVal - eVal);
+    const forecastResidual = forecastY != null ? forecastY : Math.max(0, pVal - eVal);
+    const forecastDenominator = projectedX != null ? projectedX : rawX;
 
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key)!.push({
@@ -192,9 +197,10 @@ export function buildDailyConversionsEChartsOption(
       x: Number.isFinite(rawX) ? rawX : 0,
       evidenceY: Number.isFinite(eVal) ? eVal : 0,
       forecastResidual: Number.isFinite(forecastResidual) ? forecastResidual : 0,
+      projectedX: Number.isFinite(forecastDenominator) ? forecastDenominator : 0,
       projectedY: Number.isFinite(pVal) ? pVal : 0,
       evidenceRate: rawX > 0 && eVal > 0 ? eVal / rawX : (mode === 'f' ? null : 0),
-      forecastRate: rawX > 0 ? pVal / rawX : null,
+      forecastRate: Number.isFinite(projectedRate) ? projectedRate : null,
       forecastBands: r?.forecast_bands ?? null,
       latencyBands: r?.latency_bands ?? null,
     });
@@ -243,16 +249,18 @@ export function buildDailyConversionsEChartsOption(
         const sumX = bPoints.reduce((s, p) => s + p.x, 0);
         const sumEY = bPoints.reduce((s, p) => s + p.evidenceY, 0);
         const sumFR = bPoints.reduce((s, p) => s + p.forecastResidual, 0);
+        const sumPX = bPoints.reduce((s, p) => s + p.projectedX, 0);
         const sumPY = bPoints.reduce((s, p) => s + p.projectedY, 0);
         rebinned.push({
           date: bucketDate,
           x: sumX,
           evidenceY: sumEY,
           forecastResidual: sumFR,
+          projectedX: sumPX,
           projectedY: sumPY,
           evidenceRate: sumX > 0 ? sumEY / sumX : null,
-          forecastRate: sumX > 0 ? sumPY / sumX : null,
-          // Merge forecast bands: weighted average by x
+          forecastRate: sumPX > 0 ? sumPY / sumPX : null,
+          // Merge forecast bands: weighted average by forecast denominator
           forecastBands: (() => {
             const levels = ['80', '90', '95', '99'];
             const merged: Record<string, [number, number]> = {};
@@ -260,10 +268,10 @@ export function buildDailyConversionsEChartsOption(
               let wLo = 0, wHi = 0, wTotal = 0;
               for (const p of bPoints) {
                 const b = p.forecastBands?.[lv];
-                if (b && p.x > 0) {
-                  wLo += b[0] * p.x;
-                  wHi += b[1] * p.x;
-                  wTotal += p.x;
+                if (b && p.projectedX > 0) {
+                  wLo += b[0] * p.projectedX;
+                  wHi += b[1] * p.projectedX;
+                  wTotal += p.projectedX;
                 }
               }
               if (wTotal > 0) merged[lv] = [wLo / wTotal, wHi / wTotal];
@@ -343,7 +351,7 @@ export function buildDailyConversionsEChartsOption(
     const alignedNRemainder = sortedDates.map(d => {
       const p = pointsByDate.get(d);
       if (!p) return [d, 0];
-      return [d, Math.max(0, p.x - p.projectedY)];
+      return [d, Math.max(0, p.projectedX - p.projectedY)];
     });
     const alignedERate = smoothRates(
       sortedDates.map(d => [d, pointsByDate.get(d)?.evidenceRate ?? null] as [string, number | null]),
@@ -628,6 +636,10 @@ export function buildDailyConversionsEChartsOption(
   //   25% (sparsest): ·    ·    ·    ·
   //   50% (medium):   ·   ·   ·   ·
   //   75% (densest):  ·  ·  ·  ·
+  // Display is gated on the `show_latency_bands` toggle (default off). The
+  // backend always emits `latency_bands` on the rows; hiding them is a pure
+  // display concern, so we gate rendering here rather than dropping data.
+  const showLatencyBands = settings.show_latency_bands === true;
   const LATENCY_DASH_PATTERNS: number[][] = [
     [2, 8],   // 25% — dot, long gap (sparsest)
     [2, 5],   // 50% — dot, medium gap
@@ -635,7 +647,7 @@ export function buildDailyConversionsEChartsOption(
   ];
   const LATENCY_BAND_OPACITY = 0.55;
 
-  for (let ki = 0; ki < keys.length && showRates; ki++) {
+  for (let ki = 0; ki < keys.length && showRates && showLatencyBands; ki++) {
     const key = keys[ki];
     const _lbScId = multiScenario ? key : (visibleScenarioIds[0] || 'current');
     const lbMode = scenarioMeta?.[_lbScId]?.visibility_mode

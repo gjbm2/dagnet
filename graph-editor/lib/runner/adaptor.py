@@ -20,7 +20,11 @@ class AnalysisDefinition:
         self.description = config.get('description', '')
         self.when = config.get('when', {})
         self.runner = config['runner']
-    
+        # Reducer over the shared CF projection bundle (73q). Present only
+        # on forecast-backed types (cohort_maturity / daily_conversions);
+        # None for analyses that do not reduce a CF bundle.
+        self.reducer = config.get('reducer')
+
     def __repr__(self):
         return f"AnalysisDefinition(id={self.id!r}, name={self.name!r})"
 
@@ -76,6 +80,19 @@ class AnalysisAdaptor:
             'runner': 'general_stats_runner'
         })
     
+    def get(self, analysis_type_id: str) -> AnalysisDefinition:
+        """Return the definition with this id.
+
+        Used to read registry fields (e.g. ``reducer``) for an analysis
+        type the caller has already resolved, rather than re-matching on
+        predicates. Raises if the id is unknown — an unregistered analysis
+        type is a caller bug, not a runtime fallback.
+        """
+        for defn in self.definitions:
+            if defn.id == analysis_type_id:
+                return defn
+        raise KeyError(f"analysis type not registered: {analysis_type_id!r}")
+
     def get_all_matching(self, predicates: dict) -> list[AnalysisDefinition]:
         """
         Get all analysis definitions that match the predicates.

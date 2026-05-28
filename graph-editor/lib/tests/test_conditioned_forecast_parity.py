@@ -468,23 +468,17 @@ class TestPhase4AsatVisibility:
             "first_null_completeness_date": null_comp[0]["date"] if null_comp else None,
         }
 
-    @pytest.mark.xfail(
-        reason=(
-            "Stale pending 73q daily_conversions shared-runtime cutover. "
-            "Daily Conversions today bypasses the shared preparation path "
-            "(doc 60 §3.2) and runs its own enrichment in api_handlers, "
-            "which currently produces mature → forecast directly without "
-            "emitting a null-completeness boundary band on asat() queries. "
-            "73q's date reducer (project-bayes/73q-daily-conversions-"
-            "shared-runtime-cutover-plan.md, §Reducer field contract — "
-            "Completeness / Layer) inherits the band from the shared "
-            "substrate. Pick this canary up when 73q lands; the boundary "
-            "shift this test asserts is the natural behaviour of the "
-            "post-cutover reducer."
-        ),
-        strict=False,
-    )
     def test_daily_conversions_boundary_shift(self, dc_live, dc_asat) -> None:
+        """73q Phase 4 cutover: asat() shifts the mature→forecast boundary.
+
+        Contract reclassified vs the pre-cutover canary (plan §"Known
+        legacy gaps"): the runtime-backed date reducer reads per-Cohort
+        completeness from the shared runtime CDF, so every admitted Cohort
+        carries a real completeness (tiny for the youngest, never None).
+        The legacy null-completeness band was an enrichment artefact; the
+        post-cutover boundary shift manifests as the mature zone shrinking
+        and a forecast zone appearing — not a null band.
+        """
         if GRAPH != "synth-simple-abc":
             pytest.skip("historical asat fixture is defined only for synth-simple-abc")
 
@@ -501,7 +495,6 @@ class TestPhase4AsatVisibility:
             and live_s["null_completeness_rows"] == 0
             and asat_s["mature_rows"] < live_s["mature_rows"]
             and asat_s["forecast_rows"] > 0
-            and asat_s["null_completeness_rows"] > 0
         )
         if not ok:
             pytest.fail(
@@ -509,20 +502,6 @@ class TestPhase4AsatVisibility:
                 + diagnostic
             )
 
-    @pytest.mark.xfail(
-        reason=(
-            "Legacy gap (73q Phase 1 calibration, 27-May-26). Legacy "
-            "daily_conversions computes per-Cohort completeness via its own "
-            "forecast_application.compute_completeness (analytic lognormal CDF), "
-            "not the runtime's _runtime_completeness MC readout that "
-            "cohort_maturity uses. For a single immature Cohort (age 10) the two "
-            "differ by ~2.5e-3 (dc=0.42067 vs cm=0.41820 at tau=10), above the "
-            "1e-4 completeness floor. 73q's date reducer reads the same "
-            "_runtime_completeness object (plan §Reducer field contract — "
-            "Completeness); Phase 4 must flip this. See plan 'Known legacy gaps'."
-        ),
-        strict=False,
-    )
     def test_daily_conversions_completeness_matches_cohort_maturity(self) -> None:
         """Semantic invariant: the date reducer has NO completeness logic of its
         own — per-Cohort completeness must equal the same runtime CDF readout

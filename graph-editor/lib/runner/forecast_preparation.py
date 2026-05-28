@@ -736,3 +736,246 @@ def prepare_forecast_subject_group(
         regime_diagnostics=regime_diagnostics,
         envelope_plan=envelope_plan,
     )
+
+
+# ── Shared upstream-fetch + axis-horizon prep helpers ────────────────────
+# Relocated from api_handlers.py (73q Phase 4) so the shared CF analysis
+# boundary (runner/cf_analysis.py) and the legacy CF handlers can import
+# them from the preparation layer without a cycle back through
+# api_handlers. Behaviour is unchanged from the original api_handlers copy.
+
+
+def _make_envelope_aware_upstream_fetcher(
+    envelope_plan: Optional[Any],
+    per_edge_results_out: Optional[Dict[str, Dict[str, Any]]] = None,
+):
+    """Wrap `_fetch_upstream_observations` so it carries `envelope_plan`.
+
+    The runtime-prep call site (`prepare_forecast_runtime_inputs`) invokes
+    its `upstream_observation_fetcher` with a fixed kwarg signature; this
+    closure captures the per-request envelope_plan so the upstream fetch
+    bounds its `query_snapshots_for_sweep` by the carrier-side
+    arrival-map envelope rather than the legacy `axis_tau_max * 2 floor 60`
+    heuristic. See docs/current/snapshot-fetch-envelope-design.md.
+
+    `per_edge_results_out`, when supplied, captures the per-edge
+    derivation result for every carrier edge fetched. Callers that build
+    `_stage6_per_edge_evidence` from a per-edge map (e.g. CF whole-graph
+    mode) pass their `all_per_edge_results` here so the upstream fetch's
+    output is visible to the carrier-evidence builder. Without this the
+    carrier primitive degenerates to PRIOR_ONLY and the conditioned
+    posterior diverges from CM's (which has its own inline upstream
+    fetch already feeding its per-edge map).
+    """
+    def _fetcher(**kwargs: Any) -> Optional[Dict[str, Any]]:
+        kwargs['envelope_plan'] = envelope_plan
+        kwargs['per_edge_results_out'] = per_edge_results_out
+        return _fetch_upstream_observations(**kwargs)
+    return _fetcher
+
+
+def _fetch_upstream_observations(
+    graph_data: Dict[str, Any],
+    anchor_node: str,
+    query_from_node: str,
+    per_edge_results: List[Dict[str, Any]],
+    candidate_regimes_by_edge: Dict[str, Any],
+    anchor_from: str,
+    anchor_to: str,
+    sweep_from: str,
+    sweep_to: str,
+    axis_tau_max: Optional[int] = None,
+    log_prefix: str = '[upstream]',
+    envelope_plan: Optional[Any] = None,
+    per_edge_results_out: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Fetch upstream edge snapshot data for empirical carrier (Tier 2).
+
+    Shared by v2 and v3 handlers. Queries the snapshot DB for edges
+    on the path from anchor to from_node, derives cohort maturity
+    frames, and extracts upstream observations.
+
+    Returns upstream_obs dict (for XProvider) or None if fetch fails.
+    """
+    from datetime import date, timedelta
+    from runner.span_kernel import _build_span_topology
+    from runner.span_upstream import extract_upstream_observations
+
+    # Collect evidence frames for edges entering from_node
+    up_edge_frames: Dict[str, List[Dict[str, Any]]] = {}
+
+    # Index subject edges we already have
+    for entry in per_edge_results:
+        target_id = (entry.get('subject') or {}).get('target', {}).get('targetId', '')
+        if target_id:
+            up_edge_frames[target_id] = (
+                entry.get('derivation_result', {}).get('frames', [])
+            )
+
+    # Find upstream edges not already in subject set
+    up_topo = _build_span_topology(graph_data, anchor_node, query_from_node)
+    if up_topo is None:
+        return None
+
+    def _edge_uuid(e_dict):
+        return str(e_dict.get('uuid', e_dict.get('id', '')))
+
+    missing_eids = [
+        _edge_uuid(e_data) for _, _, e_data in up_topo.edge_list
+        if _edge_uuid(e_data) not in up_edge_frames
+    ]
+    if missing_eids:
+        print(f"{log_prefix} fetching {len(missing_eids)} upstream edges")
+        fetch_ok = True
+        for eid in missing_eids:
+            regimes = candidate_regimes_by_edge.get(eid, [])
+            if not regimes:
+                print(f"{log_prefix} no regime for {eid[:20]}")
+                fetch_ok = False
+                break
+            core_hash, equivalent_hashes = flatten_candidate_regime_hashes(regimes)
+            if not core_hash:
+                fetch_ok = False
+                break
+            up_edge = None
+            for e in graph_data.get('edges', []):
+                if str(e.get('uuid', e.get('id', ''))) == str(eid):
+                    up_edge = e
+                    break
+            if not up_edge:
+                fetch_ok = False
+                break
+            p_id = up_edge.get('p', {}).get('id', '') or eid
+            # Donor-fetch backward extension for the carrier edge: prefer
+            # the principled envelope from the request's envelope_plan
+            # (carrier-rooted arrival map with backward donor extension by
+            # max(t95 + onset) over the carrier sub-tree). Fall back to
+            # the legacy `axis_tau_max * 2 floor 60` heuristic only when
+            # the envelope_plan is unavailable for this edge — pre-fix
+            # behaviour, kept as a defensive backstop.
+            envelope_anchor_from: Optional[str] = None
+            envelope_anchor_to: Optional[str] = None
+            if envelope_plan is not None:
+                env = envelope_plan.by_edge_uuid.get(str(eid))
+                if env is not None:
+                    envelope_anchor_from = env.anchor_from.isoformat()
+                    envelope_anchor_to = env.anchor_to.isoformat()
+            if envelope_anchor_from is None:
+                try:
+                    af_d = date.fromisoformat(anchor_from)
+                    lookback_days = max((axis_tau_max or 0) * 2, 60)
+                    envelope_anchor_from = (af_d - timedelta(days=lookback_days)).isoformat()
+                except (ValueError, TypeError):
+                    envelope_anchor_from = anchor_from
+            if envelope_anchor_to is None:
+                envelope_anchor_to = anchor_to
+            donor_subject = {
+                'subject_id': f'upstream::{eid}',
+                'path_role': 'only',
+                'param_id': p_id,
+                'core_hash': core_hash,
+                'equivalent_hashes': equivalent_hashes,
+                'slice_keys': [''],
+                'anchor_from': anchor_from,
+                'anchor_to': anchor_to,
+                'sweep_from': sweep_from,
+                'sweep_to': sweep_to,
+                'candidate_regimes': regimes,
+                'target': {'targetId': eid},
+                'from_node': str(up_edge.get('from') or ''),
+                'to_node': str(up_edge.get('to') or ''),
+            }
+            prepared_upstream = prepare_forecast_subject_entry(
+                subj=donor_subject,
+                subject_is_window=True,
+                log_prefix=log_prefix,
+                anchor_from_override=envelope_anchor_from,
+                sweep_from_override=envelope_anchor_from,
+                envelope_anchor_from=envelope_anchor_from,
+                envelope_anchor_to=envelope_anchor_to,
+            )
+            up_edge_frames[eid] = (
+                prepared_upstream.get('per_edge_result', {})
+                .get('derivation_result', {})
+                .get('frames', [])
+            )
+            # Surface the per-edge result so the caller's superset-candidate
+            # translator can include this carrier edge for downstream
+            # primitive binding. Without this, the carrier primitive falls
+            # through to PRIOR_ONLY.
+            if per_edge_results_out is not None:
+                _per_edge_entry = prepared_upstream.get('per_edge_result')
+                if _per_edge_entry:
+                    per_edge_results_out[str(eid)] = _per_edge_entry
+        if not fetch_ok:
+            print(f"{log_prefix} incomplete fetch, discarding partial evidence")
+            up_edge_frames = {}
+
+    # Extract observations (sum y across edges entering from_node)
+    if up_edge_frames:
+        upstream_obs = extract_upstream_observations(
+            graph=graph_data,
+            anchor_node_id=anchor_node,
+            x_node_id=query_from_node,
+            per_edge_frames=up_edge_frames,
+        )
+        if upstream_obs:
+            total_obs = sum(len(v) for v in upstream_obs.values())
+            print(f"{log_prefix} {total_obs} observations "
+                  f"across {len(upstream_obs)} cohorts")
+        return upstream_obs
+    return None
+
+
+def _compute_axis_tau_max(
+    *,
+    graph_data: Dict[str, Any],
+    last_edge_id: Optional[str],
+    anchor_from_str: str,
+    sweep_to_final: str,
+    tau_extent_raw: Any = None,
+    log_prefix: str = '[forecast]',
+) -> Optional[int]:
+    """Return the tau horizon bound used by the forecast paths."""
+    import math
+    from datetime import date
+
+    _sweep_span = None
+    try:
+        if anchor_from_str and sweep_to_final:
+            _af_d = date.fromisoformat(str(anchor_from_str)[:10])
+            _st_d = date.fromisoformat(str(sweep_to_final)[:10])
+            _sweep_span = (_st_d - _af_d).days
+    except (ValueError, TypeError):
+        pass
+
+    _edge_t95 = None
+    _path_t95 = None
+    if last_edge_id:
+        from runner.forecast_runtime import find_edge_by_id
+
+        _t95_edge = find_edge_by_id(graph_data, last_edge_id)
+        if _t95_edge:
+            _t95_lat = _t95_edge.get('p', {}).get('latency', {})
+            _t95_val = _t95_lat.get('promoted_t95') or _t95_lat.get('t95')
+            if isinstance(_t95_val, (int, float)) and _t95_val > 0:
+                _edge_t95 = float(_t95_val)
+            _pt95_val = _t95_lat.get('promoted_path_t95') or _t95_lat.get('path_t95')
+            if isinstance(_pt95_val, (int, float)) and _pt95_val > 0:
+                _path_t95 = float(_pt95_val)
+
+    _tau_extent_setting = None
+    if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
+        try:
+            _tau_extent_setting = float(tau_extent_raw)
+        except (ValueError, TypeError):
+            pass
+
+    if _tau_extent_setting and _tau_extent_setting > 0:
+        axis_tau_max = int(math.ceil(_tau_extent_setting))
+    else:
+        _axis_candidates = [c for c in [_sweep_span, _edge_t95, _path_t95] if c and c > 0]
+        axis_tau_max = int(math.ceil(max(_axis_candidates))) if _axis_candidates else None
+    print(f"{log_prefix} axis_tau_max={axis_tau_max} tau_extent_setting={_tau_extent_setting} "
+          f"last_edge_id={last_edge_id is not None}")
+    return axis_tau_max

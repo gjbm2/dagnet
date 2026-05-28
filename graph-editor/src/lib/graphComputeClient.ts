@@ -500,8 +500,11 @@ export class GraphComputeClient {
               completeness: (p?.completeness === null || p?.completeness === undefined) ? null : Number(p.completeness),
               layer: p?.layer ?? null,
               evidence_y: (p?.evidence_y === null || p?.evidence_y === undefined) ? null : Number(p.evidence_y),
+              forecast_x: (p?.forecast_x === null || p?.forecast_x === undefined) ? null : Number(p.forecast_x),
               forecast_y: (p?.forecast_y === null || p?.forecast_y === undefined) ? null : Number(p.forecast_y),
+              projected_x: (p?.projected_x === null || p?.projected_x === undefined) ? null : Number(p.projected_x),
               projected_y: (p?.projected_y === null || p?.projected_y === undefined) ? null : Number(p.projected_y),
+              projected_rate: (p?.projected_rate === null || p?.projected_rate === undefined) ? null : Number(p.projected_rate),
               is_synthetic: Boolean((f as any)?.is_synthetic),
               epoch_subject_id: epochPayload?.subject_id,
               epoch_sweep_from: epochPayload?.sweep_from,
@@ -795,8 +798,11 @@ export class GraphComputeClient {
               completeness: row.completeness != null ? Number(row.completeness) : null,
               layer: row.layer ?? null,
               evidence_y: row.evidence_y != null ? Number(row.evidence_y) : null,
+              forecast_x: row.forecast_x != null ? Number(row.forecast_x) : null,
               forecast_y: row.forecast_y != null ? Number(row.forecast_y) : null,
+              projected_x: row.projected_x != null ? Number(row.projected_x) : null,
               projected_y: row.projected_y != null ? Number(row.projected_y) : null,
+              projected_rate: row.projected_rate != null ? Number(row.projected_rate) : null,
               forecast_bands: row.forecast_bands ?? null,
               latency_bands: row.latency_bands ?? null,
             });
@@ -1172,8 +1178,11 @@ export class GraphComputeClient {
             completeness: row.completeness != null ? Number(row.completeness) : null,
             layer: row.layer ?? null,
             evidence_y: row.evidence_y != null ? Number(row.evidence_y) : null,
+            forecast_x: row.forecast_x != null ? Number(row.forecast_x) : null,
             forecast_y: row.forecast_y != null ? Number(row.forecast_y) : null,
+            projected_x: row.projected_x != null ? Number(row.projected_x) : null,
             projected_y: row.projected_y != null ? Number(row.projected_y) : null,
+            projected_rate: row.projected_rate != null ? Number(row.projected_rate) : null,
           });
         }
       }
@@ -2479,7 +2488,17 @@ export interface LagHistogramResult {
 export interface DailyConversionsResult {
   analysis_type: 'daily_conversions';
   data: Array<{ date: string; conversions: number }>;
-  rate_by_cohort?: Array<{ date: string; x: number; y: number; rate: number | null }>;
+  rate_by_cohort?: Array<{
+    date: string;
+    x: number;
+    y: number;
+    rate: number | null;
+    projected_x?: number | null;
+    projected_y?: number | null;
+    projected_rate?: number | null;
+    forecast_x?: number | null;
+    forecast_y?: number | null;
+  }>;
   total_conversions: number;
   date_range: { from: string | null; to: string | null };
 }

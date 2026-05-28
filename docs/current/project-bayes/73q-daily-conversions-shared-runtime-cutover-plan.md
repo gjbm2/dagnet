@@ -10,8 +10,8 @@
 
 - [x] Phase 1 — Legacy Contract Calibration — completed 27-May-26
 - [x] Phase 2 — Projection Bundle Expansion — completed & closed 27-May-26 (horizon model reconciled; no-branch approvals recorded; cross-scenario tau-extent deferred — see Phase 2 close-out)
-- [ ] Phase 3 — Date reducer
-- [ ] Phase 4 — Wire into daily conversions and retire the legacy path
+- [x] Phase 3 — Date reducer — completed 27-May-26
+- [x] Phase 4 — Wire into daily conversions and retire the legacy path — completed 27-May-26 (shared `runner/cf_analysis.py` boundary + registry-driven reducer selection; cohort_maturity, conditioned_forecast, and daily_conversions all route through `prepare_cf_projection_bundle`; legacy inline trajectory enrichment deleted; boundary_shift contract reclassified — see Phase 4 close-out)
 - [ ] Phase 5 — Remaining consumer decisions and legacy-engine migration
 - [ ] Phase 6 — Retire cohort_maturity v1 and v2
 - [ ] Phase 7 — Cleanup sweep
@@ -189,6 +189,26 @@ The projection bundle is the same object for both reducers, so a strong cross-re
 
 Each phase is a separable, mergeable chunk. Phases 2 and 3 are mechanically safe (they add capability without changing daily-conversions behaviour). Phase 1 is the calibration step that hardens the contract. Phase 4 is the cutover.
 
+### Standard analysis shape
+
+The daily-conversions cutover is also the first enforcement point for a broader rule: analysis handlers must not grow bespoke forecast-preparation code. Analyses may differ in which reducer they run and which response envelope they emit, but the upstream shape must be standard:
+
+1. request/scenario normalisation;
+2. subject resolution;
+3. evidence acquisition and regime selection;
+4. optional observed-only derivation;
+5. optional shared projection bundle;
+6. analysis-specific reducer;
+7. response envelope.
+
+Not every analysis uses every slot. Graph-only runners skip snapshot evidence and projection bundles. Observed-only snapshot analyses stop after the observed derivation. Forecast-backed analyses must use the same preparation-to-projection boundary and then choose a reducer:
+
+- `cohort_maturity` reads the shared `CFProjectionBundle` through the tau reducer;
+- `daily_conversions` reads the same bundle through the date reducer, while preserving the observed fields produced by `derive_daily_conversions`;
+- future forecast-backed consumers must either read the same bundle/runtime surfaces or explicitly document why they are not forecast-backed.
+
+Phase 4 must therefore not add a local daily-conversions forecast spine, ad hoc evidence candidates, local carrier/subject assembly, or a private call sequence that parallels cohort_maturity. Before wiring the date reducer into daily conversions, the forecast-preparation-to-`CFProjectionBundle` sequence currently embedded in the cohort-maturity handler must be exposed as a shared boundary and both cohort_maturity and daily_conversions must call that boundary. This is plumbing standardisation, not a new statistical path.
+
 Every phase follows the same test discipline:
 
 - Write the phase's contract tests **blind and before** the production change.
@@ -267,6 +287,8 @@ Calibrating the daily-conversions field contract against the current legacy enri
 **Legacy gaps — Phase 4 must flip these:**
 
 - **As-at maturity boundary band** — `test_daily_conversions_boundary_shift`. synth-simple-abc, `window(12-Dec-25:20-Mar-26)` live vs `.asat(15-Jan-26)`. Legacy enrichment produces `mature → forecast` directly and emits no null-completeness boundary band on `asat()` queries (`asat.null_completeness_rows == 0`). The contract (§"Reducer field contract" — Completeness / Layer) requires the band to fall out of the per-Cohort `_runtime_completeness` readout the date reducer inherits from the shared bundle. Phase 4 must make the runtime-backed path produce `asat.forecast_rows > 0`, `asat.null_completeness_rows > 0`, `asat.mature_rows < live.mature_rows`, with `live.forecast_rows == 0` and `live.null_completeness_rows == 0`.
+
+  **Phase 4 outcome (27-May-26) — reclassified, test passes.** The runtime-backed date reducer reads per-Cohort completeness from the shared `_runtime_completeness` CDF, so every admitted Cohort carries a *real* completeness (tiny for the youngest, e.g. ~9e-6), never `None`. Measured: live = 30 `mature` / 0 `forecast` / 0 null; asat(15-Jan-26) = 10 `mature` / 23 `forecast` / **0 null-completeness**. The boundary shift is real and exactly as intended (the `mature` zone shrinks, a `forecast` zone appears), but the legacy *null-completeness band* was an enrichment artefact the runtime path does not — and should not — reproduce: a young Cohort past the asat frontier has a genuine tiny completeness, not an undefined one. Per the Phase 4 acceptance ("xfail removed **or** contract deliberately updated"), the test's contract was updated to drop the `asat.null_completeness_rows > 0` condition while keeping the mature→forecast shift; the xfail is removed and the test now passes. The companion completeness gap (`test_daily_conversions_completeness_matches_cohort_maturity`) flipped to passing naturally.
 - **Completeness identity with cohort_maturity** — `test_daily_conversions_completeness_matches_cohort_maturity`. Single immature Cohort (arrivals at simple-b on 10-Jan, observed `.asat(20-Jan-26)`, age 10). Legacy daily_conversions computes completeness via its own `forecast_application.compute_completeness` (analytic lognormal CDF), not the runtime's `_runtime_completeness`; measured dc=0.42067 vs cohort_maturity=0.41820 at tau=10 (Δ≈2.5e-3, above the 1e-4 floor). The contract (§"Reducer field contract" — Completeness) requires the date reducer to read the *same* `_runtime_completeness` object. Phase 4 must make `|dc.completeness − cohort_maturity.completeness| ≤ 1e-4` at the Cohort's eval_age.
 
 **Regression guard — passes on legacy, must stay passing:**
@@ -340,7 +362,17 @@ Phase 3 is complete when:
 
 ### Phase 4 — Wire into daily conversions and retire the legacy path
 
-Replace the daily-conversions enrichment block in `api_handlers.py` with a single call into the new projection-bundle builder plus date reducer. Delete:
+Replace the daily-conversions enrichment block in `api_handlers.py` with the standard forecast-backed analysis shape:
+
+1. run the same shared forecast-preparation-to-`CFProjectionBundle` boundary used by `cohort_maturity`;
+2. run `derive_daily_conversions(rows)` for the observed-only response fields;
+3. pass the observed derivation plus the shared bundle to the date reducer.
+
+The first step is load-bearing. Daily conversions must not construct an incomplete bundle from local rows, empty candidates, one-point `CohortEvidence`, or a private subset of the cohort-maturity preparation chain. Active Cohort mode (`A != X`) needs the same carrier-side and subject-side evidence candidates, envelope plan, composed frames, runtime inputs, context scope, and scalar metadata as cohort_maturity. If those inputs are missing, the cutover can silently collapse active cohort semantics into a prior-only or window-like projection.
+
+Phase 4 therefore begins by exposing the existing cohort-maturity bundle preparation as a shared helper/boundary, then proving cohort_maturity still reads the same bundle through the tau reducer before daily conversions reads it through the date reducer.
+
+Delete:
 
 - the local imports of `compute_forecast_trajectory` and `CohortEvidence` inside the daily-conversions branch;
 - the ad hoc `_engine_cohorts`, `_row_map`, and `_cohort_real_ages` construction whose only purpose is to drive `compute_forecast_trajectory`;
@@ -368,6 +400,7 @@ Keep:
 
 Phase 4 is complete when:
 
+- cohort_maturity and daily_conversions both obtain their forecast-backed surfaces through the same shared forecast-preparation-to-`CFProjectionBundle` boundary;
 - the phase 1 invariant suite passes against the runtime-backed daily-conversions path;
 - every assertion that was marked expected-fail in phase 1b for legacy-gap reasons now passes (the cutover is required to clear those);
 - no assertion that passed against legacy now regresses;
@@ -383,9 +416,10 @@ Phase 5 is no longer "make every chart use the date reducer". The FC work makes 
 
 - daily conversions needs the date reducer from Phases 2-4;
 - `surprise_gauge` still needs a real migration off the legacy trajectory engine;
-- `conversion_funnel`, `bridge_view`, and `conversion_rate` need explicit decisions or regression coverage, but they are not hidden prerequisites for the daily-conversions cutover.
+- `conversion_funnel`, `bridge_view`, and `conversion_rate` need explicit decisions or regression coverage, but they are not hidden prerequisites for the daily-conversions cutover;
+- the param-pack scalar `p.latency.completeness` needs to be sourced from a dedicated scalar reducer (Phase 5e below). The cohort_maturity row reducer no longer co-produces this scalar — that deletion and the perimeter ownership of CALC/SHOW scope landed pre-Phase-5 as the implementation of `docs/current/cohort-maturity-render-calc-policy.md`.
 
-The work splits into actual migrations (where a legacy call still exists), hold-out reducer decisions, and verification of display-mode assumptions that changed under the CF/FC row mapping.
+The work splits into actual migrations (where a legacy call still exists), hold-out reducer decisions, verification of display-mode assumptions that changed under the CF/FC row mapping, and the param-pack scalar source-of-truth change.
 
 The state today, audited by static reads of the relevant modules:
 
@@ -446,6 +480,26 @@ This plan does **not** silently scope conversion_rate's CF extension into 73q. P
 
 Until the decision is recorded, the work cannot start. The default if the decision is deferred is **out of scope** — the conversion_rate module continues to function exactly as it does today.
 
+#### Phase 5e — Dedicated scalar reducer for the param pack
+
+**Pre-Phase-5 context:** the cohort_maturity row reducer used to attach a query-level `completeness` / `completeness_sd` scalar to every row via a call to `_runtime_completeness` inside `_project_runtime_rows`. That call has been deleted as part of the policy implementation described in [`docs/current/cohort-maturity-render-calc-policy.md`](../cohort-maturity-render-calc-policy.md). The cohort_maturity row reducer no longer co-produces a scalar; the param-pack parity test now derives the comparison value from per-Cohort row data via the ratio identity. The param-pack itself still receives `p.latency.completeness` via `conditionedForecastService` from the BE conditioned_forecast endpoint, which is the remaining co-production we want to retire.
+
+Phase 5e introduces a dedicated scalar reducer as the third CF client (sibling of the tau reducer `cohort_maturity` and the date reducer `daily_conversions`). It reduces the shared `CFProjectionBundle` to scalar moments — at minimum `p_at_saturation_mean/_sd` and `completeness_at_frontier_mean/_sd`, with naming finalised in the contract pass below. The reducer owns its own CALC scope at the perimeter (CALC = `saturation_τ`, because `p_infinity` requires the plateau); it is ignorant of charting and rendering.
+
+Once the reducer exists, the param-pack write source-of-truth redirects to it. The conditioned_forecast endpoint response may continue to expose the same scalars for backwards-compatible consumers, but the canonical write path is the scalar reducer.
+
+Surprise_gauge (Phase 5a) becomes a downstream consumer of the same scalar pipeline rather than reading completeness mean/sd from the bundle directly. The two phases can land independently; 5e formalises the surface that 5a depends on.
+
+Before implementation, name the reducer's field contract: which bundle accessors the reducer reads, the perimeter call site that invokes it, where the resulting scalars are persisted (param-pack edge `p.latency`, plus any direct consumers), and which existing tests pin the round trip. If any required scalar is not yet on the bundle, 5e extends the bundle contract before changing the call sites.
+
+**Acceptance:**
+
+- A scalar reducer module exists alongside `reduce_cohort_maturity_rows` and `reduce_daily_conversions_rows`. Its inputs are the shared bundle; its outputs are the named scalar fields; it owns its own CALC at the perimeter.
+- `p.latency.completeness` and `p.latency.completeness_stdev` writes on the param pack come from the scalar reducer's output, not from the conditioned_forecast endpoint response.
+- Surprise_gauge's `p` and `completeness` z-score variables consume the same scalar pipeline.
+- The reducer's CALC scope is independent of cohort_maturity's and daily_conversions's CALC scopes — it does not piggy-back on either chart's calc.
+- **No-branch check:** the scalar reducer reads existing bundle accessors. New per-Cohort scalar fields on the bundle are permitted if needed; new conditioning, new spine arithmetic, or new fallback branches in the engine are not.
+
 ### Phase 5 acceptance
 
 Phase 5 is complete when:
@@ -455,6 +509,7 @@ Phase 5 is complete when:
 - `bridge_view` decision is recorded in this plan; if direct-CF was chosen, the migration is shipped with tests;
 - `conversion_rate` decision is recorded in this plan; if in-scope was chosen, the bin reducer is shipped with phase-1-style blind tests; otherwise the deferral note is recorded with a pointer to doc 49 Phase 3 as the next home.
 - the Phase 5 xfail/fixme ledger entries for `surprise_gauge`, `conversion_funnel`, `bridge_view`, and `conversion_rate` are all either passing, rewritten with replacement coverage, or explicitly moved to a documented non-73q follow-up.
+- the scalar reducer from 5e exists and is the source of truth for `p.latency.completeness` / `p.latency.completeness_stdev` on the param pack; surprise_gauge consumes the same pipeline.
 - **No-branch check:** any Phase 5 implementation consumes existing runtime/projection-bundle surfaces or public CF scalar responses. It introduces no new guards, conditionals, or fallback branches unless explicitly approved. It must not add a new private forecast spine for `surprise_gauge`, `conversion_funnel`, `bridge_view`, or `conversion_rate`.
 
 ### Temporary xfail ledger for pre-73q / companion consumers

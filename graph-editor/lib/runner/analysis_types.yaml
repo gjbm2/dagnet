@@ -102,6 +102,9 @@ analyses:
       has_from: true
       has_to: true
     runner: path_runner
+    # Reducer over the shared CF projection bundle (73q): tau reducer —
+    # keep tau, collapse Cohorts (one row per relative age).
+    reducer: cohort_maturity
 
   # from(A).to(B) - cohort maturity v1 (legacy, dev only)
   - id: cohort_maturity_v1
@@ -155,6 +158,9 @@ analyses:
       has_from: true
       has_to: true
     runner: path_runner
+    # Reducer over the shared CF projection bundle (73q): date reducer —
+    # keep Cohort=date, collapse tau (one row per Cohort/date).
+    reducer: daily_conversions
 
   # from(A).to(B) - conversion rate with epistemic uncertainty bands (doc 49)
   # Non-latency edges only — see doc 49 §B.2 for latency limitation.

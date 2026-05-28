@@ -89,6 +89,21 @@ def _load_handler_source() -> str:
     return HANDLER_PATH.read_text()
 
 
+PREP_PATH = (
+    Path(__file__).resolve().parent.parent / "runner" / "forecast_preparation.py"
+)
+
+
+def _load_prep_source() -> str:
+    """Return the source of runner/forecast_preparation.py.
+
+    The upstream donor-fetch helper `_fetch_upstream_observations` was
+    relocated here from api_handlers.py (73q Phase 4) so the shared CF
+    analysis boundary can reuse it without an import cycle.
+    """
+    return PREP_PATH.read_text()
+
+
 def _find_cf_handler(tree: ast.AST) -> ast.FunctionDef:
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "handle_conditioned_forecast":
@@ -241,7 +256,7 @@ class TestConditionedForecastResponseContract:
         """WP6: donor-routing must reuse the shared forecast preparation path,
         not keep an ad hoc query/regime/derive branch inside the upstream fetch.
         """
-        tree = ast.parse(_load_handler_source())
+        tree = ast.parse(_load_prep_source())
         func = _find_function(tree, "_fetch_upstream_observations")
         shared_helper_calls = _iter_calls(func, "prepare_forecast_subject_entry")
         assert shared_helper_calls, (

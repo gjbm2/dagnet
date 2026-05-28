@@ -61,7 +61,8 @@ class _Cohort:
 
     def __init__(self, anchor, *, reason, projection_index,
                  eval_age, obs_y, x_frozen,
-                 ef_y=None, ef_forecast_y=None, ef_rate=None,
+                 ef_x=None, ef_y=None, ef_forecast_x=None,
+                 ef_forecast_y=None, ef_rate=None,
                  completeness=None, observed_x=None, observed_y=None):
         self.anchor = anchor
         self.reason = reason
@@ -69,7 +70,9 @@ class _Cohort:
         self.eval_age = eval_age
         self.obs_y = obs_y
         self.x_frozen = x_frozen
+        self.ef_x = ef_x
         self.ef_y = ef_y
+        self.ef_forecast_x = ef_forecast_x
         self.ef_forecast_y = ef_forecast_y
         self.ef_rate = ef_rate
         self.completeness = completeness
@@ -86,16 +89,22 @@ def _build(cohorts, *, band_taus, max_tau, completeness_present=True,
     admitted = [c for c in cohorts if c.projection_index is not None]
     admitted.sort(key=lambda c: c.projection_index)
     C_proj = len(admitted)
+    ef_x = np.zeros((C_proj, _S, T))
     ef_y = np.zeros((C_proj, _S, T))
+    ef_fx = np.zeros((C_proj, _S, T))
     ef_fy = np.zeros((C_proj, _S, T))
     ef_rate = np.full((C_proj, _S, T), np.nan)
     for c in admitted:
+        ef_x[c.projection_index] = c.ef_x
         ef_y[c.projection_index] = c.ef_y
+        ef_fx[c.projection_index] = c.ef_forecast_x
         ef_fy[c.projection_index] = c.ef_forecast_y
         ef_rate[c.projection_index] = c.ef_rate
 
     selected_projection = SimpleNamespace(
+        ef_x_draws_by_cohort=ef_x,
         ef_y_draws_by_cohort=ef_y,
+        ef_forecast_x_by_cohort=ef_fx,
         ef_forecast_y_by_cohort=ef_fy,
         ef_rate_draws_by_cohort=ef_rate,
     )
@@ -176,7 +185,9 @@ def _immature(anchor, proj_idx, reason='root_window_carrier_n',
         anchor, reason=reason, projection_index=proj_idx,
         eval_age=6, obs_y=_obs_y_ramp(18.0, 6), x_frozen=100.0,
         observed_y=18.0,
+        ef_x=_const_draws(100.0, _T),
         ef_y=_spread_draws(28.0, 32.0, _T),
+        ef_forecast_x=_const_draws(0.0, _T),
         ef_forecast_y=_spread_draws(10.0, 14.0, _T),
         ef_rate=_spread_draws(0.28, 0.32, _T),
         completeness=completeness,
@@ -222,50 +233,67 @@ class TestObservedAndScalarFields:
 
 class TestProjectedAndForecast:
 
-    def test_projected_y_is_mean_of_ef_y_at_terminal_index(self):
+    def test_projected_counts_read_terminal_fc_x_and_y(self):
         c = _immature('2026-03-10', 0)
+        c.ef_x = _spread_draws(98.0, 102.0, _T)
+        c.ef_y = _spread_draws(28.0, 32.0, _T)
+        c.ef_x[:, c.eval_age] = 999.0
+        c.ef_y[:, c.eval_age] = 999.0
+        c.ef_x[:, _MAX_TAU] = 120.0
+        c.ef_y[:, _MAX_TAU] = 44.0
         bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
         result = reduce_daily_conversions_rows(bundle, observed)
         row = _row_by_date(result, '2026-03-10')
-        expected = float(np.mean(c.ef_y[:, _MAX_TAU]))
-        assert row['projected_y'] == pytest.approx(expected)
-        # Immature: projected_y strictly exceeds observed y (read at
-        # saturation, not at the Cohort's current age).
+        assert row['projected_x'] == pytest.approx(float(np.mean(c.ef_x[:, _MAX_TAU])))
+        assert row['projected_y'] == pytest.approx(float(np.mean(c.ef_y[:, _MAX_TAU])))
+        # Immature: projected_y strictly exceeds observed y because it is
+        # evaluated at the terminal FC horizon, not the evidence frontier.
         assert row['projected_y'] > row['y']
 
-    def test_forecast_y_reads_ef_forecast_residual_not_subtraction(self):
+    def test_forecast_residual_counts_read_terminal_fc_surfaces(self):
         c = _immature('2026-03-10', 0)
+        c.ef_forecast_x = _spread_draws(3.0, 5.0, _T)
+        c.ef_forecast_y = _spread_draws(6.0, 8.0, _T)
+        c.ef_forecast_x[:, c.eval_age] = 99.0
+        c.ef_forecast_y[:, c.eval_age] = 99.0
+        c.ef_forecast_x[:, _MAX_TAU] = 11.0
+        c.ef_forecast_y[:, _MAX_TAU] = 9.0
         bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
         result = reduce_daily_conversions_rows(bundle, observed)
         row = _row_by_date(result, '2026-03-10')
-        expected = float(np.mean(c.ef_forecast_y[:, _MAX_TAU]))
-        assert row['forecast_y'] == pytest.approx(expected)
-        # It is the FC residual surface, NOT max(0, projected_y - y).
-        assert row['forecast_y'] != pytest.approx(row['projected_y'] - row['y'])
+        assert row['forecast_x'] == pytest.approx(float(np.mean(c.ef_forecast_x[:, _MAX_TAU])))
+        assert row['forecast_y'] == pytest.approx(float(np.mean(c.ef_forecast_y[:, _MAX_TAU])))
         assert row['forecast_y'] >= 0.0
 
-    def test_terminal_index_is_max_tau_not_a_literal_saturation(self):
-        # The arrays only have T = max_tau + 1 columns; reading "at
-        # saturation" must index max_tau, never a larger literal (would be
-        # out of bounds). Make the terminal column distinct so a wrong
-        # index would be caught.
+    def test_forecast_rate_reads_terminal_fc_surface(self):
+        # Evidence fields are frontier-indexed. Forecast rate fields read the
+        # terminal FC column, which describes the Cohort's ultimate landing.
         c = _immature('2026-03-10', 0)
-        c.ef_y = _spread_draws(28.0, 32.0, _T)
-        c.ef_y[:, _MAX_TAU] = 99.0  # terminal column is unmistakable
+        c.ef_rate = _spread_draws(0.28, 0.32, _T)
+        c.ef_rate[:, c.eval_age] = 0.99
+        c.ef_rate[:, _MAX_TAU] = 0.33  # terminal column is unmistakable
         bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
         result = reduce_daily_conversions_rows(bundle, observed)
         row = _row_by_date(result, '2026-03-10')
-        assert row['projected_y'] == pytest.approx(99.0)
+        assert row['projected_rate'] == pytest.approx(0.33)
+        bands = row['forecast_bands']
+        assert bands['80'] == pytest.approx([0.33, 0.33])
 
 
 class TestForecastBands:
 
     def test_bands_are_ordered_and_nested(self):
         c = _immature('2026-03-10', 0)
+        c.ef_rate = _spread_draws(0.28, 0.32, _T)
+        c.ef_rate[:, c.eval_age] = np.linspace(0.80, 0.90, _S)
+        c.ef_rate[:, _MAX_TAU] = np.linspace(0.20, 0.60, _S)
         bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
         result = reduce_daily_conversions_rows(bundle, observed)
         bands = _row_by_date(result, '2026-03-10')['forecast_bands']
         assert set(bands.keys()) == {'80', '90', '95', '99'}
+        assert bands['80'][0] < 0.30
+        assert bands['80'][1] > 0.50
+        assert bands['80'][1] < 0.70
         for level, (lo, hi) in bands.items():
             assert lo <= hi, level
         # Higher confidence contains lower at every nested level pair.
@@ -281,7 +309,7 @@ class TestForecastBands:
         result = reduce_daily_conversions_rows(bundle, observed)
         row = _row_by_date(result, '2026-03-10')
         assert row['forecast_bands'] is None
-        # But projected_y (from finite ef_y counts) is still produced.
+        # Count surfaces are independent from rate-band availability.
         assert row['projected_y'] is not None
 
 
@@ -397,7 +425,7 @@ class TestSkippedCohort:
         assert row['evidence_y'] == 5.0
         # Projection fields all null.
         for f in ('projected_y', 'forecast_y', 'forecast_bands',
-                  'completeness', 'layer', 'latency_bands'):
+                  'projected_x', 'forecast_x', 'completeness', 'layer', 'latency_bands'):
             assert row[f] is None, f
         assert row['_projection_provenance']['reason'] == 'no_root_window_evidence'
 
@@ -431,9 +459,13 @@ class TestModeBlindReadout:
         # only in its array values; the reducer reads whatever ef_y the
         # bundle resolved, with no hop branch.
         c = _immature('2026-03-10', 0)
+        c.ef_x = _spread_draws(90.0, 94.0, _T)
         c.ef_y = _spread_draws(40.0, 44.0, _T)  # a distinct multi-hop value
+        c.ef_rate = _spread_draws(0.40, 0.44, _T)
         bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
         result = reduce_daily_conversions_rows(bundle, observed)
         row = _row_by_date(result, '2026-03-10')
+        assert row['projected_x'] == pytest.approx(
+            float(np.mean(c.ef_x[:, _MAX_TAU])))
         assert row['projected_y'] == pytest.approx(
             float(np.mean(c.ef_y[:, _MAX_TAU])))

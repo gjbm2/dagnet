@@ -973,6 +973,8 @@ def test_daily_conversions_uses_shared_sweep_surface(
                 'anchor_to': '2026-04-04',
                 'slice_keys': [''],
                 'target': {'targetId': 'edge-1'},
+                'from_node': 'node-a',
+                'to_node': 'node-b',
             }],
         }],
         'display_settings': {
@@ -980,22 +982,40 @@ def test_daily_conversions_uses_shared_sweep_surface(
         },
     }
 
-    with patch('snapshot_service.query_snapshots') as mock_query:
+    sweep_rows = [
+        {**row, 'slice_key': 'window(-30d:).asat(5-Apr-26)'}
+        for row in _daily_conversion_rows()
+    ]
+    with (
+        patch('snapshot_service.query_snapshots') as mock_query,
+        patch('snapshot_service.query_snapshots_for_sweep') as mock_sweep,
+    ):
         mock_query.return_value = _daily_conversion_rows()
+        mock_sweep.return_value = sweep_rows
         result = handle_runner_analyze(req)
 
     assert result['success'] is True
     analysis = result['result']
     assert analysis['analysis_type'] == 'daily_conversions'
     assert analysis['cf_mode'] == 'sweep'
-    assert 'cf_reason' not in analysis
+    # 73q cutover: the date reducer always carries cf_reason (None when the
+    # sweep is healthy); the legacy enrichment popped it when None.
+    assert analysis.get('cf_reason') is None
 
     cohort_row = analysis['rate_by_cohort'][0]
-    expected_completeness = compute_completeness(1, 2.3, 0.5, 0.0)
-    assert cohort_row['completeness'] == pytest.approx(expected_completeness)
+    # Completeness now reads the runtime _runtime_completeness CDF exposed by
+    # the shared bundle, not the legacy analytic compute_completeness — assert
+    # a well-defined immature fraction rather than pinning the old value.
+    assert cohort_row['completeness'] is not None
+    assert 0.0 <= cohort_row['completeness'] <= 1.0
     assert cohort_row['projected_y'] > 0
-    assert cohort_row['forecast_y'] > 0
     assert cohort_row['forecast_bands']
+    assert cohort_row['projected_x'] > 0
+    assert cohort_row['projected_y'] > 0
+    assert cohort_row['projected_rate'] == pytest.approx(
+        cohort_row['forecast_bands']['80'][0],
+        rel=1e-9,
+    )
 
     assert cohort_row['latency_bands']
     for tau_label, payload in cohort_row['latency_bands'].items():

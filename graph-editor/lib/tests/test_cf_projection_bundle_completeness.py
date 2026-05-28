@@ -104,17 +104,3 @@ class TestPerCohortCompletenessShapeAndRange:
         ages = [1, 5, 10, 20, 30]
         per_cohort = _per_cohort(runtime, ages, [1.0] * len(ages), _HORIZON)
         assert np.all(np.diff(per_cohort) >= -1e-12)
-
-
-class TestScalarApi:
-
-    def test_empty_ages_returns_all_none(self):
-        runtime = _runtime_stub()
-        assert _runtime_completeness(
-            runtime, cohort_eval_ages=[], cohort_weights=[],
-            horizon=_HORIZON,
-        ) == (None, None, None)
-
-    def test_per_cohort_none_on_empty_ages(self):
-        runtime = _runtime_stub()
-        assert _per_cohort(runtime, [], [], _HORIZON) is None

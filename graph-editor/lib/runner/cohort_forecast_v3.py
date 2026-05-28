@@ -1442,13 +1442,9 @@ def _project_runtime_rows(
         mid = float(np.nanmedian(d))
         upper = float(np.nanquantile(d, (1 + band_level) / 2))
         lower = float(np.nanquantile(d, (1 - band_level) / 2))
-        bands = {
-            str(int(bl * 100)): [
-                float(np.nanquantile(d, (1 - bl) / 2)),
-                float(np.nanquantile(d, (1 + bl) / 2)),
-            ]
-            for bl in band_levels
-        }
+        # Shared with the date reducer's forecast_bands (73q Phase 3) so
+        # both consumers emit identical band geometry from one definition.
+        bands = _forecast_rate_bands(d, band_levels)
         return mid, upper, lower, bands, float(np.nanmean(d))
 
     def _draw_mean(draws_2d: Optional[np.ndarray], tau: int):
@@ -2327,6 +2323,33 @@ def compute_cohort_maturity_rows_v3(
         context_selector=context_selector,
         mece_dimensions=mece_dimensions,
     )
+    return reduce_cohort_maturity_rows(
+        bundle,
+        band_level=band_level,
+        sweep_to=sweep_to,
+        emit_diagnostics=emit_diagnostics,
+    )
+
+
+def reduce_cohort_maturity_rows(
+    bundle: 'CFProjectionBundle',
+    *,
+    band_level: float,
+    sweep_to: str,
+    emit_diagnostics: bool,
+) -> List[Dict[str, Any]]:
+    """Tau reducer (cohort_maturity): reduce the shared CF projection
+    bundle to per-tau rows.
+
+    The sibling of the date reducer (``reduce_daily_conversions_rows``):
+    both read the one ``CFProjectionBundle`` built by
+    ``build_cf_projection_bundle``. This reducer keeps the tau axis and
+    collapses Cohorts — one row per relative age through ``bundle.max_tau``
+    — via ``_project_runtime_rows`` over the runtime/projection surfaces,
+    then attaches public conditioning/provenance metadata. It owns no
+    runtime semantics (COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS §9):
+    every value is a readout of the already-resolved runtime object.
+    """
     runtime = bundle.runtime
 
     rows = _project_runtime_rows(
@@ -2353,3 +2376,161 @@ def compute_cohort_maturity_rows_v3(
     if bundle.a_pop_provenance and rows:
         rows[0]['_a_pop_provenance'] = bundle.a_pop_provenance
     return rows
+
+
+def reduce_daily_conversions_rows(
+    bundle: 'CFProjectionBundle',
+    observed: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Date reducer (73q Phase 3): enrich ``derive_daily_conversions``
+    output with per-Cohort FC projection fields from the shared bundle.
+
+    The sibling of the tau reducer (``compute_cohort_maturity_rows_v3``):
+    both read the one ``CFProjectionBundle``. This reducer keeps the
+    Cohort axis and collapses tau — one ``rate_by_cohort`` row per Cohort,
+    each field read at the contract-named bundle accessor and tau index
+    (73q §"Reducer field contract"). It is a strict readout: no
+    conditioning, no carrier/subject/completeness/latency-tau/FC-residual
+    recomputation, no per-Cohort posterior (COHORT_…_SEMANTICS I-9).
+
+    Observed ``date`` / ``x`` / ``y`` / ``rate`` and the response-level
+    ``data`` / ``cohort_y_at_age`` / ``total_conversions`` / ``date_range``
+    stay owned by ``derive_daily_conversions`` (``observed``); this reducer
+    joins each observed row to its Cohort by ``anchor_day`` and adds the
+    projection fields plus the bundle's scalar metadata.
+
+    Per the saturation reconciliation (73q §"Saturation tau and latent
+    extent" + Phase 2 close-out), "evaluated at saturation" reads the
+    per-Cohort FC arrays at their terminal index ``bundle.max_tau`` (the
+    latent extent): the predictive CDF has plateaued by its t95, so the
+    terminal value is the saturation value, and the arrays carry no wider
+    grid to index.
+
+    Allowed conditionals (Phase 3 no-branch check pre-approves exactly
+    these categories): projection status (admitted vs skipped Cohort),
+    field availability (all-NaN draws → ``None``; ``band_tau`` beyond the
+    FC array horizon → ``None`` with reason), and the evidence-vs-forecast
+    latency-band display split (``eval_age ≥ band_tau``). There is no
+    window/cohort/hop/identity mode fork — the reducer reads whatever the
+    bundle resolved.
+    """
+    from .cf_projection_bundle import completeness_to_layer
+
+    sp = bundle.selected_projection
+    sat = int(bundle.max_tau)            # terminal FC-array index
+    completeness_by_cohort = bundle.completeness_by_cohort
+    eval_ages = bundle.cohort_eval_ages
+    engine_cohorts = bundle.frame_evidence.engine_cohorts
+    band_taus = bundle.latency_band_taus
+
+    # cohort_list-order index + status per anchor_day. status's
+    # projection_index points into the ADMITTED-order per-Cohort arrays;
+    # the enumerate index `i` aligns with completeness_by_cohort /
+    # cohort_eval_ages / engine_cohorts (all cohort_list order).
+    status_by_date: Dict[str, tuple] = {
+        entry['anchor_day']: (i, entry)
+        for i, entry in enumerate(bundle.cohort_projection_status)
+    }
+
+    def _latency_bands(proj_idx: int, eval_age: int, ec: Any):
+        bands_map: Dict[str, Any] = {}
+        above_reasons: Dict[str, str] = {}
+        for band_tau, label in band_taus:
+            if band_tau > sat:
+                # Beyond the FC array horizon: genuinely unavailable. No
+                # clamp, no substitution — null with a recorded reason.
+                bands_map[label] = None
+                above_reasons[label] = 'band_tau_above_saturation'
+            elif eval_age >= band_tau:
+                # Evidence side: observed cumulative Y at band_tau over the
+                # Cohort's frozen denominator. Single rate value.
+                obs_rate = np.float64(ec.obs_y[band_tau]) / np.float64(ec.x_frozen)
+                bands_map[label] = (
+                    {'rate': float(obs_rate), 'source': 'evidence'}
+                    if np.isfinite(obs_rate) else None
+                )
+            else:
+                # Forecast side: per-Cohort FC rate draws at band_tau.
+                d = sp.ef_rate_draws_by_cohort[proj_idx, :, band_tau]
+                med = _nan_median_or_none(d)
+                bands_map[label] = (
+                    {
+                        'rate': med,
+                        'source': 'forecast',
+                        'bands': _forecast_rate_bands(
+                            d, _LATENCY_FORECAST_BAND_LEVELS,
+                        ),
+                    }
+                    if med is not None else None
+                )
+        return bands_map, above_reasons
+
+    enriched: List[Dict[str, Any]] = []
+    for row in observed['rate_by_cohort']:
+        out = dict(row)
+        out['evidence_y'] = row.get('y')
+
+        entry = status_by_date.get(row['date'])
+        proj_idx = entry[1]['projection_index'] if entry is not None else None
+        reason = entry[1]['reason'] if entry is not None else None
+        provenance: Dict[str, Any] = {'reason': reason}
+
+        if proj_idx is None:
+            # Skipped Cohort (no admissible root-window carrier evidence)
+            # or a date the bundle did not project: emit the observed row
+            # with all projection fields null. The Cohort stays visible.
+            out['projected_y'] = None
+            out['projected_x'] = None
+            out['forecast_y'] = None
+            out['forecast_x'] = None
+            out['projected_rate'] = None
+            out['forecast_bands'] = None
+            out['completeness'] = None
+            out['layer'] = None
+            out['latency_bands'] = None
+        else:
+            i = entry[0]
+            # Forecast enrichment is terminal: evidence stays at the latest
+            # frontier; FC count/rate fields read the terminal FC surfaces.
+            rate_draws = sp.ef_rate_draws_by_cohort[proj_idx, :, sat]
+            out['projected_x'] = _nan_mean_or_none(
+                sp.ef_x_draws_by_cohort[proj_idx, :, sat],
+            )
+            out['projected_y'] = _nan_mean_or_none(
+                sp.ef_y_draws_by_cohort[proj_idx, :, sat],
+            )
+            out['forecast_x'] = _nan_mean_or_none(
+                sp.ef_forecast_x_by_cohort[proj_idx, :, sat],
+            )
+            out['forecast_y'] = _nan_mean_or_none(
+                sp.ef_forecast_y_by_cohort[proj_idx, :, sat],
+            )
+            out['projected_rate'] = _nan_median_or_none(rate_draws)
+            out['forecast_bands'] = _forecast_rate_bands(
+                rate_draws, _FORECAST_BAND_LEVELS,
+            )
+            completeness = (
+                None if completeness_by_cohort is None
+                else float(completeness_by_cohort[i])
+            )
+            out['completeness'] = completeness
+            out['layer'] = completeness_to_layer(
+                completeness if completeness is not None else 0.0,
+            )
+            bands_map, above_reasons = _latency_bands(
+                proj_idx, int(eval_ages[i]), engine_cohorts[i],
+            )
+            out['latency_bands'] = bands_map
+            if above_reasons:
+                provenance['latency_bands'] = above_reasons
+
+        out['_projection_provenance'] = provenance
+        enriched.append(out)
+
+    return {
+        **observed,
+        'rate_by_cohort': enriched,
+        'cf_mode': bundle.cf_mode,
+        'cf_reason': bundle.cf_reason,
+        'promoted_source': bundle.promoted_source,
+    }

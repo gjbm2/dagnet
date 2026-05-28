@@ -1638,10 +1638,9 @@ export function buildComparisonTimeSeriesEChartsOption(
     if (visibilityMode === 'e') {
       return x > 0 && typeof row.evidence_y === 'number' ? row.evidence_y / x : row.rate;
     }
-    if (visibilityMode === 'f') {
-      return x > 0 && typeof row.projected_y === 'number' ? row.projected_y / x : row.rate;
-    }
-    return x > 0 && typeof row.projected_y === 'number' ? row.projected_y / x : row.rate;
+    const projectedRate = Number(row.projected_rate);
+    if (Number.isFinite(projectedRate)) return projectedRate;
+    return null;
   };
 
   const shouldShowFESplit = visibilityMode === 'f+e'

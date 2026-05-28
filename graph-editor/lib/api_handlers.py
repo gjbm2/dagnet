@@ -659,6 +659,8 @@ def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
             return _handle_cohort_maturity_v2(data)
         if analysis_type == 'cohort_maturity_v1':
             return _handle_snapshot_analyze_subjects(data)
+        if analysis_type == 'daily_conversions':
+            return _handle_daily_conversions(data)
         return _handle_snapshot_analyze_subjects(data)
 
     # Legacy path: snapshot_query (single subject)
@@ -701,244 +703,11 @@ def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
     return response.model_dump()
 
 
-def _make_envelope_aware_upstream_fetcher(
-    envelope_plan: Optional[Any],
-    per_edge_results_out: Optional[Dict[str, Dict[str, Any]]] = None,
-):
-    """Wrap `_fetch_upstream_observations` so it carries `envelope_plan`.
-
-    The runtime-prep call site (`prepare_forecast_runtime_inputs`) invokes
-    its `upstream_observation_fetcher` with a fixed kwarg signature; this
-    closure captures the per-request envelope_plan so the upstream fetch
-    bounds its `query_snapshots_for_sweep` by the carrier-side
-    arrival-map envelope rather than the legacy `axis_tau_max * 2 floor 60`
-    heuristic. See docs/current/snapshot-fetch-envelope-design.md.
-
-    `per_edge_results_out`, when supplied, captures the per-edge
-    derivation result for every carrier edge fetched. Callers that build
-    `_stage6_per_edge_evidence` from a per-edge map (e.g. CF whole-graph
-    mode) pass their `all_per_edge_results` here so the upstream fetch's
-    output is visible to the carrier-evidence builder. Without this the
-    carrier primitive degenerates to PRIOR_ONLY and the conditioned
-    posterior diverges from CM's (which has its own inline upstream
-    fetch already feeding its per-edge map).
-    """
-    def _fetcher(**kwargs: Any) -> Optional[Dict[str, Any]]:
-        kwargs['envelope_plan'] = envelope_plan
-        kwargs['per_edge_results_out'] = per_edge_results_out
-        return _fetch_upstream_observations(**kwargs)
-    return _fetcher
-
-
-def _fetch_upstream_observations(
-    graph_data: Dict[str, Any],
-    anchor_node: str,
-    query_from_node: str,
-    per_edge_results: List[Dict[str, Any]],
-    candidate_regimes_by_edge: Dict[str, Any],
-    anchor_from: str,
-    anchor_to: str,
-    sweep_from: str,
-    sweep_to: str,
-    axis_tau_max: Optional[int] = None,
-    log_prefix: str = '[upstream]',
-    envelope_plan: Optional[Any] = None,
-    per_edge_results_out: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Fetch upstream edge snapshot data for empirical carrier (Tier 2).
-
-    Shared by v2 and v3 handlers. Queries the snapshot DB for edges
-    on the path from anchor to from_node, derives cohort maturity
-    frames, and extracts upstream observations.
-
-    Returns upstream_obs dict (for XProvider) or None if fetch fails.
-    """
-    from datetime import date, timedelta
-    from runner.forecast_preparation import (
-        flatten_candidate_regime_hashes,
-        prepare_forecast_subject_entry,
-    )
-    from runner.span_kernel import _build_span_topology
-    from runner.span_upstream import extract_upstream_observations
-
-    # Collect evidence frames for edges entering from_node
-    up_edge_frames: Dict[str, List[Dict[str, Any]]] = {}
-
-    # Index subject edges we already have
-    for entry in per_edge_results:
-        target_id = (entry.get('subject') or {}).get('target', {}).get('targetId', '')
-        if target_id:
-            up_edge_frames[target_id] = (
-                entry.get('derivation_result', {}).get('frames', [])
-            )
-
-    # Find upstream edges not already in subject set
-    up_topo = _build_span_topology(graph_data, anchor_node, query_from_node)
-    if up_topo is None:
-        return None
-
-    def _edge_uuid(e_dict):
-        return str(e_dict.get('uuid', e_dict.get('id', '')))
-
-    missing_eids = [
-        _edge_uuid(e_data) for _, _, e_data in up_topo.edge_list
-        if _edge_uuid(e_data) not in up_edge_frames
-    ]
-    if missing_eids:
-        print(f"{log_prefix} fetching {len(missing_eids)} upstream edges")
-        fetch_ok = True
-        for eid in missing_eids:
-            regimes = candidate_regimes_by_edge.get(eid, [])
-            if not regimes:
-                print(f"{log_prefix} no regime for {eid[:20]}")
-                fetch_ok = False
-                break
-            core_hash, equivalent_hashes = flatten_candidate_regime_hashes(regimes)
-            if not core_hash:
-                fetch_ok = False
-                break
-            up_edge = None
-            for e in graph_data.get('edges', []):
-                if str(e.get('uuid', e.get('id', ''))) == str(eid):
-                    up_edge = e
-                    break
-            if not up_edge:
-                fetch_ok = False
-                break
-            p_id = up_edge.get('p', {}).get('id', '') or eid
-            # Donor-fetch backward extension for the carrier edge: prefer
-            # the principled envelope from the request's envelope_plan
-            # (carrier-rooted arrival map with backward donor extension by
-            # max(t95 + onset) over the carrier sub-tree). Fall back to
-            # the legacy `axis_tau_max * 2 floor 60` heuristic only when
-            # the envelope_plan is unavailable for this edge — pre-fix
-            # behaviour, kept as a defensive backstop.
-            envelope_anchor_from: Optional[str] = None
-            envelope_anchor_to: Optional[str] = None
-            if envelope_plan is not None:
-                env = envelope_plan.by_edge_uuid.get(str(eid))
-                if env is not None:
-                    envelope_anchor_from = env.anchor_from.isoformat()
-                    envelope_anchor_to = env.anchor_to.isoformat()
-            if envelope_anchor_from is None:
-                try:
-                    af_d = date.fromisoformat(anchor_from)
-                    lookback_days = max((axis_tau_max or 0) * 2, 60)
-                    envelope_anchor_from = (af_d - timedelta(days=lookback_days)).isoformat()
-                except (ValueError, TypeError):
-                    envelope_anchor_from = anchor_from
-            if envelope_anchor_to is None:
-                envelope_anchor_to = anchor_to
-            donor_subject = {
-                'subject_id': f'upstream::{eid}',
-                'path_role': 'only',
-                'param_id': p_id,
-                'core_hash': core_hash,
-                'equivalent_hashes': equivalent_hashes,
-                'slice_keys': [''],
-                'anchor_from': anchor_from,
-                'anchor_to': anchor_to,
-                'sweep_from': sweep_from,
-                'sweep_to': sweep_to,
-                'candidate_regimes': regimes,
-                'target': {'targetId': eid},
-                'from_node': str(up_edge.get('from') or ''),
-                'to_node': str(up_edge.get('to') or ''),
-            }
-            prepared_upstream = prepare_forecast_subject_entry(
-                subj=donor_subject,
-                subject_is_window=True,
-                log_prefix=log_prefix,
-                anchor_from_override=envelope_anchor_from,
-                sweep_from_override=envelope_anchor_from,
-                envelope_anchor_from=envelope_anchor_from,
-                envelope_anchor_to=envelope_anchor_to,
-            )
-            up_edge_frames[eid] = (
-                prepared_upstream.get('per_edge_result', {})
-                .get('derivation_result', {})
-                .get('frames', [])
-            )
-            # Surface the per-edge result so the caller's superset-candidate
-            # translator can include this carrier edge for downstream
-            # primitive binding. Without this, the carrier primitive falls
-            # through to PRIOR_ONLY.
-            if per_edge_results_out is not None:
-                _per_edge_entry = prepared_upstream.get('per_edge_result')
-                if _per_edge_entry:
-                    per_edge_results_out[str(eid)] = _per_edge_entry
-        if not fetch_ok:
-            print(f"{log_prefix} incomplete fetch, discarding partial evidence")
-            up_edge_frames = {}
-
-    # Extract observations (sum y across edges entering from_node)
-    if up_edge_frames:
-        upstream_obs = extract_upstream_observations(
-            graph=graph_data,
-            anchor_node_id=anchor_node,
-            x_node_id=query_from_node,
-            per_edge_frames=up_edge_frames,
-        )
-        if upstream_obs:
-            total_obs = sum(len(v) for v in upstream_obs.values())
-            print(f"{log_prefix} {total_obs} observations "
-                  f"across {len(upstream_obs)} cohorts")
-        return upstream_obs
-    return None
-
-
-def _compute_axis_tau_max(
-    *,
-    graph_data: Dict[str, Any],
-    last_edge_id: Optional[str],
-    anchor_from_str: str,
-    sweep_to_final: str,
-    tau_extent_raw: Any = None,
-    log_prefix: str = '[forecast]',
-) -> Optional[int]:
-    """Return the tau horizon bound used by the forecast paths."""
-    import math
-    from datetime import date
-
-    _sweep_span = None
-    try:
-        if anchor_from_str and sweep_to_final:
-            _af_d = date.fromisoformat(str(anchor_from_str)[:10])
-            _st_d = date.fromisoformat(str(sweep_to_final)[:10])
-            _sweep_span = (_st_d - _af_d).days
-    except (ValueError, TypeError):
-        pass
-
-    _edge_t95 = None
-    _path_t95 = None
-    if last_edge_id:
-        from runner.forecast_runtime import find_edge_by_id
-
-        _t95_edge = find_edge_by_id(graph_data, last_edge_id)
-        if _t95_edge:
-            _t95_lat = _t95_edge.get('p', {}).get('latency', {})
-            _t95_val = _t95_lat.get('promoted_t95') or _t95_lat.get('t95')
-            if isinstance(_t95_val, (int, float)) and _t95_val > 0:
-                _edge_t95 = float(_t95_val)
-            _pt95_val = _t95_lat.get('promoted_path_t95') or _t95_lat.get('path_t95')
-            if isinstance(_pt95_val, (int, float)) and _pt95_val > 0:
-                _path_t95 = float(_pt95_val)
-
-    _tau_extent_setting = None
-    if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
-        try:
-            _tau_extent_setting = float(tau_extent_raw)
-        except (ValueError, TypeError):
-            pass
-
-    if _tau_extent_setting and _tau_extent_setting > 0:
-        axis_tau_max = int(math.ceil(_tau_extent_setting))
-    else:
-        _axis_candidates = [c for c in [_sweep_span, _edge_t95, _path_t95] if c and c > 0]
-        axis_tau_max = int(math.ceil(max(_axis_candidates))) if _axis_candidates else None
-    print(f"{log_prefix} axis_tau_max={axis_tau_max} tau_extent_setting={_tau_extent_setting} "
-          f"last_edge_id={last_edge_id is not None}")
-    return axis_tau_max
+# _make_envelope_aware_upstream_fetcher, _fetch_upstream_observations, and
+# _compute_axis_tau_max were relocated to runner/forecast_preparation.py
+# (73q Phase 4) so the shared CF analysis boundary (runner/cf_analysis.py)
+# can import them from the preparation layer without a cycle back through
+# api_handlers. The two CF handlers below import them where used.
 
 
 def _apply_temporal_regime_selection(
@@ -1598,8 +1367,6 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
     calls cohort_forecast_v3.compute_cohort_maturity_rows_v3 which
     delegates completeness/carrier/model resolution to the engine.
     """
-    import math
-    from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
     from runner.forecast_preparation import (
         extract_forecast_context_scope,
         prepare_forecast_subject_group,
@@ -1671,160 +1438,54 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         if _emit_diagnostics and last_regime_diag:
             _diag['regime_selection'] = last_regime_diag
 
-        tau_extent_raw = display_settings.get('tau_extent')
-        axis_tau_max = _compute_axis_tau_max(
-            graph_data=graph_data,
-            last_edge_id=last_edge_id,
-            anchor_from_str=anchor_from_str,
-            sweep_to_final=sweep_to_final,
-            tau_extent_raw=tau_extent_raw,
-            log_prefix='[v3]',
-        )
-
         band_raw = display_settings.get('bayes_band_level', '90')
         try:
             band_level = float(band_raw) / 100.0 if band_raw not in ('off', 'blend') else 0.90
         except (ValueError, TypeError):
             band_level = 0.90
 
-        # G.4: annotate_rows removed from v3. projected_rate now uses
-        # MC mean from the sweep (same draws as midpoint/fan bands).
-        # Frame annotation was only needed for projected_y aggregation
-        # which is superseded by the engine.
-        from runner.model_resolver import resolve_model_params
+        # Build the one shared CF projection bundle and reduce it with the
+        # registry-selected reducer (tau reducer for cohort_maturity). The
+        # preparation→bundle boundary lives in runner.cf_analysis; this
+        # handler is a thin client. find_edge_by_id / resolve_model_params
+        # remain for the synthetic-future-frame tail below.
         from runner.forecast_runtime import (
-            build_prepared_span_execution,
             find_edge_by_id,
-            parse_asat_from_dsl,
-            prepare_forecast_runtime_inputs,
             serialise_rate_evidence_provenance,
         )
+        from runner.model_resolver import resolve_model_params
+        from runner.cf_analysis import prepare_cf_projection_bundle, reducer_for
 
-        # Per-edge raw snapshot rows used by the descriptor-built
-        # primitive candidate pool. Seed with the prepared subject
-        # results, then let the shared envelope-aware upstream fetcher
-        # add active-carrier edge results. This keeps admitted evidence on
-        # the fetch-envelope route instead of a local upstream re-fetch.
-        _per_edge_results_by_uuid: Dict[str, Dict[str, Any]] = {}
-        for _entry in per_edge_results or []:
-            _tid = (
-                (_entry.get('subject') or {}).get('target', {}).get('targetId', '')
-            )
-            if _tid:
-                _per_edge_results_by_uuid[str(_tid)] = _entry
-
-        _prepared_runtime_v3 = prepare_forecast_runtime_inputs(
-            graph_data=graph_data,
-            query_from_node=query_from_node,
-            query_to_node=query_to_node,
-            anchor_node_id=anchor_node,
-            last_edge_id=last_edge_id,
-            is_window=is_window,
-            is_multi_hop=preparation.is_multi_hop,
-            composed_frames=composed_frames,
-            path_per_edge_results=per_edge_results,
-            upstream_per_edge_results=per_edge_results,
-            axis_tau_max=axis_tau_max,
-            upstream_anchor_from=subjects[0].get('anchor_from', ''),
-            upstream_anchor_to=subjects[0].get('anchor_to', ''),
-            upstream_sweep_from=subjects[0].get(
-                'sweep_from',
-                subjects[0].get('anchor_from', ''),
-            ),
-            upstream_sweep_to=subjects[0].get(
-                'sweep_to',
-                subjects[0].get('anchor_to', ''),
-            ),
-            candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
-            upstream_observation_fetcher=_make_envelope_aware_upstream_fetcher(
-                preparation.envelope_plan,
-                per_edge_results_out=_per_edge_results_by_uuid,
-            ),
-            upstream_log_prefix='[v3] upstream:',
-            p_conditioning_source='snapshot_frames',
-            p_conditioning_evidence_points=len(composed_frames),
-            include_epistemic_overlay=True,
-            as_at=parse_asat_from_dsl(temporal_dsl),
-            scenario_id=scenario_id,
-        )
-        _subject_temporal_mode = _prepared_runtime_v3.subject_temporal_mode
-        # Post-73n: the v3 row builder is fully runtime-driven; legacy
-        # aggregate-timing inputs (mc_cdf_arr_epi, span_params_epi,
-        # x_provider_overlay etc.) are dead. ResolvedCFRuntime carries
-        # the joint-conditioned posterior, the unconditioned predictive
-        # overlay (F mode), and the optional unconditioned epistemic
-        # overlay (model curve). Diagnostics still flow off the
-        # runtime_bundle for audit.
-        _v3_resolved_override = _prepared_runtime_v3.resolved_override
-        _v3_runtime_bundle_diag = _prepared_runtime_v3.runtime_bundle
-        if _emit_diagnostics and _v3_runtime_bundle_diag is not None:
-            _diag['rate_evidence_provenance'] = serialise_rate_evidence_provenance(
-                _v3_runtime_bundle_diag
-            )
-
-        # ── Call v3 row builder ───────────────────────────────────────
-        _is_multi_hop = preparation.is_multi_hop
         maturity_rows = []
+        prepared = None
         if composed_frames and last_edge_id:
-            anchor_to_str = preparation.anchor_to
-            from runner.cohort_forecast_v3 import (
-                build_carrier_superset_candidates_by_edge,
-                build_superset_candidates_by_edge,
-            )
-            _stage6_per_edge_candidates = build_carrier_superset_candidates_by_edge(
-                graph=graph_data,
-                anchor_node_id=anchor_node,
-                query_from_node=query_from_node,
-                per_edge_results_by_uuid=_per_edge_results_by_uuid,
-                anchor_from=anchor_from_str,
-                sweep_to=sweep_to_final,
-                as_at=parse_asat_from_dsl(temporal_dsl),
-                scenario_id=scenario_id,
-                context_key=context_scope.context_key,
-                context_selector=context_scope.context_selector,
-                mece_dimensions=context_scope.mece_dimensions,
-            )
-            # Non-target subject edges (X → end).
-            _stage_subject_per_edge_candidates = build_superset_candidates_by_edge(
-                graph=graph_data,
-                from_node=query_from_node,
-                to_node=query_to_node,
-                per_edge_results_by_uuid=_per_edge_results_by_uuid,
-                anchor_from=anchor_from_str,
-                sweep_to=sweep_to_final,
-                as_at=parse_asat_from_dsl(temporal_dsl),
-                scenario_id=scenario_id,
-                context_key=context_scope.context_key,
-                context_selector=context_scope.context_selector,
-                mece_dimensions=context_scope.mece_dimensions,
-            )
-            maturity_rows = compute_cohort_maturity_rows_v3(
-                frames=composed_frames,
-                graph=graph_data,
-                target_edge_id=last_edge_id,
-                query_from_node=query_from_node or '',
-                query_to_node=query_to_node or '',
-                anchor_from=anchor_from_str,
-                anchor_to=anchor_to_str,
-                sweep_to=sweep_to_final,
+            prepared = prepare_cf_projection_bundle(
+                preparation,
+                graph_data=graph_data,
+                subjects=subjects,
                 is_window=is_window,
-                axis_tau_max=axis_tau_max,
-                band_level=band_level,
-                anchor_node_id=anchor_node,
-                is_multi_hop=_is_multi_hop,
-                resolved_override=_v3_resolved_override,
+                context_scope=context_scope,
                 scenario_id=scenario_id,
-                as_at=parse_asat_from_dsl(temporal_dsl),
-                per_edge_upstream_candidates=_stage6_per_edge_candidates,
-                per_edge_subject_candidates=_stage_subject_per_edge_candidates,
-                per_edge_results_by_uuid=_per_edge_results_by_uuid,
+                as_at=_envelope_as_at,
+                candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                per_edge_results_by_uuid={},
+                tau_extent_raw=display_settings.get('tau_extent'),
+                include_epistemic_overlay=True,
+                use_prepared_resolved=True,
                 show_model_curve=bool(display_settings.get('show_model_curve')),
-                emit_diagnostics=_emit_diagnostics,
-                envelope_plan=preparation.envelope_plan,
-                context_key=context_scope.context_key,
-                context_selector=context_scope.context_selector,
-                mece_dimensions=context_scope.mece_dimensions,
+                log_prefix='[v3]',
             )
+            maturity_rows = reducer_for('cohort_maturity')(
+                prepared.bundle,
+                band_level=band_level,
+                sweep_to=prepared.sweep_to,
+                emit_diagnostics=_emit_diagnostics,
+            )
+            if _emit_diagnostics and prepared.runtime_bundle_diag is not None:
+                _diag['rate_evidence_provenance'] = serialise_rate_evidence_provenance(
+                    prepared.runtime_bundle_diag
+                )
+        axis_tau_max = prepared.axis_tau_max if prepared else None
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
 
@@ -1879,9 +1540,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         # preference and the available source curves; surface it on the
         # subject result so the FE normaliser can lift it to the
         # AnalysisResult.
-        _resolved_for_response = getattr(
-            _prepared_runtime_v3, 'resolved_override', None
-        )
+        _resolved_for_response = getattr(prepared, 'resolved_override', None)
         _promoted_source = getattr(_resolved_for_response, 'source', None)
         if _promoted_source:
             subject_result['promoted_source'] = _promoted_source
@@ -1974,6 +1633,170 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "scenarios": per_scenario_results}
 
 
+def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Daily conversions on the shared CF runtime (73q Phase 4).
+
+    A client of the same preparation→bundle boundary cohort_maturity uses:
+    resolve subjects → build the one shared ``CFProjectionBundle`` → reduce
+    it with the registry-selected date reducer. The observed ``data`` /
+    ``cohort_y_at_age`` / ``total_conversions`` / ``date_range`` and the
+    observed ``x`` / ``y`` / ``rate`` per Cohort stay owned by
+    ``derive_daily_conversions`` over raw snapshot rows — the bundle is a
+    Cohort×tau projection, not the calendar-delta observed series — and the
+    date reducer joins each observed row to its Cohort by ``anchor_day``.
+    """
+    from datetime import date, datetime
+    from snapshot_service import query_snapshots
+    from runner.daily_conversions_derivation import derive_daily_conversions
+    from runner.forecast_preparation import (
+        extract_forecast_context_scope,
+        prepare_forecast_subject_group,
+        resolve_forecast_subjects,
+    )
+    from runner.forecast_runtime import (
+        parse_asat_from_dsl,
+        serialise_rate_evidence_provenance,
+    )
+    from runner.cf_analysis import prepare_cf_projection_bundle, reducer_for
+
+    analysis_type = 'daily_conversions'
+    scenarios = data.get('scenarios', [])
+    top_analytics_dsl = data.get('analytics_dsl', '')
+    display_settings = data.get('display_settings') or {}
+    mece_dimensions = data.get('mece_dimensions') or []
+    _emit_diagnostics = bool(data.get('_diagnostics'))
+    _diag: Dict[str, Any] = {} if _emit_diagnostics else {}
+
+    per_scenario_results: List[Dict[str, Any]] = []
+
+    for scenario in scenarios:
+        scenario_id = scenario.get('scenario_id', 'unknown')
+        graph_data = scenario.get('graph') or {}
+
+        subjects = resolve_forecast_subjects(
+            graph_data=graph_data,
+            scenario=scenario,
+            top_analytics_dsl=top_analytics_dsl,
+            path_analysis_type=analysis_type,
+            whole_graph_analysis_type=None,
+            log_prefix='[daily_conv]',
+        )
+        if not subjects:
+            per_scenario_results.append({
+                "scenario_id": scenario_id, "success": True,
+                "subjects": [], "rows_analysed": 0,
+            })
+            continue
+
+        temporal_dsl = scenario.get('effective_query_dsl', '')
+        query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
+        is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
+        context_scope = extract_forecast_context_scope(
+            temporal_dsl, mece_dimensions=mece_dimensions,
+        )
+        _as_at = parse_asat_from_dsl(temporal_dsl)
+
+        preparation = prepare_forecast_subject_group(
+            graph_data=graph_data,
+            subjects=subjects,
+            is_window=is_window,
+            log_prefix='[daily_conv]',
+            as_at=_as_at,
+            scenario_id=scenario_id,
+            context_scope=context_scope,
+        )
+
+        # Observed series: raw snapshot rows for the target edge, regime-
+        # selected as the snapshot path does, reduced by
+        # derive_daily_conversions. Owns the calendar `data` series,
+        # per-Cohort observed x/y/rate, cohort_y_at_age, totals, date_range.
+        target_subj = next(
+            (s for s in subjects
+             if (s.get('target') or {}).get('targetId') == preparation.last_edge_id),
+            subjects[-1],
+        )
+        # asat frontier from the query DSL — authoritative, and the same
+        # frontier the bundle is built against. resolve_forecast_subjects
+        # does not stamp as_at on the subject, so read it from the DSL
+        # rather than the subject, or the observed series is unbounded.
+        _ss_as_at = datetime.fromisoformat(_as_at) if _as_at else None
+        rows = query_snapshots(
+            param_id=target_subj['param_id'],
+            core_hash=target_subj['core_hash'],
+            slice_keys=target_subj.get('slice_keys', ['']),
+            anchor_from=date.fromisoformat(target_subj['anchor_from']),
+            anchor_to=date.fromisoformat(target_subj['anchor_to']),
+            as_at=_ss_as_at,
+            equivalent_hashes=target_subj.get('equivalent_hashes'),
+        )
+        rows = _apply_temporal_regime_selection(rows, target_subj, is_window)
+        observed = derive_daily_conversions(rows)
+
+        # Forecast enrichment: the date reducer over the shared bundle. No
+        # edge resolved → no projection; the observed series stands alone.
+        if preparation.last_edge_id:
+            prepared = prepare_cf_projection_bundle(
+                preparation,
+                graph_data=graph_data,
+                subjects=subjects,
+                is_window=is_window,
+                context_scope=context_scope,
+                scenario_id=scenario_id,
+                as_at=_as_at,
+                candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                per_edge_results_by_uuid={},
+                tau_extent_raw=display_settings.get('tau_extent'),
+                include_epistemic_overlay=False,
+                use_prepared_resolved=False,
+                show_model_curve=False,
+                log_prefix='[daily_conv]',
+            )
+            result = reducer_for('daily_conversions')(prepared.bundle, observed)
+            if _emit_diagnostics and prepared.runtime_bundle_diag is not None:
+                _diag['rate_evidence_provenance'] = serialise_rate_evidence_provenance(
+                    prepared.runtime_bundle_diag
+                )
+        else:
+            result = observed
+
+        per_scenario_results.append({
+            "scenario_id": scenario_id,
+            "success": True,
+            "subjects": [{
+                "subject_id": f"daily_conv:{preparation.query_from_node}:{preparation.query_to_node}",
+                "success": True,
+                "result": result,
+                "rows_analysed": len(rows),
+            }],
+            "rows_analysed": len(rows),
+        })
+
+    # Flatten single-scenario / single-subject (matches the other handlers).
+    if len(per_scenario_results) == 1:
+        single_scenario = per_scenario_results[0]
+        subjects_list = single_scenario.get("subjects", [])
+        if len(subjects_list) == 1:
+            single = subjects_list[0]
+            resp = {
+                "success": single.get("success", False),
+                "result": single.get("result"),
+                "error": single.get("error"),
+                "rows_analysed": single.get("rows_analysed", 0),
+                "subject_id": single.get("subject_id"),
+                "scenario_id": single_scenario.get("scenario_id"),
+            }
+            if _diag:
+                resp["_diagnostics"] = _diag
+            return resp
+        return {
+            "success": single_scenario.get("success", False),
+            "scenario_id": single_scenario.get("scenario_id"),
+            "subjects": subjects_list,
+            "rows_analysed": single_scenario.get("rows_analysed", 0),
+        }
+    return {"success": True, "scenarios": per_scenario_results}
+
+
 @maybe_profile("conditioned-forecast")
 def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
     """Conditioned forecast — graph enrichment endpoint (doc 45).
@@ -2017,7 +1840,6 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
 def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
     import math
     import numpy as _np
-    from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
     from runner.forecast_preparation import (
         extract_forecast_context_scope,
         prepare_forecast_subject_group,
@@ -2138,150 +1960,48 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                 or data.get('display_settings')
                 or {}
             )
-            axis_tau_max = _compute_axis_tau_max(
-                graph_data=graph_data,
-                last_edge_id=last_edge_id,
-                anchor_from_str=anchor_from_str,
-                sweep_to_final=sweep_to_final,
-                tau_extent_raw=display_settings.get('tau_extent'),
-                log_prefix='[forecast]',
-            )
+            # Build the one shared CF projection bundle and reduce it with
+            # the registry-selected reducer. Whole-graph conditioned
+            # forecast reads the same tau reducer as cohort_maturity and
+            # extracts per-edge scalars from its last row below. The
+            # whole-graph donor cache (all_per_edge_results) is carried as
+            # data: the shared boundary seeds it and threads it through the
+            # upstream fetcher and candidate builders.
+            from runner.forecast_runtime import serialise_rate_evidence_provenance
+            from runner.cf_analysis import prepare_cf_projection_bundle, reducer_for
 
-            from runner.forecast_runtime import (
-                parse_asat_from_dsl,
-                prepare_forecast_runtime_inputs,
-                serialise_rate_evidence_provenance,
-            )
-
-            _prepared_runtime = prepare_forecast_runtime_inputs(
-                graph_data=graph_data,
-                query_from_node=query_from_node,
-                query_to_node=query_to_node,
-                anchor_node_id=anchor_node,
-                last_edge_id=last_edge_id,
-                is_window=is_window,
-                is_multi_hop=preparation.is_multi_hop,
-                composed_frames=composed_frames,
-                path_per_edge_results=per_edge_results,
-                upstream_per_edge_results=(
-                    list(all_per_edge_results.values())
-                    if is_whole_graph
-                    else per_edge_results
-                ),
-                axis_tau_max=axis_tau_max,
-                upstream_anchor_from=subj_group[0].get('anchor_from', ''),
-                upstream_anchor_to=subj_group[0].get('anchor_to', ''),
-                upstream_sweep_from=subj_group[0].get(
-                    'sweep_from',
-                    subj_group[0].get('anchor_from', ''),
-                ),
-                upstream_sweep_to=subj_group[0].get(
-                    'sweep_to',
-                    subj_group[0].get('anchor_to', ''),
-                ),
-                candidate_regimes_by_edge=scenario.get(
-                    'candidate_regimes_by_edge',
-                    {},
-                ),
-                upstream_observation_fetcher=_make_envelope_aware_upstream_fetcher(
-                    preparation.envelope_plan,
-                    per_edge_results_out=all_per_edge_results,
-                ),
-                upstream_log_prefix='[forecast] upstream:',
-                p_conditioning_source='snapshot_frames',
-                p_conditioning_evidence_points=len(composed_frames),
-                include_epistemic_overlay=False,
-                as_at=parse_asat_from_dsl(temporal_dsl),
-                scenario_id=scenario_id,
-            )
-            _mc_cdf = _prepared_runtime.mc_cdf_arr
-            _mc_p = _prepared_runtime.mc_p_s
-            _is_multi_hop = _prepared_runtime.is_multi_hop
-            _edge_mc_cdf = _prepared_runtime.edge_cdf_arr
-            _det_norm_cdf = _prepared_runtime.det_norm_cdf
-            _det_span_p = _prepared_runtime.det_span_p
-            _span_alpha = _prepared_runtime.span_alpha
-            _span_beta = _prepared_runtime.span_beta
-            _span_params = _prepared_runtime.span_params
-            _x_provider = _prepared_runtime.x_provider
-            _runtime_bundle = _prepared_runtime.runtime_bundle
-            if _emit_diagnostics and _runtime_bundle is not None and last_edge_id:
-                _diag.setdefault('rate_evidence_provenance_by_edge', []).append({
-                    'scenario_id': scenario_id,
-                    'edge_uuid': last_edge_id,
-                    'from_node': query_from_node,
-                    'to_node': query_to_node,
-                    **serialise_rate_evidence_provenance(_runtime_bundle),
-                })
-
-            # ── Call v3 row builder and read scalars ────────────────
-            # Call unconditionally when we have an edge id — the unified
-            # runtime path handles empty frames as the prior-only
-            # degeneration when possible. Class D (no α/β) produces an
-            # empty maturity_rows and routes to skipped_edges below.
+            maturity_rows = []
             if last_edge_id:
-                anchor_to_str = preparation.anchor_to
-                # Translate already-fetched evidence-superset rows for
-                # carrier and subject primitives into request-pool
-                # candidates. No evidence is read from graph-side source
-                # fields here; the superset interface owns evidence
-                # fetching and deduping.
-                from runner.cohort_forecast_v3 import (
-                    build_carrier_superset_candidates_by_edge,
-                    build_superset_candidates_by_edge,
-                )
-                _stage6_per_edge_candidates = build_carrier_superset_candidates_by_edge(
-                    graph=graph_data,
-                    anchor_node_id=anchor_node,
-                    query_from_node=query_from_node,
-                    per_edge_results_by_uuid=all_per_edge_results,
-                    anchor_from=anchor_from_str,
-                    sweep_to=sweep_to_final,
-                    as_at=parse_asat_from_dsl(temporal_dsl),
-                    scenario_id=scenario_id,
-                    context_key=context_scope.context_key,
-                    context_selector=context_scope.context_selector,
-                    mece_dimensions=context_scope.mece_dimensions,
-                )
-                # Non-target subject edges (X→end). Walk X→end and
-                # populate evidence per edge from the topo cache.
-                _stage_subject_per_edge_candidates = build_superset_candidates_by_edge(
-                    graph=graph_data,
-                    from_node=query_from_node,
-                    to_node=query_to_node,
-                    per_edge_results_by_uuid=all_per_edge_results,
-                    anchor_from=anchor_from_str,
-                    sweep_to=sweep_to_final,
-                    as_at=parse_asat_from_dsl(temporal_dsl),
-                    scenario_id=scenario_id,
-                    context_key=context_scope.context_key,
-                    context_selector=context_scope.context_selector,
-                    mece_dimensions=context_scope.mece_dimensions,
-                )
-                maturity_rows = compute_cohort_maturity_rows_v3(
-                    frames=composed_frames,
-                    graph=graph_data,
-                    target_edge_id=last_edge_id,
-                    query_from_node=query_from_node or '',
-                    query_to_node=query_to_node or '',
-                    anchor_from=anchor_from_str,
-                    anchor_to=anchor_to_str,
-                    sweep_to=sweep_to_final,
+                prepared = prepare_cf_projection_bundle(
+                    preparation,
+                    graph_data=graph_data,
+                    subjects=subj_group,
                     is_window=is_window,
-                    axis_tau_max=axis_tau_max,
-                    anchor_node_id=anchor_node,
-                    is_multi_hop=_is_multi_hop,
+                    context_scope=context_scope,
                     scenario_id=scenario_id,
-                    as_at=parse_asat_from_dsl(temporal_dsl),
-                    per_edge_upstream_candidates=_stage6_per_edge_candidates,
-                    per_edge_subject_candidates=_stage_subject_per_edge_candidates,
+                    as_at=_cf_envelope_as_at,
+                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
                     per_edge_results_by_uuid=all_per_edge_results,
-                    emit_diagnostics=_emit_diagnostics,
-                    envelope_plan=preparation.envelope_plan,
-                    context_key=context_scope.context_key,
-                    context_selector=context_scope.context_selector,
-                    mece_dimensions=context_scope.mece_dimensions,
+                    tau_extent_raw=display_settings.get('tau_extent'),
+                    include_epistemic_overlay=False,
+                    use_prepared_resolved=False,
+                    show_model_curve=False,
+                    log_prefix='[forecast]',
                 )
+                maturity_rows = reducer_for('cohort_maturity')(
+                    prepared.bundle,
+                    band_level=0.90,
+                    sweep_to=prepared.sweep_to,
+                    emit_diagnostics=_emit_diagnostics,
+                )
+                if _emit_diagnostics and prepared.runtime_bundle_diag is not None:
+                    _diag.setdefault('rate_evidence_provenance_by_edge', []).append({
+                        'scenario_id': scenario_id,
+                        'edge_uuid': last_edge_id,
+                        'from_node': query_from_node,
+                        'to_node': query_to_node,
+                        **serialise_rate_evidence_provenance(prepared.runtime_bundle_diag),
+                    })
 
                 if maturity_rows:
                     last_row = maturity_rows[-1]
@@ -3211,8 +2931,6 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 # Route to appropriate derivation
                 if analysis_type == 'lag_histogram':
                     result = derive_lag_histogram(rows)
-                elif analysis_type == 'daily_conversions':
-                    result = derive_daily_conversions(rows)
                 elif analysis_type == 'branch_comparison':
                     result = derive_daily_conversions(rows)
                 elif analysis_type == 'conversion_rate':
@@ -3396,261 +3114,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         'anchor_to': subj.get('anchor_to'),
                         'tau_extent': _te_val,
                     })
-                elif analysis_type == 'daily_conversions' and 'rate_by_cohort' in result:
-                    # G.1b: route through forecast engine (coordinate B)
-                    # instead of annotate_rows. Same codepath as topo pass.
-                    _dc_annotated = False
-                    try:
-                        from runner.forecast_state import compute_forecast_trajectory, CohortEvidence
-                        from runner.model_resolver import resolve_model_params as _rmp
-                        from runner.forecast_application import compute_completeness as _cc
-                        from runner.forecast_runtime import get_cf_mode_and_reason
-
-                        _edge_dict = next(
-                            (e for e in graph.get('edges', [])
-                             if e.get('uuid') == target_id),
-                            None,
-                        )
-                        _temporal = 'window' if is_window else 'cohort'
-                        _graph_pref = graph.get('model_source_preference')
-                        _resolved = (_rmp(_edge_dict,
-                                         scope='edge' if is_window else 'path',
-                                         temporal_mode=_temporal,
-                                         graph_preference=_graph_pref)
-                                     if _edge_dict else None)
-
-                        if _resolved and _resolved.latency.sigma > 0:
-                            _cf_mode, _cf_reason = get_cf_mode_and_reason(_resolved)
-                            result['cf_mode'] = _cf_mode
-                            if _cf_reason is not None:
-                                result['cf_reason'] = _cf_reason
-                            else:
-                                result.pop('cf_reason', None)
-                            # Parse asat date from DSL; default to today.
-                            # DSL dates are d-MMM-yy (e.g. 16-Apr-26) or
-                            # relative (e.g. -30d). Use the same parser as
-                            # analysis_subject_resolution.
-                            import re as _re
-                            _eval_date_str = date.today().isoformat()
-                            _eff_dsl = scenario.get('effective_query_dsl', '')
-                            _asat_m = _re.search(r'(?:asat|at)\(([^)]*)\)', _eff_dsl)
-                            if _asat_m and _asat_m.group(1).strip():
-                                try:
-                                    from analysis_subject_resolution import _resolve_date
-                                    _eval_date_str = _resolve_date(_asat_m.group(1).strip())
-                                except Exception:
-                                    pass
-
-                            # Build CohortEvidence per rate_by_cohort row.
-                            # Use anchor_day + eval_date — the engine computes
-                            # eval_age in __post_init__.
-                            #
-                            # Key: eval_age is set to the maturity horizon (t95),
-                            # NOT the Cohort's actual age. The sweep produces
-                            # draws at τ=t95 where the CDF has converged —
-                            # giving the eventual total forecast (projected_y).
-                            # The Cohort's real age is used only for completeness.
-                            _lat = _resolved.latency
-                            _t95 = int(math.ceil(_lat.t95)) if _lat.t95 > 0 else 60
-                            _maturity_tau = max(_t95, 30)  # at least 30 days
-
-                            _engine_cohorts = []
-                            _row_map = []  # parallel index: row reference
-                            _cohort_real_ages = []  # actual age per Cohort (for completeness)
-                            for _row in result['rate_by_cohort']:
-                                _ad_str = str(_row.get('date', ''))[:10]
-                                _x = float(_row.get('x', 0) or 0)
-                                _y = float(_row.get('y', 0) or 0)
-                                if _x <= 0 or not _ad_str:
-                                    continue
-                                # Compute real age from dates
-                                try:
-                                    _ad = date.fromisoformat(_ad_str)
-                                    _ed = date.fromisoformat(_eval_date_str[:10])
-                                    _real_age = (_ed - _ad).days
-                                except (ValueError, TypeError):
-                                    continue
-                                if _real_age < 0:
-                                    continue
-                                _engine_cohorts.append(CohortEvidence(
-                                    obs_x=[_x],
-                                    obs_y=[_y],
-                                    x_frozen=_x,
-                                    y_frozen=_y,
-                                    # frontier = real age: the engine must know
-                                    # where the evidence ends so IS conditioning
-                                    # can fire when that semantic step is allowed.
-                                    frontier_age=_real_age,
-                                    a_pop=_x,
-                                    eval_age=_maturity_tau,  # read draws at maturity
-                                ))
-                                _row_map.append(_row)
-                                _cohort_real_ages.append(_real_age)
-
-                            if _engine_cohorts:
-                                # POST-73n: daily_conversions still consumes
-                                # the legacy trajectory engine. The CF
-                                # row/scalar path migrated to
-                                # ResolvedCFRuntime in 73n; this analysis
-                                # has not. Migration owed before the
-                                # trajectory engine can be deleted — see
-                                # TODO.md "73n follow-up".
-                                _sweep = compute_forecast_trajectory(
-                                    resolved=_resolved,
-                                    cohorts=_engine_cohorts,
-                                    max_tau=_maturity_tau,
-                                )
-                                _lat = _resolved.latency
-                                if _sweep.cohort_evals and len(_sweep.cohort_evals) == len(_row_map):
-                                    import numpy as _np
-                                    for _ce, _row, _real_age in zip(_sweep.cohort_evals, _row_map, _cohort_real_ages):
-                                        _proj_y = float(_np.mean(_ce.y_draws))
-                                        _ev_y = float(_row.get('y', 0) or 0)
-                                        _x = float(_row.get('x', 0) or 0)
-                                        _c = _cc(_real_age, _lat.mu, _lat.sigma, _lat.onset_delta_days)
-                                        _c = max(0.0, min(1.0, _c))
-                                        _row['completeness'] = _c
-                                        _row['evidence_y'] = _ev_y
-                                        _row['projected_y'] = _proj_y
-                                        _row['forecast_y'] = max(0.0, _proj_y - _ev_y)
-                                        _row['layer'] = 'mature' if _c >= 0.95 else ('forecast' if _c > 1e-9 else 'evidence')
-                                        # Forecast rate bands from MC draws
-                                        if _x > 0 and len(_ce.y_draws) > 10:
-                                            _rate_draws = _ce.y_draws / _x
-                                            _row['forecast_bands'] = {
-                                                '80': [float(_np.percentile(_rate_draws, 10)), float(_np.percentile(_rate_draws, 90))],
-                                                '90': [float(_np.percentile(_rate_draws, 5)), float(_np.percentile(_rate_draws, 95))],
-                                                '95': [float(_np.percentile(_rate_draws, 2.5)), float(_np.percentile(_rate_draws, 97.5))],
-                                                '99': [float(_np.percentile(_rate_draws, 0.5)), float(_np.percentile(_rate_draws, 99.5))],
-                                            }
-                                    _dc_annotated = True
-                                    # Propagate promoted_source for FE hint rendering
-                                    result['promoted_source'] = _resolved.source or 'best_available'
-                                    print(f"[daily_conv] Engine annotation: {len(_row_map)} cohorts, "
-                                          f"IS_ESS={_sweep.is_ess:.0f}, "
-                                          f"conditioned={_sweep.n_cohorts_conditioned}, "
-                                          f"maturity_tau={_maturity_tau}, "
-                                          f"p_mean={_resolved.p_mean:.4f}, "
-                                          f"alpha={_resolved.alpha:.2f}, beta={_resolved.beta:.2f}, "
-                                          f"mu={_lat.mu:.3f}, sigma={_lat.sigma:.3f}, "
-                                          f"source={_resolved.source}")
-
-                                    # ── Latency bands (optional) ──────────────────
-                                    # Per-Cohort rate at fixed maturity τ values
-                                    # (25th/50th/75th percentile of the latency CDF).
-                                    # Evidence where age ≥ τ; forecast+fan where age < τ.
-                                    _ds = data.get('display_settings') or {}
-                                    if _ds.get('show_latency_bands') and _lat.sigma > 0:
-                                        from runner.lag_distribution_utils import log_normal_inverse_cdf as _inv_cdf
-
-                                        _band_taus = []
-                                        for _q in [0.25, 0.50, 0.75]:
-                                            _raw = _inv_cdf(_q, _lat.mu, _lat.sigma) + _lat.onset_delta_days
-                                            _tau_d = max(1, round(_raw))
-                                            if _tau_d not in [t for t, _ in _band_taus]:
-                                                _band_taus.append((_tau_d, f'{_tau_d}d'))
-                                        if not _band_taus:
-                                            _band_taus = [(1, '1d')]
-
-                                        # Per-(anchor_day, age) observed Y — from the derivation,
-                                        # using the same per-series aggregation as the main rate.
-                                        # Guaranteed consistent: Y at any age ≤ final Y.
-                                        _cohort_y_at_age_raw = result.get('cohort_y_at_age') or {}
-                                        _obs_by_cohort_age: dict = {}
-                                        for _ad_str, _ages in _cohort_y_at_age_raw.items():
-                                            for _age_str, _y_val in _ages.items():
-                                                _obs_by_cohort_age[(_ad_str, int(_age_str))] = float(_y_val)
-
-                                        # Run sweep per band τ and annotate rows
-                                        _latency_band_results = {}
-                                        for _bt, _bt_label in _band_taus:
-                                            _band_cohorts = []
-                                            _band_row_refs = []
-                                            for _row, _real_age in zip(_row_map, _cohort_real_ages):
-                                                _x = float(_row.get('x', 0) or 0)
-                                                _y = float(_row.get('y', 0) or 0)
-                                                _ad_str = str(_row.get('date', ''))[:10]
-                                                if _x <= 0 or not _ad_str:
-                                                    continue
-                                                _band_cohorts.append(CohortEvidence(
-                                                    obs_x=[_x],
-                                                    obs_y=[_y],
-                                                    x_frozen=_x,
-                                                    y_frozen=_y,
-                                                    frontier_age=min(_real_age, _bt),
-                                                    a_pop=_x,
-                                                    eval_age=_bt,
-                                                ))
-                                                _band_row_refs.append((_row, _real_age, _ad_str))
-
-                                            if not _band_cohorts:
-                                                continue
-
-                                            # POST-73n: latency-band overlay
-                                            # still on the legacy trajectory
-                                            # engine. Migrate alongside the
-                                            # daily_conversions row annotation
-                                            # above (TODO.md "73n follow-up").
-                                            _band_sweep = compute_forecast_trajectory(
-                                                resolved=_resolved,
-                                                cohorts=_band_cohorts,
-                                                max_tau=_bt,
-                                            )
-
-                                            if _band_sweep.cohort_evals and len(_band_sweep.cohort_evals) == len(_band_row_refs):
-                                                for _bce, (_row, _real_age, _ad_str) in zip(_band_sweep.cohort_evals, _band_row_refs):
-                                                    _x = float(_row.get('x', 0) or 0)
-                                                    if _x <= 0:
-                                                        continue
-                                                    if _real_age >= _bt:
-                                                        # Evidence: find observed y at age ≤ τ,
-                                                        # divided by FINAL x (not snapshot x).
-                                                        # y accumulates monotonically; rate at
-                                                        # age τ must be ≤ rate at maturity.
-                                                        _obs_rate = None
-                                                        for _look_age in range(_bt, -1, -1):
-                                                            _obs_y = _obs_by_cohort_age.get((_ad_str, _look_age))
-                                                            if _obs_y is not None:
-                                                                _obs_rate = _obs_y / _x  # y_at_age / x_final
-                                                                break
-                                                        if _obs_rate is not None:
-                                                            if 'latency_bands' not in _row:
-                                                                _row['latency_bands'] = {}
-                                                            _row['latency_bands'][_bt_label] = {
-                                                                'rate': _obs_rate,
-                                                                'source': 'evidence',
-                                                            }
-                                                    else:
-                                                        # Forecast: use engine draws
-                                                        _rate_draws = _bce.y_draws / _x
-                                                        _median = float(_np.median(_rate_draws))
-                                                        _bands = {
-                                                            '80': [float(_np.percentile(_rate_draws, 10)), float(_np.percentile(_rate_draws, 90))],
-                                                            '90': [float(_np.percentile(_rate_draws, 5)), float(_np.percentile(_rate_draws, 95))],
-                                                        }
-                                                        if 'latency_bands' not in _row:
-                                                            _row['latency_bands'] = {}
-                                                        _row['latency_bands'][_bt_label] = {
-                                                            'rate': _median,
-                                                            'source': 'forecast',
-                                                            'bands': _bands,
-                                                        }
-
-                                        _active_bands = [lb for _, lb in _band_taus]
-                                        print(f"[daily_conv] Latency bands: {_active_bands}")
-
-                    except Exception as _dc_err:
-                        import traceback as _tb
-                        print(f"[daily_conv] WARNING: engine annotation failed: {_dc_err}")
-                        _tb.print_exc()
-
-                    if not _dc_annotated:
-                        # Fallback: legacy annotate_rows (produces zeros
-                        # due to field name mismatch — but avoids crash)
-                        result['rate_by_cohort'] = annotate_rows(
-                            result['rate_by_cohort'], mu, sigma, onset,
-                            forecast_mean=fm,
-                        )
+                # daily_conversions enrichment retired (73q Phase 4): the
+                # analysis is served by _handle_daily_conversions, which builds
+                # the shared CFProjectionBundle and applies the date reducer.
+                # The legacy compute_forecast_trajectory enrichment (and its
+                # annotate_rows fallback) is deleted; daily_conversions no
+                # longer reaches this handler.
 
                 # ── Model CDF curve (cohort maturity only) ──────────────
                 # Generate the theoretical cumulative lognormal curve so the
