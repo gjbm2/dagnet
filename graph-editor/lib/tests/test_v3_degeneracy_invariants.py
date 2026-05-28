@@ -113,13 +113,23 @@ def _ensure_ready(graph: str) -> Optional[Path]:
     return sidecar
 
 
-def _run_v3(graph: str, dsl: str, sidecar: Optional[Path]) -> dict[str, Any]:
+def _run_v3(
+    graph: str,
+    dsl: str,
+    sidecar: Optional[Path],
+    display_settings: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     # FC chart-surface Atom 1: tests i1/i2/i3 read `model_curve_midpoint`
     # (the unconditioned model overlay), which is opt-in via the
     # `show_model_curve` display setting per the v3 contract
     # (test_cohort_maturity_v3_contract enforces the opt-in invariant).
     # We always request it here — i4/i5 read `midpoint` instead and are
     # unaffected by the extra overlay computation.
+    display = {"show_model_curve": True}
+    if display_settings:
+        display.update(display_settings)
+    display_json = json.dumps(display, separators=(",", ":"))
+
     args = [
         "--graph", _DATA_REPO_PATH or "",
         "--name", graph,
@@ -127,7 +137,7 @@ def _run_v3(graph: str, dsl: str, sidecar: Optional[Path]) -> dict[str, Any]:
         "--type", "cohort_maturity",
         "--no-cache", "--no-snapshot-cache",
         "--format", "json",
-        "--display", '{"show_model_curve":true}',
+        "--display", display_json,
     ]
     if sidecar is not None:
         args += ["--bayes-vars", str(sidecar)]
@@ -144,7 +154,7 @@ def _run_v3(graph: str, dsl: str, sidecar: Optional[Path]) -> dict[str, Any]:
 
     cmd = ["bash", str(_ANALYSE_SH), graph, dsl,
            "--type", "cohort_maturity", "--no-cache", "--no-snapshot-cache", "--format", "json",
-           "--display", '{"show_model_curve":true}']
+           "--display", display_json]
     if sidecar is not None:
         cmd += ["--bayes-vars", str(sidecar)]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(_REPO_ROOT), timeout=300)
@@ -320,7 +330,12 @@ class TestV3DegeneracyInvariants:
         if sidecar is None:
             pytest.skip("Bayes sidecar required for I4 but not present")
 
-        payload = _run_v3(graph, f"{_M4_TERMINAL}.window(1-Mar-26:22-Mar-26).asat(22-Mar-26)", sidecar)
+        payload = _run_v3(
+            graph,
+            f"{_M4_TERMINAL}.window(1-Mar-26:22-Mar-26).asat(22-Mar-26)",
+            sidecar,
+            display_settings={"tau_extent": 30},
+        )
         rows = (payload.get("result") or {}).get("data") or []
         mids = [r["midpoint"] for r in rows if isinstance(r.get("midpoint"), (int, float))]
         if len(mids) < 5:

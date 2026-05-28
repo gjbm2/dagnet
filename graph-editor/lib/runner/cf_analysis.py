@@ -69,7 +69,7 @@ class CFAnalysisPrepared:
     total_rows: int
     cohorts_analysed: int
     is_multi_hop: bool
-    axis_tau_max: Optional[int]       # for the cohort_maturity synthetic-frame tail
+    compute_extent: int               # engine boundary input picked by handler
     runtime_bundle_diag: Any          # for --diag provenance only
 
 
@@ -84,7 +84,7 @@ def prepare_cf_projection_bundle(
     as_at: Optional[str],
     candidate_regimes_by_edge: Dict[str, Any],
     per_edge_results_by_uuid: Dict[str, Dict[str, Any]],
-    tau_extent_raw: Any,
+    compute_extent: int,
     include_epistemic_overlay: bool,
     use_prepared_resolved: bool,
     show_model_curve: bool,
@@ -101,15 +101,22 @@ def prepare_cf_projection_bundle(
     runtime inputs, the upstream fetcher's write-back, and the candidate
     builders.
 
+    ``compute_extent`` is the engine boundary input chosen by the analysis
+    handler per ``docs/current/cohort-maturity-render-calc-policy.md``.
+    This boundary is a perimeter orchestrator: span/calc scoping policy
+    (Manual vs Auto, visibility-mode mapping, multi-scenario reduction,
+    pad-out) lives in the handler. The bundle composes the runtime to
+    ``compute_extent``, derives ``saturation_τ`` as a latent t95 of the
+    composed predictive CDF, and projects per-Cohort at
+    ``min(compute_extent, saturation_τ)`` — no policy blending inside the
+    engine.
+
     ``use_prepared_resolved`` reuses the model resolved by
     ``prepare_forecast_runtime_inputs`` (cohort_maturity needs the same
     resolution that drives its epistemic model-curve overlay); when False
     the bundle resolves the model itself.
     """
-    from runner.forecast_preparation import (
-        _compute_axis_tau_max,
-        _make_envelope_aware_upstream_fetcher,
-    )
+    from runner.forecast_preparation import _make_envelope_aware_upstream_fetcher
     from runner.forecast_runtime import prepare_forecast_runtime_inputs
     from runner.cohort_forecast_v3 import (
         build_carrier_superset_candidates_by_edge,
@@ -123,15 +130,6 @@ def prepare_cf_projection_bundle(
         if tid:
             per_edge_results_by_uuid[str(tid)] = entry
 
-    axis_tau_max = _compute_axis_tau_max(
-        graph_data=graph_data,
-        last_edge_id=preparation.last_edge_id,
-        anchor_from_str=preparation.anchor_from,
-        sweep_to_final=preparation.sweep_to,
-        tau_extent_raw=tau_extent_raw,
-        log_prefix=log_prefix,
-    )
-
     first = subjects[0]
     prepared_runtime = prepare_forecast_runtime_inputs(
         graph_data=graph_data,
@@ -144,7 +142,7 @@ def prepare_cf_projection_bundle(
         composed_frames=preparation.composed_frames,
         path_per_edge_results=preparation.per_edge_results,
         upstream_per_edge_results=list(per_edge_results_by_uuid.values()),
-        axis_tau_max=axis_tau_max,
+        axis_tau_max=compute_extent,
         upstream_anchor_from=first.get('anchor_from', ''),
         upstream_anchor_to=first.get('anchor_to', ''),
         upstream_sweep_from=first.get('sweep_from', first.get('anchor_from', '')),
@@ -202,7 +200,7 @@ def prepare_cf_projection_bundle(
         anchor_to=preparation.anchor_to,
         sweep_to=preparation.sweep_to,
         is_window=is_window,
-        axis_tau_max=axis_tau_max,
+        compute_extent=compute_extent,
         anchor_node_id=preparation.anchor_node,
         is_multi_hop=preparation.is_multi_hop,
         resolved_override=resolved_override,
@@ -231,6 +229,6 @@ def prepare_cf_projection_bundle(
         total_rows=preparation.total_rows,
         cohorts_analysed=preparation.cohorts_analysed,
         is_multi_hop=preparation.is_multi_hop,
-        axis_tau_max=axis_tau_max,
+        compute_extent=compute_extent,
         runtime_bundle_diag=prepared_runtime.runtime_bundle,
     )

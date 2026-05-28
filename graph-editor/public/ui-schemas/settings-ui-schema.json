@@ -23,6 +23,7 @@
             "DEFAULT_T95_DAYS",
             "SNAPSHOT_OBSERVATION_T95_MULTIPLIER",
             "SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER",
+            "SATURATION_PERCENTILE",
             "FORECAST_BLEND_LAMBDA",
             "LATENCY_BLEND_COMPLETENESS_POWER",
             "ANCHOR_DELAY_BLEND_K_CONVERSIONS"
@@ -98,6 +99,9 @@
     },
     "SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER": {
       "ui:help": "Extends the snapshot observation window beyond path_t95 for path-conditioned evidence.\n\n1.0 (no extension) · 1.5 (standard) · 2.0+ (conservative, longer fetches)."
+    },
+    "SATURATION_PERCENTILE": {
+      "ui:help": "Where the engine treats the request CDF as plateaued. Past this point the per-Cohort projection is held flat.\n\n0.95 (legacy ~5% residual) · 0.99 (standard, ~1%) · 0.995+ (very conservative, more tail work)."
     },
     "FORECAST_BLEND_LAMBDA": {
       "ui:help": "Prior strength for forecast/evidence blending.\n\n0.05–0.20 (typical) · 0.20–0.50 (conservative) · 0 (raw evidence, no prior)."

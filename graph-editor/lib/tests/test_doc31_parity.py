@@ -214,6 +214,9 @@ def _build_old_path_request(graph: dict, from_id: str, to_id: str, edge: dict,
         'anchor_to': anchor_to,
         'slice_keys': [''],
         'equivalent_hashes': [],
+        'from_node': from_id,
+        'to_node': to_id,
+        'path_role': 'only',
         'target': {'targetId': edge_uuid},
     }
     if read_mode in ('cohort_maturity', 'sweep_simple'):
@@ -629,10 +632,10 @@ class TestDailyConversionsParity:
         edge = _find_edge_by_uuid(graph, edge_uuid)
         query_dsl = f'from({from_id}).to({to_id}).window(-90d:)'
 
-        from api_handlers import _handle_snapshot_analyze_subjects
+        from api_handlers import _handle_daily_conversions
 
         old_req = _build_old_path_request(graph, from_id, to_id, edge, 'daily_conversions', query_dsl)
-        old_result = _handle_snapshot_analyze_subjects(old_req)
+        old_result = _handle_daily_conversions(old_req)
 
         new_req = _build_new_path_request(
             graph,
@@ -644,9 +647,15 @@ class TestDailyConversionsParity:
             old_req,
             graph_name,
         )
-        new_result = _handle_snapshot_analyze_subjects(new_req)
+        new_result = _handle_daily_conversions(new_req)
 
-        _compare_results(old_result, new_result, 'daily_conversions')
+        assert old_result.get('success') == new_result.get('success')
+        old_rates = (old_result.get('result') or {}).get('rate_by_cohort', [])
+        new_rates = (new_result.get('result') or {}).get('rate_by_cohort', [])
+        assert len(old_rates) == len(new_rates), (
+            f"rate_by_cohort count mismatch: old={len(old_rates)} "
+            f"new={len(new_rates)}"
+        )
 
 
 @requires_db

@@ -4,9 +4,10 @@ The public row function becomes "build bundle → tau reducer"; the date
 reducer (73q Phase 3) becomes "build bundle → date reducer". This suite
 pins the Phase 2 "complete when" bundle contract:
 
-  - the bundle's per-Cohort FC arrays cover ``fe.saturation_tau`` when it
-    exceeds ``fe.max_tau``, while public cohort-maturity rows still emit
-    only through ``fe.max_tau`` (§"Saturation tau");
+  - the bundle's per-Cohort FC arrays cover ``bundle.saturation_tau`` (the
+    latent t95 of the composed predictive CDF) when ``compute_extent``
+    exceeds it, while public cohort-maturity rows emit through the same
+    projection horizon (``bundle.max_tau``);
   - the bundle exposes ``cf_mode`` / ``cf_reason`` / ``promoted_source``
     as explicit fields, sourced from the resolved model object (not by
     scraping ``runtime_provenance``);
@@ -52,8 +53,15 @@ from test_model_span_spine_selected_cohort import _candidate  # noqa: E402
 from datetime import date
 
 
-# Long-lag fixture so saturation_tau (≈ ceil(2·t95)) exceeds max_tau.
+# Long-lag fixture so the latent saturation_τ (t95 of composed CDF) sits
+# strictly inside a generous ``compute_extent`` ceiling — the policy
+# contract this suite pins.
 _LAT = dict(mu=3.0, sigma=0.8, onset=5.0)
+# Generous compute_extent so saturation_τ is the binding constraint on
+# the projection horizon (post-policy: bundle projects to
+# ``min(compute_extent, saturation_τ)``; with this fixture the model t95
+# is well below 200, so saturation_τ wins).
+_COMPUTE_EXTENT = 200
 
 # Synth cohorts at anchor_to − 2·c (n_cohorts=4): 03-10, 03-08, 03-06, 03-04.
 _ADMITTED_ANCHORS = ('2026-03-10', '2026-03-06')
@@ -89,6 +97,7 @@ def _build_bundle():
         anchor_to=anchor_from,
         sweep_to=sweep_to,
         is_window=True,
+        compute_extent=_COMPUTE_EXTENT,
         evidence_candidates=_candidates_for(_ADMITTED_ANCHORS),
         scenario_id='bundle-test',
     )
@@ -100,16 +109,16 @@ class TestBundleSaturationHorizon:
     def test_per_cohort_arrays_cover_latent_extent_below_ceiling(self):
         bundle, *_ = _build_bundle()
         assert isinstance(bundle, CFProjectionBundle)
-        fe = bundle.frame_evidence
-        # The per-Cohort projection is sized to the latent chart extent
-        # (bundle.max_tau, read off the conditioned span), strictly below the
-        # composition ceiling fe.saturation_tau. That decoupling — compose at
-        # a safe ceiling, project only to the data-latent reach — is the cost
-        # saving; the arrays no longer carry the full ceiling-width grid.
-        assert bundle.max_tau < fe.saturation_tau
+        # The per-Cohort projection is sized to ``min(compute_extent,
+        # saturation_τ)`` (bundle.max_tau). With a generous compute_extent
+        # the binding constraint is the latent saturation_τ — the engine
+        # does not project past plateau even when the handler asks for
+        # more headroom, so arrays carry only the saturation-width grid.
+        assert bundle.max_tau == bundle.saturation_tau
+        assert bundle.saturation_tau < _COMPUTE_EXTENT
         T_ext = bundle.max_tau + 1
         sp = bundle.selected_projection
-        # tau dimension covers the latent extent; cohort dim == admitted count.
+        # tau dimension covers the projection horizon; cohort dim == admitted.
         assert sp.ef_x_draws_by_cohort.shape == (
             len(_ADMITTED_ANCHORS), sp.ef_x_draws.shape[0], T_ext,
         )
@@ -119,22 +128,23 @@ class TestBundleSaturationHorizon:
 
     def test_public_rows_stop_at_latent_extent_not_ceiling(self):
         bundle, graph, frames, anchor_from, sweep_to = _build_bundle()
-        fe = bundle.frame_evidence
         rows = compute_cohort_maturity_rows_v3(
             frames=frames, graph=graph, target_edge_id='e1',
             query_from_node='node-a', query_to_node='node-b',
             anchor_from='2026-03-01', anchor_to=anchor_from,
-            sweep_to=sweep_to, is_window=True, scenario_id='bundle-test',
+            sweep_to=sweep_to, is_window=True,
+            compute_extent=_COMPUTE_EXTENT,
+            scenario_id='bundle-test',
             evidence_candidates=_candidates_for(_ADMITTED_ANCHORS),
         )
         assert rows
         max_row_tau = max(r['tau_days'] for r in rows)
-        # Rows extend to the latent chart extent (bundle.max_tau): at least
-        # the observed calendar reach (fe.max_tau), strictly below the
-        # composition ceiling (fe.saturation_tau).
+        # Rows extend to ``min(compute_extent, saturation_τ)``; with a
+        # generous compute_extent the binding is the latent saturation_τ,
+        # strictly inside the ceiling.
         assert max_row_tau == bundle.max_tau
-        assert max_row_tau >= fe.max_tau
-        assert max_row_tau < fe.saturation_tau
+        assert max_row_tau == bundle.saturation_tau
+        assert max_row_tau < _COMPUTE_EXTENT
 
 
 class TestBundleScalarMetadata:

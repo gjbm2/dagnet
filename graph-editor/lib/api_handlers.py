@@ -703,11 +703,218 @@ def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
     return response.model_dump()
 
 
-# _make_envelope_aware_upstream_fetcher, _fetch_upstream_observations, and
-# _compute_axis_tau_max were relocated to runner/forecast_preparation.py
-# (73q Phase 4) so the shared CF analysis boundary (runner/cf_analysis.py)
-# can import them from the preparation layer without a cycle back through
-# api_handlers. The two CF handlers below import them where used.
+# _make_envelope_aware_upstream_fetcher and _fetch_upstream_observations
+# were relocated to runner/forecast_preparation.py (73q Phase 4) so the
+# shared CF analysis boundary (runner/cf_analysis.py) can import them
+# from the preparation layer without a cycle back through api_handlers.
+# The two CF handlers below import them where used.
+#
+# Span/calc scoping (the former ``_compute_axis_tau_max`` policy blend) is
+# now perimeter-owned per ``docs/current/cohort-maturity-render-calc-policy.md``:
+# each handler picks ``compute_extent`` via the helper below and passes it
+# into the shared bundle boundary, which exposes the latent ``saturation_τ``
+# and the projection horizon (= ``min(compute_extent, saturation_τ)``)
+# back on the bundle for the handler to use for chart axis / pad-out.
+
+
+def _compose_subject_span_t95(
+    graph_data: Dict[str, Any],
+    source_node: str,
+    target_node: str,
+    *,
+    temporal_mode: str = 'window',
+    graph_preference: Optional[str] = None,
+    forecasting_settings: Any = None,
+) -> Optional[float]:
+    """Return t95 of the deterministic ``source_node → target_node`` span,
+    or ``None`` when the span is empty / has zero asymptotic mass.
+
+    Used by ``_compute_extent_for_scenario`` to size the request horizon
+    when the rightmost edge's stored ``path_t95`` doesn't match the actual
+    subject span:
+
+      * window queries — the subject span is ``query_from → query_to``,
+        which differs from the stored anchor-rooted ``path_t95`` once
+        ``query_from`` sits downstream of the graph anchor.
+      * cohort queries with a DSL-overridden anchor — the subject span is
+        ``override_anchor → query_to``, which the stored
+        ``anchor-default → query_to.path_t95`` likewise overstates (or
+        understates) by the chain of carrier edges that sit outside the
+        request.
+
+    The compositional grid is sized off ``snapshot_observation_path_t95_multiplier``
+    × the per-edge ``t95`` sum (the convolved t95 is bounded by the sum;
+    the multiplier is the same headroom budget used in
+    ``_compute_extent_for_scenario`` for compute_extent itself). The kernel
+    is composed once with no Bayesian draws — this is a budget read, not
+    the projection itself.
+    """
+    import math as _math
+
+    from runner.forecast_runtime import build_prepared_span_execution
+    from runner.span_kernel import compose_span_kernel
+
+    exec_inputs = build_prepared_span_execution(
+        graph_data,
+        source_node,
+        target_node,
+        temporal_mode=temporal_mode,
+        graph_preference=graph_preference,
+    )
+    if exec_inputs is None:
+        return None
+
+    edge_t95_sum = 0.0
+    for _from, _to, e in getattr(exec_inputs.topo, 'edge_list', []) or []:
+        lat = (e.get('p', {}) or {}).get('latency', {}) or {}
+        et = lat.get('promoted_t95') or lat.get('t95')
+        if isinstance(et, (int, float)) and et > 0:
+            edge_t95_sum += float(et)
+
+    path_mult = float(
+        getattr(forecasting_settings, 'snapshot_observation_path_t95_multiplier', 1.5)
+        if forecasting_settings is not None else 1.5
+    )
+    grid_tau = int(_math.ceil(path_mult * edge_t95_sum)) if edge_t95_sum > 0 else 0
+    if grid_tau <= 0:
+        return None
+
+    try:
+        kernel = compose_span_kernel(
+            topo=exec_inputs.topo,
+            edge_params=exec_inputs.edge_params,
+            max_tau=grid_tau,
+        )
+    except Exception:
+        return None
+    if kernel is None or kernel.span_p <= 0:
+        return None
+
+    import numpy as _np
+    threshold = 0.95 * float(kernel.span_p)
+    idx = int(_np.searchsorted(kernel.K, threshold))
+    if idx >= len(kernel.K):
+        return None
+    return float(idx)
+
+
+def _compute_extent_for_scenario(
+    *,
+    display_settings: Dict[str, Any],
+    visibility_mode: str,
+    anchor_from: str,
+    sweep_to: str,
+    graph_data: Dict[str, Any],
+    last_edge_id: Optional[str],
+    forecasting_settings: Any,
+    is_window: bool,
+    query_from_node: Optional[str] = None,
+    query_to_node: Optional[str] = None,
+    anchor_node: Optional[str] = None,
+) -> int:
+    """Pick the engine boundary ``compute_extent`` for one scenario per the
+    span/calc scoping policy in
+    ``docs/current/cohort-maturity-render-calc-policy.md``.
+
+    The three cases:
+
+    - **Manual** (``display_settings['tau_extent']`` is a positive number,
+      not the literal ``'auto'`` / ``'Auto'``): ``compute_extent = user_axis``.
+      The chart axis matches and the engine works only what the user asked
+      for.
+    - **Auto, F or F+E mode**: the t95 of the convolved subject span
+      ``source → query_to`` (composed via ``compose_span_kernel``), scaled
+      by ``forecasting_settings.snapshot_observation_path_t95_multiplier``
+      (default 1.5). The composition source is the same node the engine
+      uses as the request CDF root:
+
+      * **Window** — ``query_from_node``.
+      * **Cohort** — ``anchor_node`` (the effective anchor for the
+        request, incl. DSL overrides via ``cohort(<anchor>, …)``). The
+        rightmost edge's stored ``path_t95`` is anchored at the graph
+        default, so composing from the effective anchor handles default
+        and DSL-overridden anchors uniformly.
+
+      Fallbacks (in order): target edge ``t95`` ×
+      ``snapshot_observation_t95_multiplier`` (default 2.0); then
+      ``tau_future_max`` (= ``(sweep_to - anchor_from).days``).
+    - **Auto, E only mode**: ``compute_extent = tau_future_max``. E-mode
+      reads strict evidence only; saturation discovery is not needed.
+
+    ``compute_extent`` must be ≥ 0; ``(sweep_to - anchor_from).days`` is
+    used as a final floor so the engine has at least the calendar reach
+    to project against.
+    """
+    import math
+    from datetime import date as _date
+
+    def _safe_calendar_days() -> int:
+        try:
+            af = _date.fromisoformat(str(anchor_from)[:10])
+            st = _date.fromisoformat(str(sweep_to)[:10])
+            return max(int((st - af).days), 0)
+        except (ValueError, TypeError):
+            return 0
+
+    # Manual override always wins.
+    tau_extent_raw = display_settings.get('tau_extent')
+    if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
+        try:
+            user_axis = int(math.ceil(float(tau_extent_raw)))
+            if user_axis > 0:
+                return user_axis
+        except (ValueError, TypeError):
+            pass
+
+    tau_future_max = _safe_calendar_days()
+
+    # Auto, E-only: just enough to cover the calendar reach. The engine
+    # composes only to its window; no saturation read needed.
+    if visibility_mode == 'e':
+        return max(tau_future_max, 0)
+
+    # Auto, F / F+E: compose ``source → query_to`` and use its t95 with
+    # the path-headroom multiplier. The composition source is the request
+    # CDF root — ``query_from`` for window, ``anchor`` for cohort. One
+    # rule for every hop count and every (default / overridden) anchor.
+    path_mult = float(
+        getattr(forecasting_settings, 'snapshot_observation_path_t95_multiplier', 1.5)
+        if forecasting_settings is not None else 1.5
+    )
+    edge_mult = float(
+        getattr(forecasting_settings, 'snapshot_observation_t95_multiplier', 2.0)
+        if forecasting_settings is not None else 2.0
+    )
+
+    source_node = query_from_node if is_window else anchor_node
+    reference_t95: Optional[float] = None
+    if source_node and query_to_node and source_node != query_to_node:
+        reference_t95 = _compose_subject_span_t95(
+            graph_data,
+            source_node,
+            query_to_node,
+            temporal_mode='window' if is_window else 'cohort',
+            graph_preference=graph_data.get('model_source_preference'),
+            forecasting_settings=forecasting_settings,
+        )
+
+    if reference_t95 is not None and reference_t95 > 0:
+        return max(int(math.ceil(path_mult * reference_t95)), tau_future_max, 0)
+
+    # Fallback: own-edge t95 on the target edge when composition failed
+    # (missing source / target, no path, or no per-edge latency fit).
+    if last_edge_id:
+        from runner.forecast_runtime import find_edge_by_id
+
+        edge = find_edge_by_id(graph_data, last_edge_id)
+        if edge:
+            lat = (edge.get('p', {}) or {}).get('latency', {}) or {}
+            _et = lat.get('promoted_t95') or lat.get('t95')
+            if isinstance(_et, (int, float)) and _et > 0:
+                return max(int(math.ceil(edge_mult * float(_et))), tau_future_max, 0)
+
+    # No latency fit available — calendar reach is all we have.
+    return max(tau_future_max, 0)
 
 
 def _apply_temporal_regime_selection(
@@ -1372,13 +1579,19 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         prepare_forecast_subject_group,
         resolve_forecast_subjects,
     )
+    from runner.forecasting_settings import settings_from_dict
 
     analysis_type = 'cohort_maturity'
     scenarios = data.get('scenarios', [])
     top_analytics_dsl = data.get('analytics_dsl', '')
     display_settings = data.get('display_settings') or {}
+    forecasting_settings = settings_from_dict(data.get('forecasting_settings'))
     _emit_diagnostics = bool(data.get('_diagnostics'))
     _diag: Dict[str, Any] = {} if _emit_diagnostics else {}
+
+    # Per-scenario tracking for the multi-scenario chart-axis reduction +
+    # last-row pad-out at end (policy doc §"Multiple scenarios.cohort_maturity").
+    per_scenario_extents: List[Dict[str, Any]] = []
 
     per_scenario_results: List[Dict[str, Any]] = []
 
@@ -1456,9 +1669,29 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         from runner.model_resolver import resolve_model_params
         from runner.cf_analysis import prepare_cf_projection_bundle, reducer_for
 
+        # Per-scenario visibility mode drives the compute_extent policy in
+        # Auto. Default 'f+e' matches the snapshot scenario default and the
+        # v1 handler's read (api_handlers.py:683 for `visibility_mode`).
+        visibility_mode = scenario.get('visibility_mode', 'f+e')
+
         maturity_rows = []
         prepared = None
+        compute_extent: Optional[int] = None
+        saturation_tau: Optional[int] = None
         if composed_frames and last_edge_id:
+            compute_extent = _compute_extent_for_scenario(
+                display_settings=display_settings,
+                visibility_mode=visibility_mode,
+                anchor_from=anchor_from_str,
+                sweep_to=sweep_to_final,
+                graph_data=graph_data,
+                last_edge_id=last_edge_id,
+                forecasting_settings=forecasting_settings,
+                is_window=is_window,
+                query_from_node=query_from_node,
+                query_to_node=query_to_node,
+                anchor_node=anchor_node,
+            )
             prepared = prepare_cf_projection_bundle(
                 preparation,
                 graph_data=graph_data,
@@ -1469,12 +1702,13 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 as_at=_envelope_as_at,
                 candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
                 per_edge_results_by_uuid={},
-                tau_extent_raw=display_settings.get('tau_extent'),
+                compute_extent=compute_extent,
                 include_epistemic_overlay=True,
                 use_prepared_resolved=True,
                 show_model_curve=bool(display_settings.get('show_model_curve')),
                 log_prefix='[v3]',
             )
+            saturation_tau = int(prepared.bundle.saturation_tau)
             maturity_rows = reducer_for('cohort_maturity')(
                 prepared.bundle,
                 band_level=band_level,
@@ -1485,7 +1719,13 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 _diag['rate_evidence_provenance'] = serialise_rate_evidence_provenance(
                     prepared.runtime_bundle_diag
                 )
-        axis_tau_max = prepared.axis_tau_max if prepared else None
+        # ``axis_tau_max`` survives as the chart-extent hand-off for the
+        # synthetic-future-frame tail below (Forecast-tail synthesis). Under
+        # the new policy it is ``compute_extent`` for Manual and
+        # ``saturation_τ`` (single-scenario) for Auto / F+E — these coincide
+        # with the bundle's ``max_tau`` in the single-scenario case; the
+        # multi-scenario reducer below revisits this for the pad-out.
+        axis_tau_max = compute_extent
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
 
@@ -1564,28 +1804,35 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         # reads them directly from maturity_rows when show_model_curve
         # is on; no subject-level mirror needed.
 
-        # ── Synthetic future frames (forecast tail) ──────────────────
-        if composed_frames and last_edge_id:
-            edge = find_edge_by_id(graph_data, last_edge_id)
-            if edge:
-                scope = 'edge' if is_window else 'path'
-                temporal = 'window' if is_window else 'cohort'
-                _graph_pref = graph_data.get('model_source_preference')
-                ft_resolved = resolve_model_params(
-                    edge, scope=scope, temporal_mode=temporal,
-                    graph_preference=_graph_pref)
-                if ft_resolved and ft_resolved.latency.sigma > 0:
-                    anchor_to_str_ft = subjects[0].get('anchor_to', '')
-                    if anchor_to_str_ft:
-                        _append_synthetic_frames_impl({
-                            'result': subject_result,
-                            'mu': ft_resolved.latency.mu,
-                            'sigma': ft_resolved.latency.sigma,
-                            'onset_delta_days': ft_resolved.latency.onset_delta_days,
-                            'forecast_mean': ft_resolved.p_mean,
-                            'anchor_to': anchor_to_str_ft,
-                            'tau_extent': axis_tau_max,
-                        })
+        # ── Record per-scenario data for the post-loop multi-scenario
+        # chart-axis reduction + last-row pad-out + synthetic-frames tail
+        # emit. Synthetic frames are deferred so they see the combined
+        # chart axis rather than each scenario's own natural extent.
+        from datetime import date as _date_for_extents
+        try:
+            _af_d = _date_for_extents.fromisoformat(str(anchor_from_str)[:10])
+            _st_d = _date_for_extents.fromisoformat(str(sweep_to_final)[:10])
+            tau_future_max_s = max(int((_st_d - _af_d).days), 0)
+        except (ValueError, TypeError):
+            tau_future_max_s = 0
+        per_scenario_extents.append({
+            'scenario_id': scenario_id,
+            'subject_result': subject_result,
+            'maturity_rows': maturity_rows,
+            'visibility_mode': visibility_mode,
+            'compute_extent': compute_extent,
+            'saturation_tau': saturation_tau,
+            'tau_future_max': tau_future_max_s,
+            'graph_data': graph_data,
+            'last_edge_id': last_edge_id,
+            'is_window': is_window,
+            'anchor_to': subjects[0].get('anchor_to', '') if subjects else '',
+            'composed_frames': composed_frames,
+            'frontier_taus': (
+                list(prepared.bundle.selected_retrieval_frontier.paired_frontier_by_anchor.values())
+                if prepared is not None else []
+            ),
+        })
 
         # ── Build response (same shape as v1/v2) ─────────────────────
         per_scenario_results.append({
@@ -1605,6 +1852,103 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             }],
             "rows_analysed": total_rows,
         })
+
+    # ── Multi-scenario chart axis + last-row pad-out + synthetic-frames
+    # tail (policy doc §"Multiple scenarios.cohort_maturity"). Shared τ
+    # axis across scenarios: ``chart_axis_τ_combined`` is the user_axis in
+    # Manual, otherwise ``max(natural_extent_s)`` across scenarios with
+    # ``natural_extent_s = saturation_τ_s`` for F/F+E and ``tau_future_max_s``
+    # for E. Each F/F+E scenario's rows are extended to
+    # ``chart_axis_τ_combined`` by last-row replay (exact: the CDF is flat
+    # past saturation). E-mode scenarios are NOT padded — their curve ends
+    # naturally at the evidence frontier; padding past it would misrepresent
+    # "data we don't have" as "data that's saturated".
+    tau_extent_raw = display_settings.get('tau_extent')
+    _is_manual = False
+    user_axis: Optional[int] = None
+    if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
+        try:
+            user_axis = int(math.ceil(float(tau_extent_raw)))
+            if user_axis > 0:
+                _is_manual = True
+        except (ValueError, TypeError):
+            pass
+    if _is_manual:
+        chart_axis_tau_combined = int(user_axis)
+    else:
+        _natural_extents: List[int] = []
+        for entry in per_scenario_extents:
+            if entry['visibility_mode'] == 'e':
+                _natural_extents.append(int(entry['tau_future_max']))
+            elif entry['saturation_tau'] is not None:
+                _natural_extents.append(int(entry['saturation_tau']))
+            else:
+                # No bundle was prepared for this scenario (no edge / frames);
+                # fall back to the calendar reach so its axis contribution is
+                # well-defined.
+                _natural_extents.append(int(entry['tau_future_max']))
+        chart_axis_tau_combined = max(_natural_extents) if _natural_extents else 0
+
+    for entry in per_scenario_extents:
+        rows = entry['maturity_rows']
+        mode = entry['visibility_mode']
+        # Pad cumulative evidence through the selected evidence frontier:
+        # counts that have happened cannot unhappen, but applicability must
+        # be recomputed for the padded tau instead of copied wholesale.
+        frontier_taus = [
+            int(t) for t in (entry.get('frontier_taus') or [])
+            if isinstance(t, (int, float))
+        ]
+        evidence_pad_limit = (
+            min(int(chart_axis_tau_combined), max(frontier_taus))
+            if frontier_taus else -1
+        )
+        if rows and len(rows) - 1 < evidence_pad_limit:
+            last = rows[-1]
+            last_tau = int(last.get('tau_days', len(rows) - 1))
+            for _tau in range(last_tau + 1, evidence_pad_limit + 1):
+                replay = dict(last)
+                replay['tau_days'] = _tau
+                if frontier_taus:
+                    applicable = sum(1 for t in frontier_taus if _tau <= t)
+                    coverage = applicable / float(len(frontier_taus))
+                    replay['coverage'] = coverage
+                    replay['cohorts_covered_base'] = applicable
+                    replay['cohorts_covered_projected'] = applicable
+                rows.append(replay)
+
+        # Pad F / F+E scenarios with last-row replay up to the combined
+        # chart axis. E-mode stops at the evidence frontier.
+        if mode != 'e' and rows and len(rows) - 1 < chart_axis_tau_combined:
+            last = rows[-1]
+            last_tau = int(last.get('tau_days', len(rows) - 1))
+            for _tau in range(last_tau + 1, chart_axis_tau_combined + 1):
+                replay = dict(last)
+                replay['tau_days'] = _tau
+                rows.append(replay)
+
+        # Synthetic forecast-tail frames for the FE composite chart.
+        # ``tau_extent`` is the chart axis the FE will render to.
+        if entry['composed_frames'] and entry['last_edge_id']:
+            edge = find_edge_by_id(entry['graph_data'], entry['last_edge_id'])
+            if edge:
+                scope = 'edge' if entry['is_window'] else 'path'
+                temporal = 'window' if entry['is_window'] else 'cohort'
+                _graph_pref = entry['graph_data'].get('model_source_preference')
+                ft_resolved = resolve_model_params(
+                    edge, scope=scope, temporal_mode=temporal,
+                    graph_preference=_graph_pref,
+                )
+                if ft_resolved and ft_resolved.latency.sigma > 0 and entry['anchor_to']:
+                    _append_synthetic_frames_impl({
+                        'result': entry['subject_result'],
+                        'mu': ft_resolved.latency.mu,
+                        'sigma': ft_resolved.latency.sigma,
+                        'onset_delta_days': ft_resolved.latency.onset_delta_days,
+                        'forecast_mean': ft_resolved.p_mean,
+                        'anchor_to': entry['anchor_to'],
+                        'tau_extent': chart_axis_tau_combined,
+                    })
 
     # Simplify response for single-scenario / single-subject cases
     # (must match _handle_snapshot_analyze_subjects flattening)
@@ -1658,12 +2002,14 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
         serialise_rate_evidence_provenance,
     )
     from runner.cf_analysis import prepare_cf_projection_bundle, reducer_for
+    from runner.forecasting_settings import settings_from_dict
 
     analysis_type = 'daily_conversions'
     scenarios = data.get('scenarios', [])
     top_analytics_dsl = data.get('analytics_dsl', '')
     display_settings = data.get('display_settings') or {}
     mece_dimensions = data.get('mece_dimensions') or []
+    forecasting_settings = settings_from_dict(data.get('forecasting_settings'))
     _emit_diagnostics = bool(data.get('_diagnostics'))
     _diag: Dict[str, Any] = {} if _emit_diagnostics else {}
 
@@ -1735,6 +2081,20 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
         # Forecast enrichment: the date reducer over the shared bundle. No
         # edge resolved → no projection; the observed series stands alone.
         if preparation.last_edge_id:
+            visibility_mode = scenario.get('visibility_mode', 'f+e')
+            compute_extent = _compute_extent_for_scenario(
+                display_settings=display_settings,
+                visibility_mode=visibility_mode,
+                anchor_from=preparation.anchor_from,
+                sweep_to=preparation.sweep_to,
+                graph_data=graph_data,
+                last_edge_id=preparation.last_edge_id,
+                forecasting_settings=forecasting_settings,
+                is_window=is_window,
+                query_from_node=preparation.query_from_node or None,
+                query_to_node=preparation.query_to_node or None,
+                anchor_node=preparation.anchor_node,
+            )
             prepared = prepare_cf_projection_bundle(
                 preparation,
                 graph_data=graph_data,
@@ -1745,7 +2105,7 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
                 as_at=_as_at,
                 candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
                 per_edge_results_by_uuid={},
-                tau_extent_raw=display_settings.get('tau_extent'),
+                compute_extent=compute_extent,
                 include_epistemic_overlay=False,
                 use_prepared_resolved=False,
                 show_model_curve=False,
@@ -1972,6 +2332,26 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
 
             maturity_rows = []
             if last_edge_id:
+                from runner.forecasting_settings import current_settings as _current_settings
+                # CF endpoint is the whole-graph enrichment surface; per
+                # the policy doc, visibility_mode is irrelevant here — the
+                # endpoint always reads through to saturation (p@∞ requires
+                # the plateau). Use the F/F+E branch of the compute_extent
+                # policy so the composed CDF reaches plateau even when the
+                # FE happens to be in E mode for charting.
+                cf_compute_extent = _compute_extent_for_scenario(
+                    display_settings=display_settings,
+                    visibility_mode='f+e',
+                    anchor_from=preparation.anchor_from,
+                    sweep_to=preparation.sweep_to,
+                    graph_data=graph_data,
+                    last_edge_id=last_edge_id,
+                    forecasting_settings=_current_settings(),
+                    is_window=is_window,
+                    query_from_node=query_from_node,
+                    query_to_node=query_to_node,
+                    anchor_node=anchor_node,
+                )
                 prepared = prepare_cf_projection_bundle(
                     preparation,
                     graph_data=graph_data,
@@ -1982,7 +2362,7 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                     as_at=_cf_envelope_as_at,
                     candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
                     per_edge_results_by_uuid=all_per_edge_results,
-                    tau_extent_raw=display_settings.get('tau_extent'),
+                    compute_extent=cf_compute_extent,
                     include_epistemic_overlay=False,
                     use_prepared_resolved=False,
                     show_model_curve=False,

@@ -252,6 +252,14 @@
           "minimum": 1,
           "maximum": 10,
           "default": 1.5
+        },
+        "SATURATION_PERCENTILE": {
+          "type": "number",
+          "title": "Saturation Percentile",
+          "description": "Latency percentile that defines the engine's saturation_τ — the latent horizon where the composed predictive request CDF is treated as plateaued. Past this point the bundle's per-Cohort projection is held constant (the math is flat by construction).\n\nHigher than the modelling t95 percentile because the post-t95 tail still carries ~5% of mass — enough to leave material creep on the empirical evidence curve when downstream consumers pad past saturation with last-row replay.\n\nIndicative values:\n- 0.95: matches the legacy t95 cutoff (~5% residual past saturation)\n- 0.99: standard (default; ~1% residual)\n- 0.995–0.999: very conservative; later cutoff, more engine work at the tail.",
+          "minimum": 0.9,
+          "maximum": 0.9999,
+          "default": 0.99
         }
       },
       "required": [

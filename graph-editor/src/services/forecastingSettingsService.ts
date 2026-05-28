@@ -29,6 +29,7 @@ import {
   MC_DRAWS,
   SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
   SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+  SATURATION_PERCENTILE,
 } from '../constants/latency';
 
 export type ForecastingModelSettings = {
@@ -61,6 +62,7 @@ export type ForecastingModelSettings = {
   MC_DRAWS: number;
   SNAPSHOT_OBSERVATION_T95_MULTIPLIER: number;
   SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER: number;
+  SATURATION_PERCENTILE: number;
 };
 
 function numOr<T extends number>(value: unknown, fallback: T): number {
@@ -101,6 +103,7 @@ class ForecastingSettingsService {
         MC_DRAWS,
         SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
         SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+        SATURATION_PERCENTILE,
       };
     }
     try {
@@ -142,6 +145,10 @@ class ForecastingSettingsService {
           forecasting.SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
           SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
         ),
+        SATURATION_PERCENTILE: numOr(
+          forecasting.SATURATION_PERCENTILE,
+          SATURATION_PERCENTILE,
+        ),
       };
     } catch {
       return {
@@ -161,6 +168,7 @@ class ForecastingSettingsService {
         MC_DRAWS,
         SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
         SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+        SATURATION_PERCENTILE,
       };
     }
   }

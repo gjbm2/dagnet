@@ -733,38 +733,14 @@ export async function prepareAnalysisComputeInputs(
 
   const displaySettings = resolveComputeAffectingDisplay(analysisType, params.display ?? undefined);
 
-  // Resolve tau_extent='auto' to the max sweep span across all scenarios.
-  // Doc 31: snapshot_subjects are no longer populated on the FE — the BE
-  // resolves subjects from the DSL.  Derive sweep span from the DSL's
-  // window/cohort clause.  Check each scenario's effective_query_dsl (which
-  // may override the base DSL) and take the widest span.
-  if (displaySettings && String(displaySettings.tau_extent ?? '') === 'auto') {
-    try {
-      const { parseConstraints } = await import('../lib/queryDSL');
-      const { resolveRelativeDate, normalizeToISO } = await import('../lib/dateFormat');
-      const now = new Date();
-      now.setUTCHours(0, 0, 0, 0);
-      const nowMs = now.getTime();
-
-      let maxSweep = 0;
-      // Collect all DSL strings: base + each scenario's effective override
-      const dslCandidates = [currentDSL, ...scenarios.map(sc => sc.effective_query_dsl)].filter(Boolean);
-      for (const dsl of dslCandidates) {
-        const parsed = parseConstraints(dsl);
-        const startStr = parsed?.window?.start || parsed?.cohort?.start;
-        if (!startStr) continue;
-        const resolved = resolveRelativeDate(startStr);
-        const isoStart = normalizeToISO(resolved);
-        const startDate = new Date(isoStart);
-        if (isNaN(startDate.getTime())) continue;
-        const days = Math.round((nowMs - startDate.getTime()) / 86400000);
-        if (days > maxSweep) maxSweep = days;
-      }
-      if (maxSweep > 0) {
-        displaySettings.tau_extent = maxSweep;
-      }
-    } catch { /* ignore parse errors — tau_extent stays 'auto' */ }
-  }
+  // ``tau_extent`` is a user choice: an explicit positive integer means
+  // Manual (the BE handler clamps ``compute_extent = user_axis``); ``null``
+  // / missing / the legacy string ``'auto'`` means Auto (the BE handler
+  // derives ``compute_extent`` from t95 per the policy in
+  // ``docs/current/cohort-maturity-render-calc-policy.md``). The FE does
+  // not derive a numeric Auto value — pre-resolving 'auto' to the calendar
+  // reach masquerades as a Manual override and bypasses the BE's t95-aware
+  // pick (a 1-day window would land compute_extent at 1 day).
 
   const ready: PreparedAnalysisComputeReady = {
     status: 'ready',

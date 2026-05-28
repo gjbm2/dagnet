@@ -330,6 +330,24 @@ export const SNAPSHOT_OBSERVATION_T95_MULTIPLIER = 2.0;
 export const SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER = 1.5;
 
 /**
+ * SATURATION_PERCENTILE
+ *
+ * Latency percentile that defines the engine's saturation_τ — the latent
+ * horizon at which the composed predictive request CDF is treated as
+ * plateaued. Past this point the bundle's per-Cohort projection is held
+ * constant (the math is flat by construction).
+ *
+ * Higher than the fitting LATENCY_T95_PERCENTILE because the tail beyond
+ * t95 still carries ~5% of mass — large enough to leave noticeable creep
+ * on the empirical evidence curve. 0.99 puts the residual at ~1%, small
+ * enough that pad-with-last-row-replay past saturation is within typical
+ * oracle tolerances.
+ *
+ * See: docs/current/cohort-maturity-render-calc-policy.md §Saturation.
+ */
+export const SATURATION_PERCENTILE = 0.99;
+
+/**
  * DEFAULT_T95_DAYS
  * 
  * Default t95 (95th percentile lag) value when no computed or user-supplied t95 is available.
@@ -512,6 +530,7 @@ export interface ForecastingSettings {
   fit_left_censor_days: number;
   snapshot_observation_t95_multiplier: number;
   snapshot_observation_path_t95_multiplier: number;
+  saturation_percentile: number;
   // Bayesian fit_history retention (doc 27)
   bayes_fit_history_interval_days: number;
   bayes_fit_history_max_days: number;
@@ -590,6 +609,7 @@ export function buildForecastingSettings(): ForecastingSettings {
     fit_left_censor_days: LATENCY_FE_FIT_LEFT_CENSOR_DAYS,
     snapshot_observation_t95_multiplier: SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
     snapshot_observation_path_t95_multiplier: SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+    saturation_percentile: SATURATION_PERCENTILE,
     bayes_fit_history_interval_days: BAYES_FIT_HISTORY_INTERVAL_DAYS,
     bayes_fit_history_max_days: BAYES_FIT_HISTORY_MAX_DAYS,
     bayes_log_kappa_mu: BAYES_LOG_KAPPA_MU,

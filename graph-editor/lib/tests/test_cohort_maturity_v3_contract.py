@@ -280,7 +280,7 @@ def _run_v3(
     anchor_to: str,
     sweep_to: str,
     is_window: bool = True,
-    axis_tau_max: int = None,
+    compute_extent: int = 80,
     target_edge_id: str = 'e1',
     query_from_node: str = 'node-a',
     query_to_node: str = 'node-b',
@@ -313,7 +313,7 @@ def _run_v3(
         anchor_to=anchor_to,
         sweep_to=sweep_to,
         is_window=is_window,
-        axis_tau_max=axis_tau_max,
+        compute_extent=compute_extent,
         anchor_node_id=anchor_node_id,
         is_multi_hop=is_multi_hop,
         band_level=0.90,
@@ -446,13 +446,19 @@ def baseline_rows() -> List[Dict[str, Any]]:
     days before sweep_to, and axis_tau_max is pushed past tau_future_max
     so forecast-zone rows exist alongside evidence-zone rows.
     """
-    graph = _build_single_edge_graph()
-    # anchor_to 2026-03-10 (cohort 10 at the newest), sweep_to 2026-04-15.
-    # tau_solid_max = 2026-04-15 − 2026-03-10 = 36.
-    # tau_future_max = 2026-04-15 − 2026-03-01 = 45.
+    # Enable the latency parameter so the composed CDF carries a real
+    # spread — without it, the engine derives ``saturation_τ = 0`` (the
+    # Dirac-at-zero CDF reaches its 0.95 asymptote at τ=0), which clips
+    # the projection to a single row under the
+    # cohort-maturity-render-calc policy. With latency on, saturation_τ
+    # ≈ 23 for the fixture defaults (mu=2.0, sigma=0.6, onset=3).
+    graph = _build_single_edge_graph(latency_parameter=True)
+    # Short snapshot horizon so tau_solid_max stays below saturation_τ:
+    # anchor_to 2026-03-10, sweep_to 2026-03-20 → tau_solid_max = 10.
+    # With saturation_τ ≈ 23, forecast rows exist (τ = 11..23).
     frames, anchor_from, sweep_to = _build_synth_frames(
         anchor_to=date(2026, 3, 10),
-        sweep_days=36,
+        sweep_days=10,
         n_cohorts=10,
     )
     rows = _run_v3(
@@ -462,7 +468,7 @@ def baseline_rows() -> List[Dict[str, Any]]:
         anchor_to=anchor_from,
         sweep_to=sweep_to,
         is_window=True,
-        axis_tau_max=60,
+        compute_extent=60,
     )
     assert rows, 'v3 returned no rows for the baseline fixture — suite cannot run'
     return rows
@@ -663,7 +669,7 @@ def test_v3_empty_frames_window_mode_uses_latency_curve():
         anchor_to=anchor_day,
         sweep_to=anchor_day,
         is_window=True,
-        axis_tau_max=40,
+        compute_extent=40,
     )
 
     assert rows, 'v3 returned no rows for empty-frame window fallback'
@@ -684,10 +690,17 @@ def test_v3_empty_frames_window_mode_uses_latency_curve():
     assert by_tau[10]['midpoint'] > by_tau[6]['midpoint'] > by_tau[0]['midpoint']
     assert by_tau[20]['midpoint'] > by_tau[10]['midpoint']
 
+    # Engine rows clip at ``min(compute_extent, saturation_τ)`` per the
+    # cohort-maturity-render-calc policy. The default fixture latency
+    # (mu=2.0, sigma=0.6, onset=3) produces saturation_τ ≈ 22, so τ values
+    # past that are not emitted; skip them rather than KeyError-ing —
+    # they're not reachable from this fixture under the new policy.
     checked = 0
     failures: List[Tuple[int, float, float]] = []
     for tau in (6, 8, 10, 15, 20, 30):
-        row = by_tau[tau]
+        row = by_tau.get(tau)
+        if row is None:
+            continue
         midpoint = row.get('midpoint')
         if midpoint is None:
             continue
@@ -751,16 +764,23 @@ def test_v3_empty_frames_window_mode_matches_truth_lognormal_curve():
         anchor_to=anchor_day,
         sweep_to=anchor_day,
         is_window=True,
-        axis_tau_max=35,
+        compute_extent=35,
     )
 
     assert rows, 'v3 returned no rows for truth-backed zero-evidence fixture'
     by_tau = {row['tau_days']: row for row in rows}
 
+    # Engine rows clip at ``min(compute_extent, saturation_τ)`` per the
+    # cohort-maturity-render-calc policy. Iterate over the rows actually
+    # emitted; the per-row "midpoint == p × CDF" contract holds over the
+    # engine's natural extent. Require ≥ 8 checked tau points so a
+    # vacuous-pass on a degenerate fixture is still caught.
     midpoint_failures: List[Tuple[int, float, float]] = []
     model_failures: List[Tuple[int, float, float]] = []
     checked = 0
-    for tau in range(36):
+    for tau in sorted(by_tau):
+        if tau >= 36:
+            break
         row = by_tau[tau]
         midpoint = row.get('midpoint')
         model_midpoint = row.get('model_midpoint')
@@ -778,7 +798,7 @@ def test_v3_empty_frames_window_mode_matches_truth_lognormal_curve():
         if abs(model_midpoint - expected) > 0.001:
             model_failures.append((tau, model_midpoint, expected))
 
-    assert checked >= 30, f'checked only {checked} tau points'
+    assert checked >= 8, f'checked only {checked} tau points'
     assert not midpoint_failures, (
         'truth-backed zero-evidence midpoint drifted from analytic p × CDF:\n'
         + '\n'.join(
@@ -813,7 +833,7 @@ def test_v3_empty_frames_cohort_mode_preserves_upstream_carrier():
         anchor_to=anchor_day,
         sweep_to=anchor_day,
         is_window=True,
-        axis_tau_max=40,
+        compute_extent=40,
         target_edge_id='e-bc',
         query_from_node='node-b',
         query_to_node='node-c',
@@ -825,7 +845,7 @@ def test_v3_empty_frames_cohort_mode_preserves_upstream_carrier():
         anchor_to=anchor_day,
         sweep_to=anchor_day,
         is_window=False,
-        axis_tau_max=40,
+        compute_extent=40,
         target_edge_id='e-bc',
         query_from_node='node-b',
         query_to_node='node-c',
@@ -837,18 +857,31 @@ def test_v3_empty_frames_cohort_mode_preserves_upstream_carrier():
 
     window_by_tau = {row['tau_days']: row for row in window_rows}
     cohort_by_tau = {row['tau_days']: row for row in cohort_rows}
-    assert cohort_by_tau[12]['evidence_x'] == 0.0
-    assert cohort_by_tau[12]['evidence_y'] == 0.0
+    # Engine rows clip at ``min(compute_extent, saturation_τ)`` per the
+    # cohort-maturity-render-calc policy. Each fixture has its own
+    # saturation_τ — use ``.get`` and skip missing τ rather than KeyError.
+    if 12 in cohort_by_tau:
+        assert cohort_by_tau[12]['evidence_x'] == 0.0
+        assert cohort_by_tau[12]['evidence_y'] == 0.0
     # See note in test_v3_empty_frames_window_mode_uses_latency_curve: the
     # spine records empty-frames base-mass synthesis on `_a_pop_provenance`
     # (legacy `_projection_basis`/`model_mass_source` removed in Stage 4).
     a_pop_provenance = cohort_rows[0].get('_a_pop_provenance') or {}
     assert a_pop_provenance.get(anchor_day) == 'empty_frames_prior'
 
+    # Compare in the τ range where both window and cohort rows exist. Under
+    # the cohort-maturity-render-calc policy, each mode projects to its own
+    # ``min(compute_extent, saturation_τ)``: the window subject CDF
+    # saturates faster than the path (carrier∘subject) CDF, so the window
+    # mode's row count is shorter than cohort's. The carrier-lag contract
+    # is visible in the overlap range.
+    shared_taus = sorted(set(window_by_tau) & set(cohort_by_tau))
     strong_gaps: List[Tuple[int, float, float]] = []
-    for tau in range(8, 21, 2):
-        window_mid = window_by_tau[tau].get('midpoint')
-        cohort_mid = cohort_by_tau[tau].get('midpoint')
+    for tau in shared_taus:
+        window_row = window_by_tau[tau]
+        cohort_row = cohort_by_tau[tau]
+        window_mid = window_row.get('midpoint')
+        cohort_mid = cohort_row.get('midpoint')
         if window_mid is None or cohort_mid is None:
             continue
         if window_mid > 0.10 and cohort_mid < window_mid - 0.05:
@@ -865,7 +898,7 @@ def test_v3_empty_frames_cohort_mode_preserves_upstream_carrier():
     cohort_progression = [
         cohort_by_tau[tau]['midpoint']
         for tau in (8, 12, 16, 20)
-        if cohort_by_tau[tau].get('midpoint') is not None
+        if tau in cohort_by_tau and cohort_by_tau[tau].get('midpoint') is not None
     ]
     assert cohort_progression == sorted(cohort_progression), (
         'cohort empty-frame fallback should still rise with tau'
@@ -908,7 +941,7 @@ def test_v3_empty_frames_cohort_mode_matches_truth_fw_curve():
         anchor_to=anchor_day,
         sweep_to=anchor_day,
         is_window=False,
-        axis_tau_max=25,
+        compute_extent=25,
         target_edge_id='e-bc',
         query_from_node='node-b',
         query_to_node='node-c',
@@ -992,7 +1025,7 @@ def test_model_curve_fields_absent_when_toggle_off():
         anchor_to=anchor_from,
         sweep_to=sweep_to,
         is_window=True,
-        axis_tau_max=60,
+        compute_extent=60,
         band_level=0.90,
         scenario_id='test_model_curve',
         # show_model_curve defaults to False
@@ -1036,7 +1069,7 @@ def test_model_curve_fields_populated_when_toggle_on():
         anchor_to=anchor_from,
         sweep_to=sweep_to,
         is_window=True,
-        axis_tau_max=60,
+        compute_extent=60,
         band_level=0.90,
         scenario_id='test_model_curve',
         show_model_curve=True,
@@ -1130,7 +1163,7 @@ def test_predictive_model_fields_always_populated():
             anchor_to=anchor_from,
             sweep_to=sweep_to,
             is_window=True,
-            axis_tau_max=60,
+            compute_extent=60,
             band_level=0.90,
             scenario_id='test_model_curve',
             show_model_curve=show,

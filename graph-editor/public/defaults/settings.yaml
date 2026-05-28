@@ -19,6 +19,16 @@ forecasting:
   SNAPSHOT_OBSERVATION_T95_MULTIPLIER: 2.0
   SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER: 1.5
 
+  # Latency percentile that defines the engine's saturation_τ — the latent
+  # horizon where the composed predictive request CDF is treated as
+  # plateaued. Past this point the bundle's per-Cohort projection is held
+  # constant (the math is flat by construction). Higher than t95
+  # (modelling percentile) because the post-t95 tail still carries ~5% of
+  # mass — enough to leave material creep on the empirical evidence curve
+  # if downstream consumers pad past saturation with last-row replay.
+  # 0.99 puts the residual at ~1%.
+  SATURATION_PERCENTILE: 0.99
+
   # Forecast prior strength (λ) for blending forecast vs evidence in immature data.
   FORECAST_BLEND_LAMBDA: 0.15
 

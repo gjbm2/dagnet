@@ -68,6 +68,7 @@ def _build_bundle(admitted_anchors):
         query_from_node='node-a', query_to_node='node-b',
         anchor_from='2026-03-01', anchor_to=anchor_from, sweep_to=sweep_to,
         is_window=True,
+        compute_extent=200,
         evidence_candidates=_candidates_for(admitted_anchors),
         scenario_id='cross-reducer-test',
     )

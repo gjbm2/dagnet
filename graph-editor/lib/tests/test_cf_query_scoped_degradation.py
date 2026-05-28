@@ -199,6 +199,7 @@ def test_latency_rows_use_shared_sweep_contract():
         anchor_from='2026-03-25',
         anchor_to='2026-03-25',
         sweep_to='2026-04-05',
+        compute_extent=40,
         is_window=True,
         resolved_override=_query_scoped_latency_resolved(),
         per_edge_subject_candidates={
@@ -896,6 +897,7 @@ def test_cohort_maturity_rows_v3_identity_drift():
         anchor_from='2026-03-25',
         anchor_to='2026-03-25',
         sweep_to='2026-04-05',
+        compute_extent=40,
         is_window=True,
         resolved_override=resolved,
         scenario_id='cf-query-scoped-test',
@@ -910,6 +912,7 @@ def test_cohort_maturity_rows_v3_identity_drift():
         anchor_from='2026-03-25',
         anchor_to='2026-03-25',
         sweep_to='2026-04-05',
+        compute_extent=40,
         is_window=True,
         resolved_override=resolved,
         scenario_id='cf-query-scoped-test',

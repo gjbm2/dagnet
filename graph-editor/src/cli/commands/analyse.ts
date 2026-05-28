@@ -59,6 +59,9 @@ dagnet-cli analyse
                              the command runs against FE-topo state only.
     --allow-external-fetch   Fetch live from external sources (e.g. Amplitude)
     --display <json>          Display settings JSON (e.g. '{"show_latency_bands":true}')
+    --forecasting-settings <json>
+                             Forecasting settings JSON for this run
+                             (e.g. '{"saturation_percentile":0.999}')
     --mc-draws <n>            Override forecasting_settings.mc_draws for this run
     --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json
                              sidecar into the graph in-memory before analysis.
@@ -111,6 +114,7 @@ async function runAnalyse() {
       'no-snapshot-cache': { type: 'boolean' },
       'no-be': { type: 'boolean' },
       display: { type: 'string' },
+      'forecasting-settings': { type: 'string' },
       'mc-draws': { type: 'string' },
     },
   });
@@ -134,13 +138,24 @@ async function runAnalyse() {
     }
   }
   let cliForecastingSettings: Record<string, unknown> | undefined;
+  if (extraArgs['forecasting-settings']) {
+    try {
+      cliForecastingSettings = JSON.parse(extraArgs['forecasting-settings'] as string);
+    } catch {
+      log.error(`Invalid --forecasting-settings JSON: ${extraArgs['forecasting-settings']}`);
+      exit(1, 'invalid --forecasting-settings JSON');
+    }
+  }
   if (extraArgs['mc-draws']) {
     const value = Number(extraArgs['mc-draws']);
     if (!Number.isFinite(value) || value <= 0) {
       log.error(`Invalid --mc-draws value: ${extraArgs['mc-draws']}`);
       exit(1, 'invalid --mc-draws');
     }
-    cliForecastingSettings = { mc_draws: value };
+    cliForecastingSettings = {
+      ...(cliForecastingSettings || {}),
+      mc_draws: value,
+    };
   }
 
   // Bypass the BE snapshot service in-memory cache. Essential during synth

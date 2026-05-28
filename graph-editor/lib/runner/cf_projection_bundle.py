@@ -94,9 +94,9 @@ def latency_band_taus(
     deduplicated by tau (first occurrence wins). The label is the
     dynamic ``'{tau}d'`` form the legacy public shape uses.
 
-    The tau is returned unclamped: deciding that a band beyond
-    ``fe.saturation_tau`` is unavailable belongs to the consuming
-    reducer (per the field contract), not here.
+    The tau is returned unclamped: deciding that a band beyond the
+    bundle's projection horizon (``bundle.max_tau``) is unavailable
+    belongs to the consuming reducer (per the field contract), not here.
 
     Branchless dedup: ``dict.fromkeys`` keeps first occurrence and
     preserves insertion order, so the deduplicated tau set comes out in
@@ -123,19 +123,23 @@ class CFProjectionBundle:
     (``daily_conversions``, 73q Phase 3) read from this — neither rebuilds
     runtime state nor scrapes runtime diagnostics for scalar metadata.
 
-    The ``selected_projection`` is built at ``fe.saturation_tau`` so the
-    date reducer can index per-Cohort FC draws at saturation; the tau
-    reducer still emits public rows only through ``fe.max_tau`` (73q
-    §"Saturation tau"). The aggregate ``ef_*`` on the projection is the
-    cohort-axis sum of its per-Cohort arrays.
+    The ``selected_projection`` is built at the bundle's projection
+    horizon ``min(compute_extent, saturation_τ)`` per the policy in
+    ``docs/current/cohort-maturity-render-calc-policy.md``: the engine
+    composes the request CDF to ``compute_extent`` (handler-picked),
+    derives ``saturation_τ`` as a latent t95 of the composed predictive
+    CDF, and projects per-Cohort to the smaller of the two. Both reducers
+    read at ``bundle.max_tau`` (= projection horizon). The aggregate
+    ``ef_*`` on the projection is the cohort-axis sum of its per-Cohort
+    arrays.
 
     Types are loose (``Any``) to keep this module free of import cycles
     with ``cohort_forecast_v3`` / ``model_span_spine``.
     """
 
-    frame_evidence: Any                  # FrameEvidence (saturation_tau, max_tau, …)
+    frame_evidence: Any                  # FrameEvidence (tau_solid_max, tau_future_max)
     runtime: Any                         # ResolvedCFRuntime
-    selected_projection: Any             # SelectedCohortRowProjection @ saturation_tau
+    selected_projection: Any             # SelectedCohortRowProjection @ projection_horizon
     selected_retrieval_frontier: Any     # SelectedRetrievalFrontier
     n_by_anchor: Mapping[str, float]
     # Per-anchor base-mass source / skip reason. Skipped active Cohorts
@@ -170,5 +174,11 @@ class CFProjectionBundle:
     cf_mode: str
     cf_reason: Optional[str]
     promoted_source: Optional[str]
+    # ``saturation_tau`` is the latent t95 of the composed predictive
+    # request CDF (engine output), bounded by ``compute_extent``.
+    # ``max_tau`` is the projection horizon = ``min(compute_extent,
+    # saturation_tau)`` — past this point the math is flat by construction
+    # and neither reducer emits rows. Handlers pad to a wider chart axis
+    # per the policy (Manual zoom-out / multi-scenario).
     saturation_tau: int
     max_tau: int

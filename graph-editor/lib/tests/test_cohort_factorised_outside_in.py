@@ -60,7 +60,7 @@ import math
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import pytest
 import yaml
@@ -212,6 +212,8 @@ def _run_analyse_cached(
     diagnostic: bool = False,
     mc_draws: Optional[int] = None,
     show_model_curve: bool = False,
+    tau_extent: Optional[int] = None,
+    forecasting_settings_json: Optional[str] = None,
 ) -> dict[str, Any]:
     # Daemon path (default): single long-lived dagnet-cli process serves
     # all requests, amortising Node + tsx + module-graph startup over the
@@ -231,8 +233,15 @@ def _run_analyse_cached(
             args.append("--diag")
         if mc_draws is not None:
             args += ["--mc-draws", str(int(mc_draws))]
+        if forecasting_settings_json is not None:
+            args += ["--forecasting-settings", forecasting_settings_json]
+        _display_settings: Dict[str, Any] = {}
         if show_model_curve:
-            args += ["--display", '{"show_model_curve":true}']
+            _display_settings['show_model_curve'] = True
+        if tau_extent is not None:
+            _display_settings['tau_extent'] = int(tau_extent)
+        if _display_settings:
+            args += ["--display", json.dumps(_display_settings)]
         if sidecar_path is not None:
             sidecar = Path(sidecar_path)
             assert sidecar.exists(), f"sidecar missing: {sidecar}"
@@ -261,8 +270,15 @@ def _run_analyse_cached(
         cmd.append("--diag")
     if mc_draws is not None:
         cmd += ["--mc-draws", str(int(mc_draws))]
+    if forecasting_settings_json is not None:
+        cmd += ["--forecasting-settings", forecasting_settings_json]
+    _display_settings: Dict[str, Any] = {}
     if show_model_curve:
-        cmd += ["--display", '{"show_model_curve":true}']
+        _display_settings['show_model_curve'] = True
+    if tau_extent is not None:
+        _display_settings['tau_extent'] = int(tau_extent)
+    if _display_settings:
+        cmd += ["--display", json.dumps(_display_settings)]
     if sidecar_path is not None:
         sidecar = Path(sidecar_path)
         assert sidecar.exists(), f"sidecar missing: {sidecar}"
@@ -298,6 +314,8 @@ def _run_analyse_v3(
     diagnostic: bool = False,
     mc_draws: Optional[int] = None,
     show_model_curve: bool = False,
+    tau_extent: Optional[int] = None,
+    forecasting_settings: Optional[Dict[str, Any]] = None,
 ) -> dict[str, Any]:
     return copy.deepcopy(
         _run_analyse_cached(
@@ -308,6 +326,11 @@ def _run_analyse_v3(
             diagnostic=diagnostic,
             mc_draws=mc_draws,
             show_model_curve=show_model_curve,
+            tau_extent=tau_extent,
+            forecasting_settings_json=(
+                json.dumps(forecasting_settings, sort_keys=True)
+                if forecasting_settings is not None else None
+            ),
         )
     )
 
@@ -1737,17 +1760,24 @@ def test_single_hop_latent_upstream_lags_window_but_converges_to_same_subject_p(
 @requires_synth(_LAT4, enriched=True)
 def test_anchor_depth_monotonicity_for_same_subject():
     band = "29-Jan-26:29-Apr-26"
+    # tau_extent=30 covers the asserted ``range(10, 26)`` overlap range.
+    # Auto compute_extent for c→d single-hop / identity cases lands at the
+    # composed c→d t95 (≈18), which is short of tau=25 — the assertion's
+    # upper bound. Cohort overrides at b and a compose longer subject spans
+    # and naturally exceed 25, but the four-payload intersection is bounded
+    # by the narrowest (window / identity). Explicit Manual axis here.
+    tau_extent = 30
     window_payload = _run_analyse_v3(
-        _LAT4, f"{_LAT4_CD}.window({band})",
+        _LAT4, f"{_LAT4_CD}.window({band})", tau_extent=tau_extent,
     )
     cohort_identity_payload = _run_analyse_v3(
-        _LAT4, f"{_LAT4_CD}.cohort(synth-lat4-c,{band})",
+        _LAT4, f"{_LAT4_CD}.cohort(synth-lat4-c,{band})", tau_extent=tau_extent,
     )
     cohort_near_payload = _run_analyse_v3(
-        _LAT4, f"{_LAT4_CD}.cohort(synth-lat4-b,{band})",
+        _LAT4, f"{_LAT4_CD}.cohort(synth-lat4-b,{band})", tau_extent=tau_extent,
     )
     cohort_far_payload = _run_analyse_v3(
-        _LAT4, f"{_LAT4_CD}.cohort(synth-lat4-a,{band})",
+        _LAT4, f"{_LAT4_CD}.cohort(synth-lat4-a,{band})", tau_extent=tau_extent,
     )
 
     x_window = _numeric_curve(window_payload, field="evidence_x")
@@ -2115,7 +2145,17 @@ def test_active_multihop_evidence_uses_query_x_denominator_not_terminal_edge_x()
     sweep_to = "2026-05-10"
     dsl = f"{_LAT4_FLAT_BD}.cohort(12-Mar-26:14-Mar-26).asat(10-May-26)"
 
-    payload = _run_analyse_v3(_LAT4_FLAT, dsl, mc_draws=64)
+    # tau_solid_max = 57; oracle reports positive evidence rows up to and
+    # past that. Auto compute_extent for this active multi-hop lands at the
+    # composed subject t95 (~47), short of the assertion's evidence range.
+    # Manual extent covers the full evidence window the oracle reads.
+    payload = _run_analyse_v3(
+        _LAT4_FLAT,
+        dsl,
+        mc_draws=64,
+        tau_extent=60,
+        forecasting_settings={"saturation_percentile": 0.999},
+    )
     rows_by_tau = {
         int(row["tau_days"]): row
         for row in _rows(payload)
@@ -3427,7 +3467,11 @@ def test_window_multihop_ef_boundary_matches_rate_attributed_selected_evidence()
     dsl = f"{_WRP_AC}.window(1-Mar-26:14-Mar-26).asat(10-Apr-26)"
     from datetime import date as _date
 
-    payload = _run_analyse_v3(_WINDOW_RATE_PROP, dsl)
+    # The seam this test pins lives at tau=tau_solid_max = sweep_to -
+    # anchor_to = 27. Auto compute_extent for wrp-a→wrp-c multi-hop window
+    # lands at the composed subject t95 (~15), below the seam. Manual axis
+    # at calendar reach (40) so the seam row is emitted.
+    payload = _run_analyse_v3(_WINDOW_RATE_PROP, dsl, tau_extent=40)
     _assert_non_vacuous_projection_payload(
         payload,
         label=dsl,
@@ -3531,20 +3575,31 @@ def test_active_cohort_multihop_total_projection_matches_subject_projection_prod
     """Active `cohort(A, B->D)` total projected mass is subject reach, not A->D."""
     band = "1-Mar-26:15-Mar-26"
     asat = "20-Apr-26"
+    # The assertion compares ``last_row.midpoint`` across three payloads to
+    # the asymptotic ``p × p`` truth product, so each ``last_row`` must land
+    # past the model plateau. Auto compute_extent lands rows at the per-
+    # query saturation_τ (≈18..47 here), which can be pre-asymptote on the
+    # short-latency single-hop windows — successive product drifts vs truth.
+    # Manual extent at the calendar reach (50) pushes each last_row past
+    # its plateau.
+    tau_extent = 60
     bc_payload = _run_analyse_v3(
         _LAT4_FLAT,
         f"{_LAT4_FLAT_BC}.window({band}).asat({asat})",
         mc_draws=64,
+        tau_extent=tau_extent,
     )
     cd_payload = _run_analyse_v3(
         _LAT4_FLAT,
         f"{_LAT4_FLAT_CD}.window({band}).asat({asat})",
         mc_draws=64,
+        tau_extent=tau_extent,
     )
     active_payload = _run_analyse_v3(
         _LAT4_FLAT,
         f"{_LAT4_FLAT_BD}.cohort({_LAT4_FLAT}-a,{band}).asat({asat})",
         mc_draws=64,
+        tau_extent=tau_extent,
     )
     _assert_non_vacuous_projection_payload(
         active_payload,

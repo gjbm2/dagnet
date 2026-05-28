@@ -60,6 +60,9 @@ class TestForecastingSettingsDefaults:
     def test_snapshot_observation_path_t95_multiplier(self):
         assert ForecastingSettings().snapshot_observation_path_t95_multiplier == 1.5
 
+    def test_saturation_percentile(self):
+        assert ForecastingSettings().saturation_percentile == 0.99
+
     def test_bayes_fit_history_interval_days(self):
         assert ForecastingSettings().bayes_fit_history_interval_days == 0
 

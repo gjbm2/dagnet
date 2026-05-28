@@ -78,6 +78,17 @@ class ForecastingSettings:
     snapshot_observation_path_t95_multiplier: float = 1.5
     """Multiplier for path_t95 when deciding snapshot observation refresh horizon."""
 
+    saturation_percentile: float = 0.99
+    """Latency percentile that defines the engine's saturation_τ — the latent
+    horizon at which the composed predictive request CDF is treated as
+    plateaued. Past this point the bundle's per-Cohort projection is held
+    constant (the math is flat by construction). Set higher than the
+    fitting ``t95_percentile`` because the tail beyond t95 still carries
+    ~5% of mass — large enough to leave noticeable creep on the empirical
+    evidence curve. 0.99 puts the residual at ~1%, small enough that
+    pad-with-last-row-replay past saturation is within typical oracle
+    tolerances."""
+
     # ── Bayesian fit_history retention ─────────────────────────
 
     bayes_fit_history_interval_days: float = 0

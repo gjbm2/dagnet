@@ -58,6 +58,7 @@ class TestIdentityCarrierDegeneracyAtBundleLevel:
             anchor_to='2026-03-01',
             sweep_to='2026-03-01',
             is_window=True,
+            compute_extent=40,
             scenario_id='doc56-identity',
         )
         assert bundle is not None
@@ -90,7 +91,7 @@ class TestBundleInvariantUnderEdgeReorder:
             sweep_to='2026-03-01',
             is_window=True,
             is_multi_hop=True,
-            axis_tau_max=40,
+            compute_extent=40,
             scenario_id='doc56-reorder',
         )
 
@@ -141,7 +142,7 @@ class TestMultiHopSubjectSpanPreservation:
             sweep_to='2026-03-01',
             is_window=True,
             is_multi_hop=is_multi_hop,
-            axis_tau_max=40,
+            compute_extent=40,
             scenario_id='doc56-multihop',
         )
         assert bundle is not None

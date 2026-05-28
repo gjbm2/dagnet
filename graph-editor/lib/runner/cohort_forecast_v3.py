@@ -854,49 +854,50 @@ def _runtime_request_cdf_draws(
     )
 
 
-def _latent_chart_extent(
+def _derive_saturation_tau(
     runtime: ResolvedCFRuntime,
     *,
-    floor: int,
     cap: int,
-    axis_tau_max: Optional[int],
 ) -> int:
-    """Chart extent latent on the model's composed latency reach.
+    """Latent saturation τ of the composed predictive request CDF.
 
-    The extent is the t95 reach of the unconditioned predictive request span
-    (carrier∘subject, composed from the population root): window (X→Z) and
-    cohort (A→Z) differ only in which root the composition began from, so no
-    temporal mode is consulted — the reach is latent in the composed CDF.
+    The saturation τ is the t95 of the unconditioned predictive request span
+    (carrier∘subject, composed from the population root): the smallest τ at
+    which the composed CDF has reached 95% of its asymptote. Window (X→Z) and
+    cohort (A→Z) differ only in which root composition began from — no temporal
+    mode is consulted; the reach is latent in the composed CDF.
 
     The predictive (model) basis is used rather than the rate-conditioned
-    posterior because the chart extent is a latency-support property — how far
-    conversions can land — not a rate quantity. Sparse or zero evidence
+    posterior because saturation is a latency-support property (how far
+    conversions can land), not a rate quantity. Sparse or zero evidence
     collapses a conditioned CDF to no mass (asymptote → 0), which would clip
-    the chart to nothing; the predictive span always carries the model's
-    latency reach. This reproduces the former ``max(calendar, t95)`` display
-    horizon (which read t95 off ``resolved.latency``, the same model latency)
-    but sourced from the composed span, so the window/cohort distinction is
-    latent in the composition rather than a ``resolve_model_params`` mode
-    branch. Floored at the observed calendar reach so the evidence range is
-    never clipped, capped at the composition ceiling, and fully overridden by
-    an explicit FE ``axis_tau_max`` (chart-settings contract: nothing
-    specified → auto/latent; user specified → use it).
+    saturation to zero; the predictive span always carries the model's
+    latency reach.
+
+    Bounded by ``cap`` (the compose horizon — the engine has not observed the
+    CDF beyond this point). Under the policy in
+    ``docs/current/cohort-maturity-render-calc-policy.md``, the perimeter
+    picks ``compute_extent`` (= ``cap``) so a request gets enough composition
+    headroom past plateau for the t95 read to land inside the composed CDF.
     """
-    # Model-latency reach (t95) from the unconditioned predictive composed
-    # span. The predictive overlay is always built and the model CDF always
-    # carries mass (asymptote > 0), so the reach reads straight through:
-    # mean_cdf[-1] == asymptote, which always clears 0.95·asymptote, so the
-    # last index qualifies and the nonzero set is non-empty.
+    # Model-latency reach from the unconditioned predictive composed span.
+    # The percentile is the configurable ``saturation_percentile``
+    # (forecasting_settings, default 0.99) — higher than the fitting
+    # ``t95_percentile`` because the post-t95 tail still carries ~5% of
+    # mass, which is enough to leave material creep on the empirical
+    # evidence curve when downstream consumers pad past saturation with
+    # last-row replay. The predictive overlay is always built and the
+    # model CDF always carries mass (asymptote > 0), so the reach reads
+    # straight through: mean_cdf[-1] == asymptote, which always clears
+    # ``saturation_percentile · asymptote``, so the last index qualifies
+    # and the nonzero set is non-empty.
+    from runner.forecasting_settings import current_settings
+    percentile = float(current_settings().saturation_percentile)
     overlay = runtime.unconditioned_overlays['predictive']
     cdf = _strict_span_request_cdf_draws(overlay.subject, overlay.carrier, horizon=cap)
     mean_cdf = np.nanmean(cdf, axis=0)
     asymptote = float(mean_cdf[-1])
-    t95 = int(np.nonzero(mean_cdf >= 0.95 * asymptote)[0][0])
-    # axis_tau_max is an extend-only hint (former max_tau semantics): it raises
-    # the floor when the FE wants a wider axis, never shrinks the reach. `or 0`
-    # makes the absent case a no-op.
-    extent = max(floor, t95, int(axis_tau_max or 0))
-    return max(0, min(extent, cap))
+    return int(np.nonzero(mean_cdf >= percentile * asymptote)[0][0])
 
 
 def _root_window_carrier_n_by_anchor_day(
@@ -1224,6 +1225,7 @@ def _build_selected_cohort_inputs(
     cohort_list: Sequence[Mapping[str, Any]],
     n_by_anchor: Mapping[str, float],
     retrieval_frontier_by_anchor: Mapping[str, int],
+    projection_horizon: int,
 ) -> Sequence[Mapping[str, Any]]:
     """Perimeter shape for the row reducer (Phase 6 §5.2).
 
@@ -1259,7 +1261,14 @@ def _build_selected_cohort_inputs(
         if n_pop <= 0.0:
             continue
         n_anchor = float(n_by_anchor.get(anchor_day_key, 0.0) or 0.0)
-        tau_max_int = int(ci.get('tau_max') or 0)
+        # Cap ``tau_max`` and frontier τ at ``projection_horizon`` — the
+        # engine's working window picked by the perimeter per the policy
+        # in ``docs/current/cohort-maturity-render-calc-policy.md``. Past
+        # the horizon the math is flat by construction (the engine did not
+        # compose / project past it), so the spine reads at
+        # ``min(frontier_c, horizon)`` — not a defensive clamp but the
+        # policy contract for "engine sees only what it computed".
+        tau_max_int = min(int(ci.get('tau_max') or 0), int(projection_horizon))
         # Per-Cohort frontier f_c. The selected retrieval frontier (one
         # query-wide analysis observation date mapped to this anchor's
         # age) is authoritative when present. The frame-derived
@@ -1277,7 +1286,7 @@ def _build_selected_cohort_inputs(
             if frontier_tau is not None:
                 tau_obs_int = min(max(int(frontier_tau), 0), tau_max_int)
             elif isinstance(frame_tau_obs, (int, float)):
-                tau_obs_int = int(frame_tau_obs)
+                tau_obs_int = min(int(frame_tau_obs), tau_max_int)
             else:
                 tau_obs_int = tau_max_int
         inputs.append({
@@ -1392,13 +1401,13 @@ def _project_runtime_rows(
         )
 
     # 73q Phase 2: ``selected_projection`` is pre-built by
-    # ``build_cf_projection_bundle`` at ``fe.saturation_tau`` (the spine's
-    # single mode-blind reducer — one operator-supply pass per family,
-    # one DP core, one division). This row builder reads it through
-    # ``fe.max_tau`` only: the loop below runs ``range(max_tau + 1)``, and
-    # the spine pads/forward-fills beyond the grid, so projecting at the
-    # larger saturation horizon leaves every τ ≤ max_tau value unchanged —
-    # public cohort-maturity rows are identical to projecting at max_tau.
+    # ``build_cf_projection_bundle`` at ``min(compute_extent, saturation_τ)``
+    # (the spine's single mode-blind reducer — one operator-supply pass per
+    # family, one DP core, one division). This row builder reads it through
+    # the same projection horizon (``bundle.max_tau``): the loop below runs
+    # ``range(max_tau + 1)``, and the spine pads/forward-fills beyond the
+    # grid, so projecting at or past saturation leaves every τ ≤ max_tau
+    # value unchanged.
     # Atom 6: midpoint / fan_* / fan_bands / projected_rate read the
     # FC (frontier-conditioned) continuation surface `ef_rate_draws`,
     # not the legacy spliced surface. `ef_*` is prefix-pinned to strict
@@ -1624,8 +1633,6 @@ class FrameEvidence:
     engine_cohorts: list           # List[CohortEvidence]
     cohort_list: List[Dict]        # sorted cohort_info dicts
     cohort_at_tau: Dict            # per-cohort tau observations
-    max_tau: int                   # display range (rows, chart x-axis)
-    saturation_tau: int            # internal sweep horizon / fallback support
     tau_solid_max: int
     tau_future_max: int
     last_frame_date: Optional[_date] = None
@@ -1636,7 +1643,7 @@ def build_cohort_evidence_from_frames(
     anchor_from: str,
     anchor_to: str,
     sweep_to: str,
-    axis_tau_max: Optional[int] = None,
+    compute_extent: int,
 ) -> Optional[FrameEvidence]:
     """Build CohortEvidence from derived maturity frames.
 
@@ -1843,58 +1850,42 @@ def build_cohort_evidence_from_frames(
         )
     tau_future_max = max(tau_future_max, tau_solid_max)
 
-    # ── Determine tau ranges ───────────────────────────────────────
-    # max_tau         : display/row range — drives chart x-axis (unchanged).
-    # saturation_tau  : internal sweep horizon — extends to 2*t95 (window)
-    #                   or 2*path_t95 (cohort) so trajectory evaluation and
-    #                   legacy scalar fallback have adequate support. It is
-    #                   not a row-projection contract that midpoint equals
-    #                   the public p_infinity scalar.
-    #                   May exceed max_tau when path-level latency dominates
-    #                   A→Y timing (cohort mode, multi-hop).
-    # Display floor: the observed calendar reach (oldest cohort → sweep_to),
-    # optionally raised by the FE override. The true chart extent is latent
-    # on the conditioned span CDF and is resolved by build_cf_projection_
-    # bundle after composition (_latent_chart_extent); this is only the floor
-    # below which the evidence range is never clipped.
-    max_tau = tau_future_max
-    if axis_tau_max is not None and axis_tau_max > max_tau:
-        max_tau = axis_tau_max
-    max_tau = min(max_tau, 400)
-
-    # Composition ceiling: a safe upper bound on reach so the conditioned,
-    # population-root-rooted span CDF (read by the bundle to derive the latent
-    # extent) is never truncated. No latency lookup and no temporal mode here
-    # — the per-primitive composition is the cheap pass; the expensive
-    # per-cohort projection is sized down to the latent extent by the bundle.
-    saturation_tau = 400
-
-    # Frame evidence is raw observed chart evidence only. Active A!=X
-    # carrier semantics are owned by the primitive-backed runtime span;
-    # this builder must not construct a carrier or alter public scalars.
+    # ── Engine working window ─────────────────────────────────────
+    # ``compute_extent`` is the engine boundary input chosen by the analysis
+    # handler per ``docs/current/cohort-maturity-render-calc-policy.md``:
+    # Manual → user_axis; Auto+F/F+E → ceil(1.5·path_t95); Auto+E →
+    # tau_future_max. Frame evidence — the obs_x / obs_y arrays per Cohort —
+    # is sized to ``compute_extent`` (engine's row depth). The legacy
+    # hardcoded ``saturation_tau = 400`` ceiling and the extend-only
+    # ``max(tau_future_max, axis_tau_max)`` ratchet that this function used
+    # to apply are gone: span/calc scoping is the perimeter's job, not the
+    # engine's. The obs arrays survive for legacy ``compute_forecast_
+    # trajectory`` consumers (FORECAST_RUNTIME_ARCHITECTURE §5); the v3 row
+    # builder reads strict observed evidence through the empirical operator,
+    # not these arrays.
     engine_cohorts: list = []
     materialised_cohort_list: List[Dict[str, Any]] = []
     for ci in cohort_list:
         raw_n_i = float(ci.get('x_frozen', 0.0) or 0.0)
         a_i = int(ci.get('tau_observed', ci['tau_max']) or 0)
-        # Upper-bound clamp only — preserve the `tau_observed = -1`
-        # sentinel (set by build_cohort_evidence_from_frames's empty-
-        # frames synthesis) which encodes "no observations recorded".
-        # Under that sentinel, `frontier_age = -1` propagates into the
-        # selected-cohort projection: the observed-prefix loop iterates
-        # zero times and the future arm covers τ=0..T-1 against the
-        # prior, producing the natural Bayesian degeneracy. Loops below
-        # gated on `t <= a_i` skip cleanly when a_i is -1.
-        a_i = min(a_i, saturation_tau)
+        # Upper-bound clamp to the engine's working window. Preserves the
+        # ``tau_observed = -1`` empty-frames sentinel (negative values pass
+        # through ``min`` cleanly when compute_extent ≥ 0). Under that
+        # sentinel, ``frontier_age = -1`` propagates into the selected-
+        # cohort projection: the observed-prefix loop iterates zero times
+        # and the future arm covers τ=0..T-1 against the prior, producing
+        # the natural Bayesian degeneracy. Loops below gated on
+        # ``t <= a_i`` skip cleanly when a_i is -1.
+        a_i = min(a_i, compute_extent)
         a_pop = float(ci.get('a_frozen', raw_n_i) or raw_n_i or 1.0)
         ad_str = ci['anchor_day'].isoformat()
         tau_data = cohort_at_tau.get(ad_str, {})
 
-        raw_obs_x = [0.0] * (saturation_tau + 1)
-        raw_obs_y = [0.0] * (saturation_tau + 1)
+        raw_obs_x = [0.0] * (compute_extent + 1)
+        raw_obs_y = [0.0] * (compute_extent + 1)
         last_x = 0.0
         last_y = 0.0
-        for t in range(saturation_tau + 1):
+        for t in range(compute_extent + 1):
             if t <= a_i:
                 obs = tau_data.get(t)
                 if obs:
@@ -1957,8 +1948,6 @@ def build_cohort_evidence_from_frames(
         engine_cohorts=engine_cohorts,
         cohort_list=materialised_cohort_list,
         cohort_at_tau=dict(cohort_at_tau),
-        max_tau=max_tau,
-        saturation_tau=saturation_tau,
         tau_solid_max=tau_solid_max,
         tau_future_max=tau_future_max,
         last_frame_date=last_frame_date,
@@ -1976,7 +1965,7 @@ def build_cf_projection_bundle(
     sweep_to: str,
     *,
     is_window: bool = True,
-    axis_tau_max: Optional[int] = None,
+    compute_extent: int,
     anchor_node_id: Optional[str] = None,
     is_multi_hop: bool = False,
     resolved_override: Any = None,
@@ -1999,14 +1988,20 @@ def build_cf_projection_bundle(
     frame evidence, build the ``ResolvedCFRuntime``, resolve base mass and
     the retrieval frontier, and project the selected-Cohort surfaces.
 
-    The projection is built at ``fe.saturation_tau`` (not ``fe.max_tau``)
-    so the date reducer can index per-Cohort FC draws at saturation; the
-    tau reducer still emits public rows only through ``fe.max_tau`` (73q
-    §"Saturation tau"). Scalar metadata (``cf_mode`` / ``cf_reason`` /
-    ``promoted_source``) is read from the resolved model object, not from
-    ``runtime_provenance``. Always returns a bundle: a missing edge,
-    unresolvable model, malformed dates, or unbuildable runtime are
-    upstream defects that fail visibly (I-12), not early-out refusals.
+    The bundle's projection horizon is ``min(compute_extent, saturation_τ)``:
+    the engine composes the request CDF to ``compute_extent`` (the analysis
+    handler's policy-driven input, per
+    ``docs/current/cohort-maturity-render-calc-policy.md``), derives
+    ``saturation_τ`` as a latent t95 of the composed predictive CDF, and
+    projects per-Cohort to the smaller of the two — past saturation the math
+    is flat by construction, so the DP does not bother. The tau reducer
+    emits rows over the same horizon (exposed as ``bundle.max_tau``); the
+    date reducer reads the per-Cohort FC arrays at the same depth. Scalar
+    metadata (``cf_mode`` / ``cf_reason`` / ``promoted_source``) is read
+    from the resolved model object, not from ``runtime_provenance``. Always
+    returns a bundle: a missing edge, unresolvable model, malformed dates,
+    or unbuildable runtime are upstream defects that fail visibly (I-12),
+    not early-out refusals.
     """
     from .forecast_runtime import find_edge_by_id, get_cf_mode_and_reason
     from .cf_projection_bundle import CFProjectionBundle, latency_band_taus
@@ -2054,7 +2049,7 @@ def build_cf_projection_bundle(
         anchor_from=anchor_from,
         anchor_to=anchor_to,
         sweep_to=sweep_to,
-        axis_tau_max=axis_tau_max,
+        compute_extent=compute_extent,
     )
 
     request_candidates = _aggregate_request_candidates(
@@ -2063,10 +2058,15 @@ def build_cf_projection_bundle(
         per_edge_upstream_candidates=per_edge_upstream_candidates,
     )
 
-    # Build the runtime at the SATURATION horizon. The composed spans
-    # extend to fe.saturation_tau so the per-Cohort FC arrays cover it;
-    # the tau reducer reads the same projection but emits only through
-    # fe.max_tau (values at τ ≤ max_tau are unchanged by the larger grid).
+    # Build the runtime at ``compute_extent`` — the engine's compose ceiling
+    # chosen by the analysis handler per the policy in
+    # ``docs/current/cohort-maturity-render-calc-policy.md``. The composed
+    # spans extend to this depth so the per-Cohort FC arrays cover at least
+    # the projection horizon. The bundle then derives ``saturation_τ`` as a
+    # latent t95 of the composed predictive CDF (``_derive_saturation_tau``)
+    # and the tau reducer reads the projection at ``min(compute_extent,
+    # saturation_τ)``: past saturation the math is flat by construction, so
+    # the engine doesn't bother projecting past it.
     runtime = build_resolved_cf_runtime(
         graph=graph,
         target_edge_id=str(target_edge_id),
@@ -2082,7 +2082,7 @@ def build_cf_projection_bundle(
         is_multi_hop=is_multi_hop,
         anchor_node_id=anchor_node_id,
         resolved=resolved,
-        max_tau=fe.saturation_tau,
+        max_tau=compute_extent,
         evidence_candidates=request_candidates,
         unconditioned_overlay_bases=(
             ('predictive', 'epistemic') if show_model_curve else ('predictive',)
@@ -2183,23 +2183,20 @@ def build_cf_projection_bundle(
     ]
     cohort_weights = [float(ec.a_pop) for ec in fe.engine_cohorts]
 
-    # Chart extent latent on the conditioned span (composed at the
-    # saturation ceiling above): the smallest τ at which the request CDF has
-    # saturated, floored at the calendar reach, FE-overridable. The
-    # expensive per-Cohort (C,S,T) projection is built at this latent extent,
-    # not the ceiling, so window/cohort horizons emerge from the conditioned
-    # data rather than a mode/latency lookup.
-    latent_extent = _latent_chart_extent(
-        runtime,
-        floor=int(fe.max_tau),
-        cap=int(fe.saturation_tau),
-        axis_tau_max=axis_tau_max,
-    )
+    # Latent saturation τ — the t95 of the composed predictive request CDF
+    # (carrier∘subject), bounded by the compose ceiling. The engine projects
+    # to ``min(compute_extent, saturation_τ)``: past saturation the math is
+    # flat by construction, so the expensive per-Cohort (C,S,T) DP does not
+    # bother. Mode-blind — window/cohort/identity differ by which operator
+    # degenerates, not by branching here (CF_ROW_PIPELINE §1, AP58).
+    saturation_tau = _derive_saturation_tau(runtime, cap=compute_extent)
+    projection_horizon = min(compute_extent, saturation_tau)
     selected_cohort_inputs = _build_selected_cohort_inputs(
         fe.engine_cohorts,
         fe.cohort_list,
         n_by_anchor,
         selected_retrieval_frontier.paired_frontier_by_anchor,
+        projection_horizon,
     )
     selected_projection = model_span_spine.project_selected_cohort_rows(
         composed_carrier=runtime.composed_carrier,
@@ -2209,7 +2206,7 @@ def build_cf_projection_bundle(
         composed_empirical_carrier=runtime.composed_empirical_carrier,
         composed_empirical_subject=runtime.composed_empirical_subject,
         selected_cohorts=selected_cohort_inputs,
-        horizon=latent_extent,
+        horizon=projection_horizon,
     )
 
     # Ordered per-Cohort projection status, aligned 1:1 with
@@ -2232,14 +2229,23 @@ def build_cf_projection_bundle(
             'reason': a_pop_provenance.get(anchor_key),
         })
 
-    # Per-Cohort completeness (the un-reduced view _runtime_completeness
-    # returns alongside the scalar) at the same saturation horizon, and
-    # the shared latency-band tau set.
+    # Per-Cohort completeness (the un-reduced view ``_runtime_completeness``
+    # returns alongside the scalar), and the shared latency-band tau set.
+    # 73q Phase 5e stopgap: widen the CDF compose horizon to cover the
+    # deepest per-Cohort frontier read; pairs with the same stopgap inside
+    # ``_project_runtime_rows`` at the row-reducer call. Both go away when
+    # the Phase 5e dedicated scalar reducer lands and the row-attached
+    # completeness fields are retired (see
+    # ``docs/current/cohort-maturity-render-calc-policy.md`` appendix item 4).
+    _bundle_completeness_horizon = (
+        max(int(compute_extent), max(int(a) for a in cohort_eval_ages) + 1)
+        if cohort_eval_ages else int(compute_extent)
+    )
     _, _, completeness_by_cohort = _runtime_completeness(
         runtime,
         cohort_eval_ages=cohort_eval_ages,
         cohort_weights=cohort_weights,
-        horizon=fe.saturation_tau,
+        horizon=_bundle_completeness_horizon,
     )
     _lat = resolved.latency
     band_taus = latency_band_taus(_lat.mu, _lat.sigma, _lat.onset_delta_days)
@@ -2261,8 +2267,8 @@ def build_cf_projection_bundle(
         cf_mode=_cf_mode,
         cf_reason=_cf_reason,
         promoted_source=_promoted_source,
-        saturation_tau=int(fe.saturation_tau),
-        max_tau=int(latent_extent),
+        saturation_tau=int(saturation_tau),
+        max_tau=int(projection_horizon),
     )
 
 
@@ -2275,8 +2281,9 @@ def compute_cohort_maturity_rows_v3(
     anchor_from: str,
     anchor_to: str,
     sweep_to: str,
+    *,
+    compute_extent: int,
     is_window: bool = True,
-    axis_tau_max: Optional[int] = None,
     band_level: float = 0.90,
     anchor_node_id: Optional[str] = None,
     is_multi_hop: bool = False,
@@ -2314,8 +2321,8 @@ def compute_cohort_maturity_rows_v3(
     # 73q Phase 2: the public row function is "build bundle → tau
     # reducer". The bundle owns the prep/projection sequence (resolve,
     # frame evidence, runtime, base mass, frontier) and builds the
-    # selected-Cohort projection at fe.saturation_tau. The tau reducer
-    # below emits public rows only through fe.max_tau.
+    # selected-Cohort projection at ``min(compute_extent, saturation_τ)``.
+    # The tau reducer below emits public rows only through that horizon.
     bundle = build_cf_projection_bundle(
         frames=frames,
         graph=graph,
@@ -2326,7 +2333,7 @@ def compute_cohort_maturity_rows_v3(
         anchor_to=anchor_to,
         sweep_to=sweep_to,
         is_window=is_window,
-        axis_tau_max=axis_tau_max,
+        compute_extent=compute_extent,
         anchor_node_id=anchor_node_id,
         is_multi_hop=is_multi_hop,
         resolved_override=resolved_override,

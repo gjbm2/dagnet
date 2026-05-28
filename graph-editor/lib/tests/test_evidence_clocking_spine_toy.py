@@ -334,7 +334,20 @@ def test_handler_boundary_step_clock_reads_only_supplied_evidence_dates(monkeypa
         horizon=HORIZON,
     )
 
-    for tau in range(HORIZON + 1):
+    # Engine emits rows only through ``min(compute_extent, saturation_τ)``
+    # per ``docs/current/cohort-maturity-render-calc-policy.md``; E-mode
+    # scenarios are not padded past that. The clock-reading contract this
+    # test pins is per-row, so iterate over the rows the engine actually
+    # returned. The engine must still reach past the carrier delay
+    # (τ ≥ 5) so the "supplied evidence dates only" assertion is
+    # non-vacuous on a c-d snapshot near the carrier arrival.
+    assert max(rows_by_tau) >= 5, (
+        f"engine emitted only {len(rows_by_tau)} rows; expected the "
+        "natural projection to reach at least the carrier delay (τ ≥ 5)"
+    )
+    for tau in sorted(rows_by_tau):
+        if tau > HORIZON:
+            break
         expected_x = 0 if tau < 5 else 500
         expected_y = expected_y_by_tau[tau]
         actual_x = rows_by_tau[tau]["evidence_x"]
