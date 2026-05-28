@@ -1413,11 +1413,30 @@ def _project_runtime_rows(
     _selected_cohort_diag = None
     epi_rate_draws = _overlay_rate_draws('epistemic')
 
+    # 73q Phase 5e stopgap (delete with the surrounding call):
+    # ``cohort_eval_ages`` carries per-Cohort frontier τ (the raw frontier
+    # depth on the request CDF), which can exceed ``max_tau`` (the row
+    # count = engine ``compute_extent``) under Manual zoom-in on year-old
+    # cohorts. The old hardcoded ``saturation_tau = 400`` floor in
+    # ``build_cohort_evidence_from_frames`` masked this; under the new
+    # ``compute_extent``-driven engine the deepest frontier read needs the
+    # CDF composed to cover it. Widen the compose horizon at this call
+    # site so the read is in-bounds; the policy ownership and the row-
+    # field consumers retire together in Phase 5e (see 73q plan and
+    # ``docs/current/cohort-maturity-render-calc-policy.md`` appendix
+    # item 4). The math function ``_runtime_completeness`` keeps its
+    # strict contract — this widening is the call-site policy decision.
+    _eval_ages_seq = list(cohort_eval_ages)
+    _completeness_horizon = (
+        max(int(max_tau), max(int(a) for a in _eval_ages_seq) + 1)
+        if _eval_ages_seq
+        else int(max_tau)
+    )
     completeness_mean, completeness_sd, _ = _runtime_completeness(
         runtime,
         cohort_eval_ages=cohort_eval_ages,
         cohort_weights=cohort_weights,
-        horizon=max_tau,
+        horizon=_completeness_horizon,
     )
     p_infinity_mean = (
         runtime.public_moments.p_mean if runtime.public_moments else None

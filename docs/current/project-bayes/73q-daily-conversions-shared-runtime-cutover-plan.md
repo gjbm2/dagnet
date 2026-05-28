@@ -417,7 +417,7 @@ Phase 5 is no longer "make every chart use the date reducer". The FC work makes 
 - daily conversions needs the date reducer from Phases 2-4;
 - `surprise_gauge` still needs a real migration off the legacy trajectory engine;
 - `conversion_funnel`, `bridge_view`, and `conversion_rate` need explicit decisions or regression coverage, but they are not hidden prerequisites for the daily-conversions cutover;
-- the param-pack scalar `p.latency.completeness` needs to be sourced from a dedicated scalar reducer (Phase 5e below). The cohort_maturity row reducer no longer co-produces this scalar — that deletion and the perimeter ownership of CALC/SHOW scope landed pre-Phase-5 as the implementation of `docs/current/cohort-maturity-render-calc-policy.md`.
+- the param-pack scalar `p.latency.completeness` needs to be sourced from a dedicated scalar reducer (Phase 5e below). The cohort_maturity row reducer still co-produces this scalar today via `_runtime_completeness`; the pre-Phase-5 now-work implementing `docs/current/cohort-maturity-render-calc-policy.md` lifts CALC/SHOW scope to the perimeter and applies a stopgap to the `_runtime_completeness` compose horizon, but defers row-field deletion and CF endpoint repoint to Phase 5e so the param-pack write path is not regressed during the gap.
 
 The work splits into actual migrations (where a legacy call still exists), hold-out reducer decisions, verification of display-mode assumptions that changed under the CF/FC row mapping, and the param-pack scalar source-of-truth change.
 
@@ -482,11 +482,17 @@ Until the decision is recorded, the work cannot start. The default if the decisi
 
 #### Phase 5e — Dedicated scalar reducer for the param pack
 
-**Pre-Phase-5 context:** the cohort_maturity row reducer used to attach a query-level `completeness` / `completeness_sd` scalar to every row via a call to `_runtime_completeness` inside `_project_runtime_rows`. That call has been deleted as part of the policy implementation described in [`docs/current/cohort-maturity-render-calc-policy.md`](../cohort-maturity-render-calc-policy.md). The cohort_maturity row reducer no longer co-produces a scalar; the param-pack parity test now derives the comparison value from per-Cohort row data via the ratio identity. The param-pack itself still receives `p.latency.completeness` via `conditionedForecastService` from the BE conditioned_forecast endpoint, which is the remaining co-production we want to retire.
+**Pre-Phase-5 context:** the cohort_maturity row reducer still attaches a query-level `completeness` / `completeness_sd` scalar to every row via a call to `_runtime_completeness` inside `_project_runtime_rows`. The pre-Phase-5 now-work implementing [`docs/current/cohort-maturity-render-calc-policy.md`](../cohort-maturity-render-calc-policy.md) applies a stopgap to that function (widening the internal CDF compose horizon to cover the per-Cohort frontier eval points) but keeps the call, the row fields, and their consumers live. Today's param-pack `p.latency.completeness` write is sourced from this scalar through three hops: `_runtime_completeness` → row field → CF endpoint's `last_row.get("completeness")` read at `api_handlers.py:2042-2043` → `conditionedForecastService.extractCfEdgeWriteSpec` → `edge.p.latency.completeness`. Phase 5e replaces this chain with a dedicated scalar reducer and then retires the row field, the FE forward, the CF endpoint's row read, and the `_runtime_completeness` call.
 
 Phase 5e introduces a dedicated scalar reducer as the third CF client (sibling of the tau reducer `cohort_maturity` and the date reducer `daily_conversions`). It reduces the shared `CFProjectionBundle` to scalar moments — at minimum `p_at_saturation_mean/_sd` and `completeness_at_frontier_mean/_sd`, with naming finalised in the contract pass below. The reducer owns its own CALC scope at the perimeter (CALC = `saturation_τ`, because `p_infinity` requires the plateau); it is ignorant of charting and rendering.
 
-Once the reducer exists, the param-pack write source-of-truth redirects to it. The conditioned_forecast endpoint response may continue to expose the same scalars for backwards-compatible consumers, but the canonical write path is the scalar reducer.
+Once the reducer exists, Phase 5e repoints the CF endpoint at `api_handlers.py:2042-2043` (`_handle_conditioned_forecast_impl`) from `last_row.get("completeness")` / `last_row.get("completeness_sd")` to the scalar reducer's output. The CF endpoint response shape stays the same; the FE write through `conditionedForecastService` is unchanged; param-pack reads are unchanged. Only the upstream source of the two scalars moves.
+
+With the CF endpoint repointed, Phase 5e then deletes the now-orphaned co-production:
+
+- Delete the `_runtime_completeness` call at `cohort_forecast_v3.py:1416` and the `completeness` / `completeness_sd` row fields it populated (alongside the now-work stopgap to its compose horizon, which becomes moot).
+- Retire the FE normaliser forward at `graphComputeClient.ts:500` that surfaced the row scalar to cohort_maturity consumers.
+- Rewrite the param-pack parity test at `test_cohort_factorised_outside_in.py:1429-1471` to derive cohort_maturity's completeness scalar from per-Cohort row data via the ratio identity (`evidence rate at frontier_τ_i ÷ FC rate at saturation`, population-weighted), since the row field is no longer available as a direct comparison source.
 
 Surprise_gauge (Phase 5a) becomes a downstream consumer of the same scalar pipeline rather than reading completeness mean/sd from the bundle directly. The two phases can land independently; 5e formalises the surface that 5a depends on.
 
@@ -495,7 +501,9 @@ Before implementation, name the reducer's field contract: which bundle accessors
 **Acceptance:**
 
 - A scalar reducer module exists alongside `reduce_cohort_maturity_rows` and `reduce_daily_conversions_rows`. Its inputs are the shared bundle; its outputs are the named scalar fields; it owns its own CALC at the perimeter.
-- `p.latency.completeness` and `p.latency.completeness_stdev` writes on the param pack come from the scalar reducer's output, not from the conditioned_forecast endpoint response.
+- The CF endpoint at `api_handlers.py:2042-2043` reads its `completeness` / `completeness_sd` from the scalar reducer's output, not from `last_row`.
+- `p.latency.completeness` and `p.latency.completeness_stdev` writes on the param pack come from the scalar reducer's output (via the unchanged CF response and FE write path).
+- The `_runtime_completeness` call, the cohort_maturity row `completeness` / `completeness_sd` fields, and the FE forward at `graphComputeClient.ts:500` are deleted. The param-pack parity test is rewritten to derive the comparison via the ratio identity.
 - Surprise_gauge's `p` and `completeness` z-score variables consume the same scalar pipeline.
 - The reducer's CALC scope is independent of cohort_maturity's and daily_conversions's CALC scopes — it does not piggy-back on either chart's calc.
 - **No-branch check:** the scalar reducer reads existing bundle accessors. New per-Cohort scalar fields on the bundle are permitted if needed; new conditioning, new spine arithmetic, or new fallback branches in the engine are not.
