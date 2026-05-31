@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.4b
+**Released:** 31-May-26
+
+Interim release during 73q with new reducers up and running
+
+---
+
 ## Version 2.1.3b
 **Released:** 13-May-26
 
