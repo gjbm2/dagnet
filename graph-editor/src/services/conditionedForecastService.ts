@@ -17,6 +17,7 @@ import { buildConditionedForecastGraphSnapshot } from '../lib/conditionedForecas
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 import { UpdateManager } from './UpdateManager';
 import { resolveConditionedForecastScenarioId } from './conditionedForecastSupersessionState';
+import { buildForecastingSettings } from '../constants/latency';
 
 /**
  * Canonical CF write specification per edge — what CF authoritatively writes.
@@ -261,6 +262,7 @@ export async function runConditionedForecast(
       candidate_regimes_by_edge: candidateRegimesByEdge,
     }],
     ...(meceDimensions.length ? { mece_dimensions: meceDimensions } : {}),
+    forecasting_settings: buildForecastingSettings(),
   };
 
   const url = `${PYTHON_API_BASE}/api/forecast/conditioned`;

@@ -127,6 +127,9 @@ class TestForecastingSettingsDefaults:
     def test_mc_draws(self):
         assert ForecastingSettings().mc_draws == 1000.0
 
+    def test_is_ess_threshold_disabled_by_default(self):
+        assert ForecastingSettings().is_ess_threshold_enabled == 0.0
+
 
 class TestRequestSettingsContext:
     """The contextvar binding threads request settings into engine call sites."""
@@ -147,9 +150,13 @@ class TestRequestSettingsContext:
 
     def test_round_trip_from_dict(self):
         # The API handler path: dict → settings → context → engine read.
-        s = settings_from_dict({'mc_draws': 750.0})
+        s = settings_from_dict({
+            'mc_draws': 750.0,
+            'is_ess_threshold_enabled': 1,
+        })
         with use_request_settings(s):
             assert current_settings().mc_draws == 750.0
+            assert current_settings().is_ess_threshold_enabled == 1.0
 
     def test_primitive_current_mc_draws_honours_context(self):
         # The engine seam: primitives.current_mc_draws reads the bound value.
@@ -341,14 +348,23 @@ class TestSettingsSignature:
         assert base != modified
 
     def test_changes_for_every_field(self):
-        """Every field must contribute to the signature."""
+        """Persistent modelling fields must contribute to the signature."""
         base_sig = compute_settings_signature(ForecastingSettings())
         for field_name in ForecastingSettings.__dataclass_fields__:
+            if field_name == 'is_ess_threshold_enabled':
+                continue
             default_val = getattr(ForecastingSettings(), field_name)
             modified_val = default_val + 1.0 if default_val != 0 else 1.0
             modified = ForecastingSettings(**{field_name: modified_val})
             sig = compute_settings_signature(modified)
             assert sig != base_sig, f"Changing '{field_name}' did not change signature"
+
+    def test_request_only_ess_threshold_flag_does_not_change_signature(self):
+        base = compute_settings_signature(ForecastingSettings())
+        flagged = compute_settings_signature(
+            ForecastingSettings(is_ess_threshold_enabled=1.0)
+        )
+        assert flagged == base
 
     def test_same_values_different_construction_same_signature(self):
         s1 = ForecastingSettings(forecast_blend_lambda=0.3)

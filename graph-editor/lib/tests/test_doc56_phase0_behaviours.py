@@ -590,12 +590,20 @@ def test_whole_graph_cf_is_invariant_under_edge_reorder(
 @requires_synth("synth-simple-abc", enriched=True, bayesian=True)
 @pytest.mark.xfail(
     reason=(
-        "73q Phase 5a migrates surprise_gauge from the legacy trajectory "
-        "engine to ResolvedCFRuntime. Revisit/rewrite this canary when 73q "
-        "is complete; 73q graph projections are acknowledged unreliable "
-        "until then."
+        "73q Phase 5a is complete: surprise_gauge now consumes the shared "
+        "CF projection bundle via reduce_cf_scalars (FC predictive needle "
+        "vs unconditioned epistemic dial). The cross-mode directional split "
+        "is still expected to hold structurally — window mode aggregates "
+        "evidence across cohorts so the FC asymptotic rate differs from the "
+        "single-anchor cohort-mode FC — but the +0.05 absolute threshold "
+        "below was tuned for the old `observed = Σk/Σn` semantics. Under "
+        "the new contract `observed` is the FC posterior mean, so the "
+        "magnitude of the split needs recalibration under a real DB run "
+        "before strict-passing this. Replacement coverage for the gauge's "
+        "post-migration response shape lives in "
+        "test_surprise_gauge_scalar_reducer.py."
     ),
-    strict=True,
+    strict=False,
 )
 def test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split():
     """Lag-fit and surprise-gauge must honour the same window/cohort split.

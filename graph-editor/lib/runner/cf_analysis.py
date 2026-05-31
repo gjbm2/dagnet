@@ -39,6 +39,7 @@ def reducer_for(analysis_type: str):
     """
     from runner.adaptor import get_adaptor
     from runner.cohort_forecast_v3 import (
+        reduce_cf_scalars,
         reduce_cohort_maturity_rows,
         reduce_daily_conversions_rows,
     )
@@ -46,6 +47,12 @@ def reducer_for(analysis_type: str):
     by_name = {
         'cohort_maturity': reduce_cohort_maturity_rows,
         'daily_conversions': reduce_daily_conversions_rows,
+        # 73q Phase 5a — scalar reducer is the third sibling. Consumers
+        # are forecast-backed analyses that need scalar moments at
+        # ``bundle.saturation_tau`` rather than a full per-axis row set:
+        # ``surprise_gauge`` reads the FC predictive + unc epistemic
+        # pairs for its two-distribution z-score.
+        'cf_scalar': reduce_cf_scalars,
     }
     return by_name[get_adaptor().get(analysis_type).reducer]
 
@@ -210,6 +217,7 @@ def prepare_cf_projection_bundle(
         per_edge_subject_candidates=subject_candidates,
         per_edge_results_by_uuid=per_edge_results_by_uuid,
         show_model_curve=show_model_curve,
+        include_epistemic_overlay=include_epistemic_overlay,
         envelope_plan=preparation.envelope_plan,
         context_key=context_scope.context_key,
         context_selector=context_scope.context_selector,
@@ -232,3 +240,80 @@ def prepare_cf_projection_bundle(
         compute_extent=compute_extent,
         runtime_bundle_diag=prepared_runtime.runtime_bundle,
     )
+
+
+def prepare_cf_scalar_bundle(
+    preparation: Any,
+    *,
+    graph_data: Dict[str, Any],
+    subjects: Sequence[Dict[str, Any]],
+    is_window: bool,
+    context_scope: Any,
+    scenario_id: str,
+    as_at: Optional[str],
+    candidate_regimes_by_edge: Dict[str, Any],
+    per_edge_results_by_uuid: Dict[str, Dict[str, Any]],
+    compute_extent: int,
+    log_prefix: str,
+    mc_draws_override: Optional[int] = None,
+    include_epistemic_overlay: bool = False,
+) -> CFAnalysisPrepared:
+    """Scalar-only CF callsite (73q Phase 5e Step B).
+
+    The CF endpoint (``_handle_conditioned_forecast_impl``) consumes the
+    runtime for scalars only: ``p_at_saturation_*`` (closed-form from
+    ``runtime.public_moments``, draw-independent),
+    ``completeness_at_frontier_*`` (N-weighted mean of S per-draw CDF
+    evaluations, whose standard error scales as ``posterior_sd / sqrt(S)``),
+    and the empirical operator's strict cumulative totals. None of these
+    require the request-wide default S=1000; for typical completeness
+    posterior SD around 0.02, S=100 puts the estimator at sub-0.001
+    absolute error — well below any plausible param-pack tolerance.
+
+    This entry point exists so the CF endpoint can carry its own draw
+    count rather than piggy-backing on the cohort_maturity tau reducer
+    (which still uses the request-wide default S to keep fan-band
+    resolution for the chart). It wraps the existing bundle preparation
+    inside a request-settings override so the mc_draws override is the
+    only behaviour change — no new conditioning, no new spine arithmetic,
+    no new fallback branch in the engine. Per-Cohort row projection
+    arrays are still built today (Phase 2 optimisation deferred); the
+    scalar reducer simply doesn't read them.
+
+    ``include_epistemic_overlay`` defaults to False — the CF endpoint and
+    param-pack consumers only read conditioned moments, so the optional
+    model overlay is not built. The surprise-gauge callsite (73q Phase 5a)
+    passes True: its dial reads ``unconditioned_overlays['epistemic']`` for
+    the prior distribution side of the combined-spread z-score.
+    ``use_prepared_resolved`` and ``show_model_curve`` remain hardcoded to
+    False (scalar-irrelevant for every callsite today).
+    """
+    import dataclasses
+    from .forecasting_settings import current_settings, use_request_settings
+
+    def _build():
+        return prepare_cf_projection_bundle(
+            preparation,
+            graph_data=graph_data,
+            subjects=subjects,
+            is_window=is_window,
+            context_scope=context_scope,
+            scenario_id=scenario_id,
+            as_at=as_at,
+            candidate_regimes_by_edge=candidate_regimes_by_edge,
+            per_edge_results_by_uuid=per_edge_results_by_uuid,
+            compute_extent=compute_extent,
+            include_epistemic_overlay=include_epistemic_overlay,
+            use_prepared_resolved=False,
+            show_model_curve=False,
+            log_prefix=log_prefix,
+        )
+
+    if mc_draws_override is None:
+        return _build()
+
+    overridden = dataclasses.replace(
+        current_settings(), mc_draws=float(mc_draws_override),
+    )
+    with use_request_settings(overridden):
+        return _build()

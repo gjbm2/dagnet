@@ -72,6 +72,7 @@ if _lib_dir not in _sys.path:
     _sys.path.insert(0, _lib_dir)
 import result_cache  # noqa: E402
 
+from .forecasting_settings import current_settings
 from .model_resolver import ResolvedLatency, ResolvedModelParams
 from .primitive_evidence import PrimitiveEvidenceResolution
 from .primitives import (
@@ -95,6 +96,14 @@ from .timing_particles import (
     sample_timing_particles_from_params,
 )
 from .numpy_stats import normal_cdf
+
+
+LEGACY_IS_TARGET_ESS = 20.0
+
+
+def current_is_ess_threshold_enabled() -> bool:
+    """Return whether the request opted into legacy ESS tempering."""
+    return bool(current_settings().is_ess_threshold_enabled)
 
 
 # ─── Process-memory cache ──────────────────────────────────────────────
@@ -196,6 +205,7 @@ def _primitive_cache_key(
         edge_latency=edge_lat_summary,
         path_latency=path_lat_summary,
         timing_cdf_max_tau=options.timing_cdf_max_tau,
+        is_ess_threshold_enabled=options.is_ess_threshold_enabled,
         prior_source=prior_source,
         resolved_source=resolved_model.source,
         dispersion_basis=dispersion_basis,
@@ -218,6 +228,9 @@ class ConditioningPolicyOptions:
     """
     draw_count: int = field(default_factory=current_mc_draws)
     timing_cdf_max_tau: int = 90
+    is_ess_threshold_enabled: bool = field(
+        default_factory=current_is_ess_threshold_enabled,
+    )
 
 
 def condition_primitive(
@@ -426,6 +439,7 @@ def _condition_primitive_uncached(
         prior_beta_pred=prior_beta_pred_for_proposal,
         draw_count=options.draw_count,
         draw_family_key=draw_family_key,
+        is_ess_threshold_enabled=options.is_ess_threshold_enabled,
         mu_sd_override=mu_sd_override,
     )
 
@@ -567,7 +581,9 @@ def _condition_primitive_uncached(
                 f'maturity_aware_mode={outcome.provenance["mode"]} '
                 f'cohorts_used={outcome.provenance["cohorts_used"]} '
                 f'tempering_lambda={outcome.provenance["tempering_lambda"]:.4f} '
-                f'ess={outcome.provenance["ess"]:.2f}'
+                f'ess={outcome.provenance["ess"]:.2f} '
+                f'ess_threshold_enabled='
+                f'{int(bool(outcome.provenance.get("ess_threshold_enabled")))}'
             ),
             *(f'plan_provenance: {entry}' for entry in plan.provenance),
         ),
@@ -1223,6 +1239,7 @@ def _evaluate_likelihood_plan(
     prior_beta_pred: Optional[float],
     draw_count: int,
     draw_family_key: DrawFamilyKey,
+    is_ess_threshold_enabled: bool = False,
     mu_sd_override: Optional[float] = None,
 ) -> _ConditioningOutcome:
     """Evaluate the plan and emit one ``_ConditioningOutcome``.
@@ -1235,7 +1252,9 @@ def _evaluate_likelihood_plan(
       ``plan.cohort_*_weighted_total``. The F ≡ 1 degeneration of the
       multinomial.
     - latent timing → multinomial IS over ``plan.cohort_buckets``.
-      If IS cannot find an ESS-feasible λ → prior_only(reason='is_failed').
+      By default ESS is reported as a diagnostic on the full-likelihood
+      weights and does not temper the posterior. A request-only forensic
+      flag can restore the legacy ESS-threshold λ search.
 
     The non-latent path is the only remaining caller of
     ``_conjugate_p_only`` after this refactor (AP53: dead-caller residue
@@ -1306,6 +1325,7 @@ def _evaluate_likelihood_plan(
                 'cohorts_used': len(plan.cohort_latest),
                 'tempering_lambda': 1.0,
                 'ess': float(draw_count),
+                'ess_threshold_enabled': False,
             },
         )
 
@@ -1411,27 +1431,35 @@ def _evaluate_likelihood_plan(
         )
         log_lik += residual_draws * np.log1p(-p_arrived_total)
 
-    is_target_ess = 20.0
-    best_w: Optional[np.ndarray] = None
-    best_lam = 0.0
-    best_ess = 0.0
-    lo, hi = 0.0, 1.0
-    for _ in range(20):
-        mid = (lo + hi) / 2.0
-        w, ess = _weights_and_ess(log_lik, mid)
-        if w is not None and ess >= is_target_ess:
-            best_w, best_lam, best_ess = w, mid, ess
-            lo = mid
-        else:
-            hi = mid
-    w_full, ess_full = _weights_and_ess(log_lik, 1.0)
-    if w_full is not None and ess_full >= is_target_ess:
-        best_w, best_lam, best_ess = w_full, 1.0, ess_full
+    full_w, full_ess = _weights_and_ess(log_lik, 1.0)
+    selected_w = full_w
+    selected_ess = full_ess
+    selected_lambda = 1.0
 
-    if best_w is not None:
+    if is_ess_threshold_enabled:
+        selected_w = None
+        selected_ess = 0.0
+        selected_lambda = 0.0
+        lo, hi = 0.0, 1.0
+        for _ in range(20):
+            mid = (lo + hi) / 2.0
+            candidate_w, candidate_ess = _weights_and_ess(log_lik, mid)
+            if candidate_w is not None and candidate_ess >= LEGACY_IS_TARGET_ESS:
+                selected_w = candidate_w
+                selected_ess = candidate_ess
+                selected_lambda = mid
+                lo = mid
+            else:
+                hi = mid
+        if full_w is not None and full_ess >= LEGACY_IS_TARGET_ESS:
+            selected_w = full_w
+            selected_ess = full_ess
+            selected_lambda = 1.0
+
+    if selected_w is not None:
         is_rng = make_rng(draw_family_key, 'primitive_is_resampling')
         indices = is_rng.choice(
-            draw_count, size=draw_count, replace=True, p=best_w,
+            draw_count, size=draw_count, replace=True, p=selected_w,
         )
         cond_p_draws = proposal_p_draws[indices]
         # Posterior and prior chart surfaces use endpoint G(τ); the
@@ -1447,15 +1475,18 @@ def _evaluate_likelihood_plan(
             provenance={
                 'mode': 'maturity_aware_is_joint',
                 'cohorts_used': len(plan.cohort_buckets),
-                'tempering_lambda': float(best_lam),
-                'ess': float(best_ess),
+                'tempering_lambda': float(selected_lambda),
+                'ess': float(selected_ess),
+                'ess_threshold_enabled': bool(is_ess_threshold_enabled),
             },
         )
 
-    # IS could not find an ESS-feasible λ. The only safe answer is
-    # prior-only — kₘ alone does not marginalise the latent likelihood
-    # to a Bin(kₘ | n_d, p) form unless τₘ is mature, and we cannot
-    # determine maturity here without re-introducing F=1 substitution.
+    # The selected weighting path could not produce normalised weights
+    # (full likelihood underflow, or the opt-in legacy ESS path could not
+    # find a λ meeting its target). The only safe answer is prior-only —
+    # kₘ alone does not marginalise the latent likelihood to a Bin(kₘ | n_d,
+    # p) form unless τₘ is mature, and we cannot determine maturity here
+    # without re-introducing F=1 substitution.
     return _ConditioningOutcome(
         status='prior_only',
         reason='is_failed',
@@ -1464,6 +1495,7 @@ def _evaluate_likelihood_plan(
             'cohorts_used': len(plan.cohort_buckets),
             'tempering_lambda': 0.0,
             'ess': 0.0,
+            'ess_threshold_enabled': bool(is_ess_threshold_enabled),
         },
     )
 

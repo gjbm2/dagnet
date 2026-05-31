@@ -556,6 +556,16 @@ export interface ForecastingSettings {
   bayes_target_accept: number;
   // Forecast Monte Carlo sampling
   mc_draws: number;
+  is_ess_threshold_enabled: number;
+}
+
+function isEssThresholdUrlParamEnabled(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return new URLSearchParams(window.location.search).has('essthreshold');
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -592,6 +602,7 @@ export const BAYES_TARGET_ACCEPT = 0.90;            // NUTS target acceptance
 // forecasting_settings.mc_draws; the BE sets a request-scoped contextvar
 // and every engine site reads from it.
 export const MC_DRAWS = 1000;                       // request-scope S
+export const IS_ESS_THRESHOLD_ENABLED = 0;           // request-only URL flag
 
 
 export function buildForecastingSettings(): ForecastingSettings {
@@ -630,6 +641,7 @@ export function buildForecastingSettings(): ForecastingSettings {
     bayes_chains: BAYES_CHAINS,
     bayes_target_accept: BAYES_TARGET_ACCEPT,
     mc_draws: MC_DRAWS,
+    is_ess_threshold_enabled: isEssThresholdUrlParamEnabled() ? 1 : IS_ESS_THRESHOLD_ENABLED,
   };
 }
 

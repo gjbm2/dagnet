@@ -10,8 +10,8 @@ correct per-edge scalars by comparing against the v3 chart path
     - Conditioned forecast returns edges with non-null p_mean
 
   Phase 2: Per-edge parity comparison
-    - For each edge: cohort_maturity last-row p_infinity_mean (or
-      midpoint fallback) is compared to whole-graph CF p_mean
+    - For each edge: cohort_maturity last-row projected_rate (FC at
+      saturation) is compared to whole-graph CF p_mean
     - Diagnostic table preserved on failure
 
   Phase 3: Sibling PMF consistency (sum <= 1.0 per parent)
@@ -310,10 +310,10 @@ class TestPhase1Health:
 @requires_data_repo
 @requires_python_be
 class TestPhase2Parity:
-    """Phase 2: per-edge whole-graph p_mean vs single-edge v3 chart midpoint."""
+    """Phase 2: per-edge whole-graph p_mean vs single-edge FC saturation."""
 
     def _v3_reference(self, v3_payload: dict[str, Any]) -> tuple[Optional[float], Optional[int]]:
-        """Engine-evaluated p@∞ from the last row, falling back to last-row midpoint."""
+        """Engine-evaluated p@∞ from the last row's FC saturation surface."""
         rows = (v3_payload.get("result") or {}).get("data") or \
                (v3_payload.get("result") or {}).get("maturity_rows") or []
         if not rows:
@@ -323,6 +323,9 @@ class TestPhase2Parity:
         p_inf = last.get("p_infinity_mean")
         if p_inf is not None:
             return float(p_inf), tau
+        projected = last.get("projected_rate")
+        if projected is not None:
+            return float(projected), tau
         for r in reversed(rows):
             if r.get("midpoint") is not None:
                 return float(r["midpoint"]), r.get("tau_days")
@@ -343,7 +346,7 @@ class TestPhase2Parity:
 
         rows: list[str] = []
         rows.append(
-            f'{"edge":30s} | {"wg p_mean":>10s} | {"v3 mid@T":>10s} | '
+            f'{"edge":30s} | {"wg p_mean":>10s} | {"v3 FC@T":>10s} | '
             f'{"delta":>8s} | {"downstream":>10s} | result'
         )
         rows.append("-" * 95)
@@ -455,15 +458,38 @@ class TestPhase4AsatVisibility:
 
     def _summarise_dc(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = payload.get("result") or {}
-        rs = result.get("data") or result.get("rows") or []
-        mature = [r for r in rs if r.get("layer") == "mature"]
-        forecast = [r for r in rs if r.get("layer") == "forecast"]
+        rs = result.get("data") or result.get("rate_by_cohort") or []
+
+        def _date_sort_key(label: Optional[str]) -> Optional[tuple[int, int, int]]:
+            if not label:
+                return None
+            day_s, mon_s, year_s = str(label).split("-")
+            month = {
+                "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4,
+                "May": 5, "Jun": 6, "Jul": 7, "Aug": 8,
+                "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+            }[mon_s]
+            year = 2000 + int(year_s)
+            return (year, month, int(day_s))
+
+        mature = [
+            r for r in rs
+            if isinstance(r.get("completeness"), (int, float))
+            and float(r["completeness"]) >= 0.95
+        ]
+        forecast = [
+            r for r in rs
+            if isinstance(r.get("completeness"), (int, float))
+            and 0.0 < float(r["completeness"]) < 0.95
+        ]
         null_comp = [r for r in rs if r.get("completeness") is None]
         return {
+            "rows": len(rs),
             "mature_rows": len(mature),
             "forecast_rows": len(forecast),
             "null_completeness_rows": len(null_comp),
             "last_mature_date": mature[-1]["date"] if mature else None,
+            "last_mature_sort_key": _date_sort_key(mature[-1]["date"] if mature else None),
             "first_forecast_date": forecast[0]["date"] if forecast else None,
             "first_null_completeness_date": null_comp[0]["date"] if null_comp else None,
         }
@@ -475,9 +501,12 @@ class TestPhase4AsatVisibility:
         legacy gaps"): the runtime-backed date reducer reads per-Cohort
         completeness from the shared runtime CDF, so every admitted Cohort
         carries a real completeness (tiny for the youngest, never None).
-        The legacy null-completeness band was an enrichment artefact; the
-        post-cutover boundary shift manifests as the mature zone shrinking
-        and a forecast zone appearing — not a null band.
+        The legacy null-completeness band was an enrichment artefact. The
+        post-cutover boundary shift is expressed by the asat-capped payload
+        carrying fewer visible Cohorts, fewer mature Cohorts, and an earlier
+        mature frontier. Both live and asat may contain forecast rows because
+        the runtime now emits continuous completeness rather than a backend
+        `layer` label.
         """
         if GRAPH != "synth-simple-abc":
             pytest.skip("historical asat fixture is defined only for synth-simple-abc")
@@ -491,10 +520,14 @@ class TestPhase4AsatVisibility:
         )
 
         ok = (
-            live_s["forecast_rows"] == 0
+            live_s["rows"] > asat_s["rows"] > 0
             and live_s["null_completeness_rows"] == 0
+            and asat_s["null_completeness_rows"] == 0
             and asat_s["mature_rows"] < live_s["mature_rows"]
             and asat_s["forecast_rows"] > 0
+            and live_s["last_mature_date"] is not None
+            and asat_s["last_mature_date"] is not None
+            and asat_s["last_mature_sort_key"] < live_s["last_mature_sort_key"]
         )
         if not ok:
             pytest.fail(
@@ -502,10 +535,10 @@ class TestPhase4AsatVisibility:
                 + diagnostic
             )
 
-    def test_daily_conversions_completeness_matches_cohort_maturity(self) -> None:
+    def test_daily_conversions_completeness_matches_scalar_frontier_ratio(self) -> None:
         """Semantic invariant: the date reducer has NO completeness logic of its
-        own — per-Cohort completeness must equal the same runtime CDF readout
-        cohort_maturity exposes, at the Cohort's eval_age (plan §Completeness).
+        own — per-Cohort completeness must equal the shared FC
+        frontier/terminal rate ratio for that same Cohort.
 
         Non-vacuous by construction: a single Cohort (arrivals at simple-b on
         10-Jan) observed as-at 20-Jan is age 10 days, so completeness ≈ 0.42,
@@ -515,21 +548,35 @@ class TestPhase4AsatVisibility:
             pytest.skip("fixture defined only for synth-simple-abc")
         dsl = "from(simple-a).to(simple-b).window(10-Jan-26:10-Jan-26).asat(20-Jan-26)"
         dc_rows = (_analyse(dsl, analysis_type="daily_conversions").get("result") or {}).get("data") or []
-        cm_rows = (_analyse(dsl, analysis_type="cohort_maturity").get("result") or {}).get("data") or []
         assert len(dc_rows) == 1, f"expected a single Cohort row, got {len(dc_rows)}"
         dc_c = dc_rows[0].get("completeness")
         assert dc_c is not None and 0.0 < dc_c < 1.0, (
             f"expected a non-vacuous immature completeness, got {dc_c!r}"
         )
-        # eval_age = 20-Jan − 10-Jan = 10 days.
-        cm_by_tau = {int(r["tau_days"]): r for r in cm_rows if r.get("tau_days") is not None}
-        assert 10 in cm_by_tau, "cohort_maturity returned no tau=10 row to compare"
-        cm_c = cm_by_tau[10].get("completeness")
-        assert cm_c is not None, "cohort_maturity tau=10 completeness missing"
-        # 1e-4 is the documented MC completeness parity floor for this pipeline.
-        assert abs(dc_c - cm_c) <= 1e-4, (
-            f"daily_conversions completeness ({dc_c}) must equal cohort_maturity's "
-            f"_runtime_completeness at eval_age=10 ({cm_c}); |Δ|={abs(dc_c - cm_c):.2e}"
+        pack = _param_pack(dsl)
+        scalar_c = pack.get("e.simple-a-to-b.p.latency.completeness")
+        assert scalar_c is not None, "param-pack scalar completeness missing for simple-a-to-b"
+        cf_edges = (
+            (_analyse(dsl, analysis_type="conditioned_forecast").get("scenarios") or [{}])[0]
+            .get("edges") or []
+        )
+        assert len(cf_edges) == 1, f"expected one scalar edge, got {len(cf_edges)}"
+        scalar_sd = cf_edges[0].get("completeness_sd")
+        assert scalar_sd is not None and scalar_sd > 0, (
+            f"scalar completeness_sd missing for simple-a-to-b: {scalar_sd!r}"
+        )
+        # The scalar endpoint is intentionally run at S=100. Compare the
+        # same FC frontier/terminal quantity within the scalar mean's MC
+        # standard-error envelope; this catches structural drift while not
+        # treating the low-draw scalar estimate as exact.
+        scalar_mc_se = scalar_sd / (100 ** 0.5)
+        tolerance = max(1e-4, 3.0 * scalar_mc_se)
+        # Single-Cohort query: the date reducer's per-Cohort completeness
+        # should equal the scalar reducer's frontier/terminal FC ratio.
+        assert abs(dc_c - scalar_c) <= tolerance, (
+            f"daily_conversions completeness ({dc_c}) must equal scalar "
+            f"frontier/terminal completeness ({scalar_c}) within scalar MC "
+            f"tolerance ({tolerance}); |Δ|={abs(dc_c - scalar_c):.2e}"
         )
 
     def test_daily_conversions_window_cohort_do_not_collapse(self) -> None:

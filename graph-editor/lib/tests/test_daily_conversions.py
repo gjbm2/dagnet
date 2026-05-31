@@ -7,6 +7,7 @@ Tests for derive_daily_conversions() from snapshot data.
 import pytest
 import sys
 import os
+from types import SimpleNamespace
 
 # Add lib directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -52,15 +53,15 @@ class TestDailyConversionsDerivation:
         # Check date attribution
         date_map = {d['date']: d['conversions'] for d in result['data']}
         
-        assert date_map.get('2025-10-02', 0) == 5
-        assert date_map.get('2025-10-04', 0) == 7
-        assert date_map.get('2025-10-06', 0) == 6
-        assert date_map.get('2025-10-08', 0) == 4
-        assert date_map.get('2025-10-10', 0) == 3
+        assert date_map.get('2-Oct-25', 0) == 5
+        assert date_map.get('4-Oct-25', 0) == 7
+        assert date_map.get('6-Oct-25', 0) == 6
+        assert date_map.get('8-Oct-25', 0) == 4
+        assert date_map.get('10-Oct-25', 0) == 3
         
         # Date range should be correct
-        assert result['date_range']['from'] == '2025-10-02'
-        assert result['date_range']['to'] == '2025-10-10'
+        assert result['date_range']['from'] == '1-Oct-25'
+        assert result['date_range']['to'] == '1-Oct-25'
     
     def test_dr004_daily_conversions_multi_cohort(self):
         """
@@ -100,15 +101,15 @@ class TestDailyConversionsDerivation:
         date_map = {d['date']: d['conversions'] for d in result['data']}
         
         # Oct 15: 10 cohorts x 2 = 20
-        assert date_map.get('2025-10-15', 0) == 20
+        assert date_map.get('15-Oct-25', 0) == 20
         # Oct 16: 10 cohorts x 3 = 30
-        assert date_map.get('2025-10-16', 0) == 30
+        assert date_map.get('16-Oct-25', 0) == 30
         # Oct 17: 10 cohorts x 4 = 40
-        assert date_map.get('2025-10-17', 0) == 40
+        assert date_map.get('17-Oct-25', 0) == 40
         # Oct 18: 10 cohorts x 5 = 50
-        assert date_map.get('2025-10-18', 0) == 50
+        assert date_map.get('18-Oct-25', 0) == 50
         # Oct 19: 10 cohorts x 6 = 60
-        assert date_map.get('2025-10-19', 0) == 60
+        assert date_map.get('19-Oct-25', 0) == 60
     
     def test_daily_conversions_negative_delta_clamped(self):
         """
@@ -125,11 +126,11 @@ class TestDailyConversionsDerivation:
         date_map = {d['date']: d['conversions'] for d in result['data']}
         
         # Oct 2: 10 conversions
-        assert date_map.get('2025-10-02', 0) == 10
+        assert date_map.get('2-Oct-25', 0) == 10
         # Oct 3: 0 conversions (decrease clamped)
-        assert date_map.get('2025-10-03', 0) == 0
+        assert date_map.get('3-Oct-25', 0) == 0
         # Oct 4: 7 conversions (15 - 8)
-        assert date_map.get('2025-10-04', 0) == 7
+        assert date_map.get('4-Oct-25', 0) == 7
         
         assert result['total_conversions'] == 17
     
@@ -165,9 +166,9 @@ class TestDailyConversionsDerivation:
         date_map = {d['date']: d['conversions'] for d in result['data']}
         
         # Oct 2: 5 + 3 + 2 = 10 (all deltas within same day)
-        assert date_map.get('2025-10-02', 0) == 10
+        assert date_map.get('2-Oct-25', 0) == 10
         # Oct 3: 5 conversions
-        assert date_map.get('2025-10-03', 0) == 5
+        assert date_map.get('3-Oct-25', 0) == 5
         
         assert result['total_conversions'] == 15
 
@@ -191,9 +192,57 @@ class TestDailyConversionsDerivation:
 
         # Oct 2: 2 + 3 = 5, Oct 3: (5-2) + (7-3) = 7
         date_map = {d['date']: d['conversions'] for d in result['data']}
-        assert date_map.get('2025-10-02', 0) == 5
-        assert date_map.get('2025-10-03', 0) == 7
+        assert date_map.get('2-Oct-25', 0) == 5
+        assert date_map.get('3-Oct-25', 0) == 7
         assert result['total_conversions'] == 12
+
+    def test_runtime_date_reducer_projection_only_rows_use_public_uk_dates(self):
+        """
+        A runtime-backed scoped Cohort can have projection data before it has an
+        observed ``rate_by_cohort`` row. The public row date must still use the
+        app-wide UK date label, not the reducer's private ISO matching key.
+        """
+        import numpy as np
+        from runner.cohort_forecast_v3 import reduce_daily_conversions_rows
+
+        bundle = SimpleNamespace(
+            date_axis_projection=SimpleNamespace(
+                anchor_days=['2026-04-01'],
+                f_x_draws=np.full((1, 1, 1), 100.0),
+                f_y_draws=np.full((1, 1, 1), 25.0),
+                f_rate_draws=np.full((1, 1, 1), 0.25),
+                ef_x_draws=np.full((1, 1, 1), 100.0),
+                ef_y_draws=np.full((1, 1, 1), 25.0),
+                ef_rate_draws=np.full((1, 1, 1), 0.25),
+                ef_forecast_x=np.full((1, 1, 1), 0.0),
+                ef_forecast_y=np.full((1, 1, 1), 5.0),
+                evidence_x_strict=np.full((1, 1), 20.0),
+                evidence_y_strict=np.full((1, 1), 5.0),
+                reason=['root_window_carrier_n'],
+            ),
+            completeness_by_cohort=np.full((1,), 0.5),
+            cohort_eval_ages=[0],
+            latency_band_taus=[],
+            evidence_latency_band_taus=[],
+            model_latency_band_taus=[],
+            max_tau=0,
+            cf_mode='sweep',
+            cf_reason=None,
+            promoted_source='analytic',
+        )
+        observed = {
+            'analysis_type': 'daily_conversions',
+            'data': [],
+            'cohort_y_at_age': {},
+            'total_conversions': 0,
+            'date_range': {'from': '1-Apr-26', 'to': '1-Apr-26'},
+            'rate_by_cohort': [],
+        }
+
+        result = reduce_daily_conversions_rows(bundle, observed)
+
+        assert result['rate_by_cohort'][0]['date'] == '1-Apr-26'
+        assert result['rate_by_cohort'][0]['date'] != '2026-04-01'
 
 
 class TestDailyConversionsEngineAnnotation:

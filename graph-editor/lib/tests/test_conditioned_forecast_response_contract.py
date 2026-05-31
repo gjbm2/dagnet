@@ -466,25 +466,27 @@ if _CONFTEST_AVAILABLE:
                 f"CF endpoint={cf_pmean:.4f}"
             )
 
-            # ── Completeness parity (the missing-test gap) ──────────
-            cm_completeness = cm_last.get("completeness")
+            # ── Completeness contract (73q Phase 5e Step C) ──────────
+            # The cohort_maturity row no longer carries a query-level
+            # `completeness` scalar — the dedicated scalar reducer over
+            # the shared CFProjectionBundle is the source of truth, and
+            # the CF endpoint reads its `completeness` from there.
+            # Doc 45 §"one computation, two reads" is updated: the two
+            # reads are param-pack (via the CF endpoint) and direct CF
+            # endpoint consumers (surprise_gauge, etc.), both routed
+            # through `reduce_cf_scalars`. The cohort_maturity row is
+            # not a third read of this scalar.
             cf_completeness = cf_edge.get("completeness")
-            assert cm_completeness is not None, (
-                "cohort_maturity_v3 last row missing 'completeness'. "
-                "Doc 45 §'one computation, two reads' mandates "
-                "completeness on both the CF and v3 paths at the "
-                "evaluation horizon."
-            )
             assert cf_completeness is not None, (
                 "CF endpoint edge missing 'completeness'. "
                 "Doc 45 response contract mandates completeness on "
                 "the CF endpoint."
             )
-            # Both come from the same CDF — no MC sampling variance on
-            # this quantity. Tolerance kept tight.
-            assert abs(cm_completeness - cf_completeness) < 0.02, (
-                f"completeness parity failed: cohort_maturity last row="
-                f"{cm_completeness:.4f} CF endpoint={cf_completeness:.4f}"
+            assert "completeness" not in cm_last, (
+                "cohort_maturity rows must not expose `completeness`"
+                " post-Phase-5e — the scalar reducer is the source of"
+                " truth via the CF endpoint and the param-pack"
+                " `p.latency.completeness`."
             )
 
 
@@ -586,15 +588,17 @@ class TestConditionedForecastSingleHopCohortParity:
             f"cohort_maturity={cm_p_mean:.4f} CF={cf_p_mean:.4f}"
         )
 
-        cm_completeness = cm_last.get("completeness")
+        # 73q Phase 5e Step C: cohort_maturity rows no longer expose
+        # `completeness`. The scoped single-hop cohort `completeness`
+        # parity now lives on the CF endpoint sole-source contract.
         cf_completeness = cf_edge.get("completeness")
-        assert cm_completeness is not None and cf_completeness is not None, (
-            "Missing completeness scalars for single-hop cohort parity"
+        assert cf_completeness is not None, (
+            "CF endpoint missing completeness for scoped single-hop cohort"
         )
-        assert abs(cm_completeness - cf_completeness) < 5e-3, (
-            "Scoped single-hop cohort completeness parity failed: "
-            f"cohort_maturity={cm_completeness:.4f} "
-            f"CF={cf_completeness:.4f}"
+        assert "completeness" not in cm_last, (
+            "cohort_maturity rows must not expose `completeness`"
+            " post-Phase-5e — the scalar reducer is the source of"
+            " truth via the CF endpoint."
         )
 
 @requires_db

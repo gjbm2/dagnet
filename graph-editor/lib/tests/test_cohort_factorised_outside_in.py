@@ -134,10 +134,19 @@ _USE_CACHE = os.environ.get("DAGNET_TEST_USE_CACHE", "0") == "1"
 # convolution drift is bounded by ~1e-4 in practice.
 #
 # Realistic floors:
-#   - p_mean / p_infinity_mean: ~1e-3 (post-IS posterior-mean noise floor on
-#     S=2000 draws + cross-path drift + FW convolution drift; smaller deltas
-#     can't be cleanly separated from numerical drift between equivalent
-#     paths).
+#   - p_mean / p_infinity_mean: post-IS posterior-mean MC noise floor on the
+#     pack/CF endpoint side. Phase 5e moved the CF endpoint onto the dedicated
+#     scalar reducer at ``default_mc_draws // 10`` (api_handlers.py CF endpoint;
+#     the scalar reducer aggressively collapses dispersion so a 10x reduction
+#     is appropriate), while the cohort_maturity side still runs at the full
+#     default S. At the project's default (S_default=1000) the CF endpoint
+#     therefore runs at S=100, so the cross-surface comparison mixes one
+#     S=100 estimator and one S=1000 estimator. The dominant term is the
+#     S=100 SE = posterior_sd / sqrt(100), which for typical posterior_sd ≈ 0.05
+#     gives ~5e-3. We set the tolerance to 5e-3 to accommodate this expected
+#     noise floor without masking real bias. FW convolution drift contributes
+#     another ~1e-4 on top, well inside the budget. Smaller deltas cannot be
+#     cleanly separated from MC noise at S=100.
 #   - completeness: ~1e-4 (n-weighted CDF mean over IS-reindexed draws; the
 #     reindex step alone can shift the mean by ~1e-5–1e-4 even when the
 #     underlying ``cdf_arr`` cells are bit-identical, and convolved-carrier
@@ -147,7 +156,7 @@ _USE_CACHE = os.environ.get("DAGNET_TEST_USE_CACHE", "0") == "1"
 # parity assertions for the same query. Cross-mode and cross-anchor
 # invariance assertions use their own per-call-site tolerances (typically
 # 1e-3 to 5e-3, see inline comments).
-_P_MEAN_ABS_TOL = 1.5e-3
+_P_MEAN_ABS_TOL = 5e-3
 _COMPLETENESS_ABS_TOL = 1e-4
 _PROJECTION_PRODUCT_ABS_TOL = 0.025
 
@@ -422,6 +431,12 @@ def _run_param_pack(
 
 def _rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return (payload.get("result") or {}).get("data") or []
+
+
+def _metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    meta = (payload.get("result") or {}).get("metadata") or {}
+    assert isinstance(meta, dict), f"expected metadata object, got {type(meta).__name__}"
+    return meta
 
 
 def _numeric_curve(
@@ -1468,12 +1483,24 @@ def _assert_public_scalar_parity(
     cm_last = scalars["cm_last"]
 
     cf_p_mean = cf_edge.get("p_mean")
-    cm_p_mean = cm_last.get("p_infinity_mean")
+    cm_p_mean = cm_last.get("projected_rate")
     cf_completeness = cf_edge.get("completeness")
-    cm_completeness = cm_last.get("completeness")
+    # 73q Phase 5e Step C: cohort_maturity rows no longer carry a
+    # query-level `completeness` scalar. The cross-source parity that
+    # used to compare pack/CF/cm completeness now only exercises
+    # pack vs CF — both come from the dedicated scalar reducer over
+    # the shared CFProjectionBundle, so the FE write path
+    # (`conditionedForecastService.extractCfEdgeWriteSpec`) and the
+    # param-pack read are the same identity check (modulo trivial
+    # JSON round-trip). cm_last is still used for `p_infinity_mean`.
 
     assert isinstance(cf_p_mean, (int, float)) and isinstance(cm_p_mean, (int, float))
-    assert isinstance(cf_completeness, (int, float)) and isinstance(cm_completeness, (int, float))
+    assert isinstance(cf_completeness, (int, float))
+    assert "completeness" not in cm_last, (
+        f"[{label}] cohort_maturity rows must not expose `completeness`"
+        f" post-Phase-5e — the scalar reducer is the source of truth"
+        f" via the CF endpoint and the param-pack `p.latency.completeness`."
+    )
 
     pack_p_mean = scalars["pack_p_mean"]
     pack_completeness = scalars["pack_completeness"]
@@ -1489,10 +1516,6 @@ def _assert_public_scalar_parity(
     assert abs(pack_completeness - float(cf_completeness)) <= completeness_abs_tol, (
         f"[{label}] param-pack completeness != conditioned_forecast completeness: "
         f"pack={pack_completeness:.6f} cf={float(cf_completeness):.6f}"
-    )
-    assert abs(pack_completeness - float(cm_completeness)) <= completeness_abs_tol, (
-        f"[{label}] param-pack completeness != cohort_maturity last-row completeness: "
-        f"pack={pack_completeness:.6f} cm={float(cm_completeness):.6f}"
     )
 
 
@@ -1563,6 +1586,7 @@ _NO_LAG_BC = "from(cf-fix-no-lag-b).to(cf-fix-no-lag-c)"
 _NO_LAG_BD = "from(cf-fix-no-lag-b).to(cf-fix-no-lag-d)"
 
 _MIRROR_4STEP = "synth-mirror-4step"
+_M4_LANDING_TO_CREATED = "from(m4-landing).to(m4-created)"
 _M4_REGISTERED_TO_SUCCESS = "from(m4-registered).to(m4-success)"
 _M4_REGISTERED_TO_SUCCESS_EDGE = "m4-registered-to-success"
 # First latency edge with a non-latent multi-hop upstream chain
@@ -1618,6 +1642,76 @@ _FMODE_DRIFT_DSL = (
 @requires_db
 @requires_data_repo
 @requires_python_be
+def test_daily_conversions_non_latency_live_query_does_not_500():
+    """Outside-in reproduction for SHIT 1→2.
+
+    The live canvas query is a non-latency daily-conversions subject. The
+    current code must not ask for a positive latency-band coordinate from a
+    single-plane projection; the public CLI should return rows instead of
+    the axis-2 IndexError.
+    """
+    payload = _run_analyse_v3(
+        "bayes-test-gm-rebuild",
+        "from(Landing-page).to(household-created).cohort(1-Apr-26:29-May-26)",
+        analysis_type="daily_conversions",
+        mc_draws=64,
+    )
+    rows = _rows(payload)
+    assert rows, "daily_conversions returned no rows for live non-latency query"
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+def test_daily_conversions_date_row_matches_single_cohort_maturity_evidence():
+    """One daily-conversions date row must be the date-axis view of the
+    same selected-Cohort cell that cohort_maturity exposes on the tau axis.
+
+    Daily's observed calendar ``data`` series remains owned by
+    ``derive_daily_conversions``. The per-Cohort row fields ``x`` / ``y`` /
+    ``rate`` / ``evidence_y`` are different: for a forecast-backed row they
+    must read the re-clocked strict empirical surface from the shared
+    projection bundle, so a mature single-date row matches the corresponding
+    single-Cohort maturity row.
+    """
+    graph_name = "bayes-test-gm-rebuild"
+    subject = "from(switch-registered).to(switch-success)"
+    cohort_date = "1-Apr-26"
+
+    daily = _run_analyse_v3(
+        graph_name,
+        f"{subject}.cohort(1-Apr-26:29-May-26)",
+        analysis_type="daily_conversions",
+    )
+    daily_rows = _rows(daily)
+    daily_row = next(
+        row for row in daily_rows
+        if row.get("date") == cohort_date
+    )
+    frontier_age = daily_row.get("frontier_age")
+    assert isinstance(frontier_age, int), (
+        f"daily row for {cohort_date} did not expose a frontier_age: {daily_row!r}"
+    )
+
+    maturity = _run_analyse_v3(
+        graph_name,
+        f"{subject}.cohort({cohort_date}:{cohort_date})",
+        tau_extent=max(frontier_age, 80),
+    )
+    maturity_row = _rows_by_tau(maturity)[frontier_age]
+
+    assert daily_row["x"] == pytest.approx(maturity_row["evidence_x"])
+    assert daily_row["y"] == pytest.approx(maturity_row["evidence_y"])
+    assert daily_row["evidence_y"] == pytest.approx(maturity_row["evidence_y"])
+    assert daily_row["rate"] == pytest.approx(maturity_row["rate"])
+    assert daily_row["projected_rate"] == pytest.approx(
+        maturity_row["projected_rate"],
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
 @requires_synth(_SIMPLE, enriched=True)
 def test_a_equals_x_identity_collapses_to_window():
     band = "1-Mar-26:14-Mar-26"
@@ -1657,8 +1751,8 @@ def test_a_equals_x_identity_collapses_to_window():
         label=f"{_SIMPLE_AB} model_midpoint",
     )
 
-    w_p = _first_row(window).get("p_infinity_mean")
-    c_p = _first_row(cohort).get("p_infinity_mean")
+    w_p = _last_row(window).get("projected_rate")
+    c_p = _last_row(cohort).get("projected_rate")
     assert isinstance(w_p, (int, float)) and isinstance(c_p, (int, float))
     assert abs(float(w_p) - float(c_p)) <= _P_MEAN_ABS_TOL, (
         f"[{_SIMPLE_AB}] p_infinity_mean mismatch: window={w_p} cohort={c_p}"
@@ -1697,8 +1791,8 @@ def test_single_hop_non_latent_upstream_collapses_to_window(subject_dsl: str):
         label=f"{subject_dsl} model_midpoint",
     )
 
-    w_p = _first_row(window).get("p_infinity_mean")
-    c_p = _first_row(cohort).get("p_infinity_mean")
+    w_p = _last_row(window).get("projected_rate")
+    c_p = _last_row(cohort).get("projected_rate")
     assert isinstance(w_p, (int, float)) and isinstance(c_p, (int, float))
     assert abs(float(w_p) - float(c_p)) <= _P_MEAN_ABS_TOL
 
@@ -1748,8 +1842,8 @@ def test_single_hop_latent_upstream_lags_window_but_converges_to_same_subject_p(
         f"window_tau={w_half} cohort_tau={c_half}"
     )
 
-    window_p = _first_row(_run_analyse_v3(_LAT4, f"{_LAT4_BC}.window(-1d:)")).get("p_infinity_mean")
-    cohort_p = _first_row(_run_analyse_v3(_LAT4, f"{_LAT4_BC}.cohort(-1d:)")).get("p_infinity_mean")
+    window_p = _last_row(_run_analyse_v3(_LAT4, f"{_LAT4_BC}.window(-1d:)")).get("projected_rate")
+    cohort_p = _last_row(_run_analyse_v3(_LAT4, f"{_LAT4_BC}.cohort(-1d:)")).get("projected_rate")
     assert isinstance(window_p, (int, float)) and isinstance(cohort_p, (int, float))
     assert abs(float(window_p) - float(cohort_p)) <= _P_MEAN_ABS_TOL
 
@@ -1760,13 +1854,12 @@ def test_single_hop_latent_upstream_lags_window_but_converges_to_same_subject_p(
 @requires_synth(_LAT4, enriched=True)
 def test_anchor_depth_monotonicity_for_same_subject():
     band = "29-Jan-26:29-Apr-26"
-    # tau_extent=30 covers the asserted ``range(10, 26)`` overlap range.
-    # Auto compute_extent for c→d single-hop / identity cases lands at the
-    # composed c→d t95 (≈18), which is short of tau=25 — the assertion's
-    # upper bound. Cohort overrides at b and a compose longer subject spans
-    # and naturally exceed 25, but the four-payload intersection is bounded
-    # by the narrowest (window / identity). Explicit Manual axis here.
-    tau_extent = 30
+    # tau_extent=60 covers the asserted ``range(10, 26)`` overlap range
+    # and extends the right-hand row far enough for active far-anchor
+    # cohort projections to reach saturation. Auto compute_extent for
+    # c→d single-hop / identity cases lands short of tau=25, so this
+    # remains an explicit Manual axis.
+    tau_extent = 60
     window_payload = _run_analyse_v3(
         _LAT4, f"{_LAT4_CD}.window({band})", tau_extent=tau_extent,
     )
@@ -1816,7 +1909,7 @@ def test_anchor_depth_monotonicity_for_same_subject():
         assert m_near[tau] <= m_window[tau] + 0.03
 
     p_values = [
-        _first_row(payload).get("p_infinity_mean")
+        _last_row(payload).get("projected_rate")
         for payload in (window_payload, cohort_identity_payload, cohort_near_payload, cohort_far_payload)
     ]
     assert all(isinstance(value, (int, float)) for value in p_values)
@@ -2617,25 +2710,27 @@ def test_degenerate_identity_and_instant_carrier_oracles_reduce_to_subject_kerne
         )
 
     instant_payload = _run_analyse_v3(
-        _NO_LAG, f"{_NO_LAG_BC}.cohort(1-Mar-26:14-Mar-26)", show_model_curve=True,
+        _NO_LAG, f"{_NO_LAG_BC}.cohort(1-Mar-26:14-Mar-26).asat(1-Mar-26)", show_model_curve=True,
     )
     instant_curve = _numeric_curve(instant_payload, field="model_curve_midpoint")
-    p_inf = _first_row(instant_payload).get("p_infinity_mean")
-    assert isinstance(p_inf, (int, float))
+    projected_curve = _numeric_curve(instant_payload, field="projected_rate")
     assert instant_curve, f"[{_NO_LAG_BC}] no curve rows for instant-carrier reduction"
-    # Per-tau model_midpoint vs `p_inf`: with no-lag carrier and no-lag
-    # subject the rate collapses to `p` for every τ — but `p_inf` reads
-    # `np.mean(span_p_draws)` from the conditioned subject span, while
-    # the per-τ midpoint reads `np.nanmedian(pred_rate_draws[:, τ])` from
-    # the unconditioned predictive overlay. Different particle sets and
-    # mean-vs-median both contribute; tolerance sits at the MC noise floor
-    # of the two surfaces, which is wider than `_P_MEAN_ABS_TOL`
-    # (calibrated for same-particle cross-mode parity).
+    assert projected_curve, f"[{_NO_LAG_BC}] no projected_rate rows for instant-carrier reduction"
+    first = _first_row(instant_payload)
+    assert first.get("evidence_x") == 0
+    assert first.get("evidence_y") == 0
+    # With no admitted evidence, no-lag carrier and no-lag subject, the FC
+    # surface and optional unconditioned overlay both reduce to the same
+    # flat subject-kernel rate.
     _INSTANT_CARRIER_REDUCTION_TOL = 3e-3
     for tau, value in instant_curve.items():
-        assert abs(value - float(p_inf)) <= _INSTANT_CARRIER_REDUCTION_TOL, (
+        projected = projected_curve.get(tau)
+        assert isinstance(projected, (int, float)), (
+            f"[{_NO_LAG_BC}] missing projected_rate at tau={tau}"
+        )
+        assert abs(value - float(projected)) <= _INSTANT_CARRIER_REDUCTION_TOL, (
             f"[{_NO_LAG_BC}] expected flat subject-kernel reduction at tau={tau}: "
-            f"value={value:.6f} p_inf={float(p_inf):.6f}"
+            f"value={value:.6f} projected_rate={float(projected):.6f}"
         )
 
 
@@ -2895,8 +2990,8 @@ def test_first_latency_edge_with_nonlatent_chain_observed_collapses_to_window():
 
     # Public scalar (`p_infinity_mean`): primitive-backed subject-span
     # moment. Must match under correct degeneracy.
-    w_p = _first_row(window).get("p_infinity_mean")
-    c_p = _first_row(cohort).get("p_infinity_mean")
+    w_p = _last_row(window).get("projected_rate")
+    c_p = _last_row(cohort).get("projected_rate")
     assert isinstance(w_p, (int, float)) and isinstance(c_p, (int, float)), (
         f"[{_M4_DELEGATED_TO_REGISTERED}] missing p_infinity_mean "
         f"(window={w_p!r}, cohort={c_p!r})"
@@ -3201,8 +3296,8 @@ def test_cli_identity_collapse_matches_window_across_public_surfaces():
         ),
         (
             "cohort_maturity p_infinity_mean",
-            float(window_scalars["cm_last"]["p_infinity_mean"]),
-            float(identity_scalars["cm_last"]["p_infinity_mean"]),
+            float(window_scalars["cm_last"]["projected_rate"]),
+            float(identity_scalars["cm_last"]["projected_rate"]),
             _P_MEAN_ABS_TOL,
         ),
         (
@@ -3217,12 +3312,11 @@ def test_cli_identity_collapse_matches_window_across_public_surfaces():
             float(identity_scalars["cf_edge"]["completeness"]),
             _COMPLETENESS_ABS_TOL,
         ),
-        (
-            "cohort_maturity completeness",
-            float(window_scalars["cm_last"]["completeness"]),
-            float(identity_scalars["cm_last"]["completeness"]),
-            _COMPLETENESS_ABS_TOL,
-        ),
+        # 73q Phase 5e Step C: cohort_maturity rows no longer expose
+        # `completeness`. The window/identity collapse is still pinned
+        # via param-pack and conditioned_forecast completeness above —
+        # both sourced from the scalar reducer over the shared bundle,
+        # so the structural collapse is the same identity check.
     )
     for name, window_value, identity_value, tol in comparisons:
         delta = abs(window_value - identity_value)
@@ -3402,8 +3496,18 @@ def test_cli_projection_parity_uses_last_row_saturation_not_arbitrary_tau_curve_
         f"[{_LAT4_CD}] expected non-terminal row for projection guard"
     )
 
-    assert abs(scalars["pack_p_mean"] - float(last_row["p_infinity_mean"])) <= _P_MEAN_ABS_TOL
-    assert abs(scalars["pack_completeness"] - float(last_row["completeness"])) <= _COMPLETENESS_ABS_TOL
+    assert abs(scalars["pack_p_mean"] - float(last_row["projected_rate"])) <= _P_MEAN_ABS_TOL
+    # 73q Phase 5e Step C: cohort_maturity rows no longer carry
+    # `completeness`; the param-pack value is exercised against
+    # `conditioned_forecast completeness` via _assert_public_scalar_parity
+    # (both sourced from the scalar reducer). The non-terminal-row guard
+    # below still validates the row builder's `p_infinity_mean` is read
+    # at saturation and not at an arbitrary tau.
+    assert "completeness" not in last_row, (
+        "cohort_maturity rows must not expose `completeness` post-Phase-5e —"
+        " the param-pack and CF endpoint consume the scalar reducer's output"
+        " (`p.latency.completeness`) directly."
+    )
 
     first_midpoint = first_row.get("model_midpoint")
     assert isinstance(first_midpoint, (int, float))
@@ -3439,8 +3543,8 @@ def test_cohort_and_window_p_infinity_converge_for_same_subject_rate(
 ):
     window_row = _last_row(_run_analyse_v3(graph_name, window_dsl))
     cohort_row = _last_row(_run_analyse_v3(graph_name, cohort_dsl))
-    window_p = window_row.get("p_infinity_mean")
-    cohort_p = cohort_row.get("p_infinity_mean")
+    window_p = window_row.get("projected_rate")
+    cohort_p = cohort_row.get("projected_rate")
     assert isinstance(window_p, (int, float)) and isinstance(cohort_p, (int, float))
     delta = abs(float(window_p) - float(cohort_p))
     assert delta <= tol, (
@@ -3750,9 +3854,9 @@ def test_cohort_frame_evidence_does_not_retarget_carrier_or_subject():
             f"window={window_curve[tau]:.6f} admitted={admitted_curve[tau]:.6f}"
         )
 
-    window_p = _last_row(window_payload).get("p_infinity_mean")
-    identity_p = _last_row(identity_payload).get("p_infinity_mean")
-    admitted_p = _last_row(admitted_payload).get("p_infinity_mean")
+    window_p = _last_row(window_payload).get("projected_rate")
+    identity_p = _last_row(identity_payload).get("projected_rate")
+    admitted_p = _last_row(admitted_payload).get("projected_rate")
     assert all(isinstance(value, (int, float)) for value in (window_p, identity_p, admitted_p))
     # Cross-cohort-frame `p∞` spread (window / identity / admitted): see
     # cross-anchor commentary above. Deltas above the noise floor are the
@@ -3847,7 +3951,7 @@ def test_v3_midline_at_saturation_converges_to_p():
         f"{_M4_REGISTERED_TO_SUCCESS}.cohort(m4-landing,7-Mar-26:21-Mar-26)",
     )
     last = _last_row(payload)
-    p_inf = last.get("p_infinity_mean")
+    p_inf = last.get("projected_rate")
     midpoint = last.get("midpoint")
     fy = last.get("forecast_y")
     fx = last.get("forecast_x")
@@ -4331,8 +4435,8 @@ def test_d1_parity_analytic_vs_bayes_mature_window():
     analytic = _run_analyse_v3(_SIMPLE, dsl)
     bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
 
-    a_p = float(_last_row(analytic).get("p_infinity_mean") or 0.0)
-    b_p = float(_last_row(bayes).get("p_infinity_mean") or 0.0)
+    a_p = float(_last_row(analytic).get("projected_rate") or 0.0)
+    b_p = float(_last_row(bayes).get("projected_rate") or 0.0)
     delta = abs(a_p - b_p)
     assert delta <= _SOURCE_PARITY_TOL, (
         f"[{_SIMPLE_AB}] analytic vs bayes p_infinity parity failed on mature window: "
@@ -4378,8 +4482,8 @@ def test_d2_parity_analytic_vs_bayes_identity_collapse_cohort():
     analytic = _run_analyse_v3(_SIMPLE, dsl)
     bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
 
-    a_p = float(_last_row(analytic).get("p_infinity_mean") or 0.0)
-    b_p = float(_last_row(bayes).get("p_infinity_mean") or 0.0)
+    a_p = float(_last_row(analytic).get("projected_rate") or 0.0)
+    b_p = float(_last_row(bayes).get("projected_rate") or 0.0)
     delta = abs(a_p - b_p)
     assert delta <= _DISPERSION_METHODOLOGY_PARITY_TOL, (
         f"[{_SIMPLE_BC}] analytic vs bayes p_infinity parity failed on identity-collapse cohort: "
@@ -4420,8 +4524,8 @@ def test_d3_parity_analytic_vs_bayes_zero_evidence_returns_prior():
     analytic = _run_analyse_v3(_SIMPLE, dsl)
     bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
 
-    a_p = float(_last_row(analytic).get("p_infinity_mean") or 0.0)
-    b_p = float(_last_row(bayes).get("p_infinity_mean") or 0.0)
+    a_p = float(_last_row(analytic).get("projected_rate") or 0.0)
+    b_p = float(_last_row(bayes).get("projected_rate") or 0.0)
     delta = abs(a_p - b_p)
     assert delta <= _ZERO_EVIDENCE_PARITY_TOL, (
         f"[{_SIMPLE_BC}] analytic vs bayes p_infinity parity failed on zero-evidence cohort: "

@@ -162,6 +162,11 @@ class ForecastingSettings:
     funnel sweep). Draw-family coherence requires every consumer of a
     primitive under the same DrawFamilyKey to use the same S."""
 
+    is_ess_threshold_enabled: float = 0.0
+    """Request-only compatibility switch for the old primitive IS ESS
+    tempering path. 0 = full-likelihood IS (default); non-zero restores the
+    previous λ search to keep ESS at the legacy floor."""
+
 
 # ── Request-scoped settings context ────────────────────────────
 
@@ -222,6 +227,7 @@ def compute_settings_signature(settings: ForecastingSettings) -> str:
     """
     # Canonical JSON: sorted keys, no whitespace, full float precision.
     d = asdict(settings)
+    d.pop('is_ess_threshold_enabled', None)
     canonical = json.dumps(d, sort_keys=True, separators=(',', ':'))
     digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
     return digest[:16]

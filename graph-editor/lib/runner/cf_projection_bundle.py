@@ -71,11 +71,10 @@ def completeness_to_layer(
 
 
 # ── Latency-band taus (73q §"Latency-band tau accessor") ────────────────
-# The inline daily-conversions derivation in api_handlers.py computes the
-# band tau set from the resolved latency. This is the verbatim lift, so
-# both reducers (tau / date) and any future consumer share one
-# definition. No new derivation. The api_handlers inline copy is the 73q
-# Phase 4 deletion target; until then it is the only remaining duplicate.
+# Both reducers (tau / date) and any future consumer share one latency-band
+# tau definition. The accessor is algebraic over the resolved latency:
+# instant timing degenerates to tau 0 rather than being forced to a
+# positive-day display bucket.
 
 #: Latency quantiles at which a band is anchored.
 LATENCY_BAND_QUANTILES = (0.25, 0.50, 0.75)
@@ -85,30 +84,78 @@ def latency_band_taus(
     mu: float,
     sigma: float,
     onset_delta_days: float,
+    *,
+    latency_parameter: bool = True,
 ):
     """Resolved latency → ordered, deduplicated ``(tau, label)`` bands.
 
     For each quantile in :data:`LATENCY_BAND_QUANTILES` the band tau is
     the inverse-CDF percentile of the resolved latency plus
-    ``onset_delta_days``, discretised with ``max(1, round(raw))`` and
-    deduplicated by tau (first occurrence wins). The label is the
-    dynamic ``'{tau}d'`` form the legacy public shape uses.
+    ``onset_delta_days``, discretised with ``round(raw)`` and deduplicated
+    by tau (first occurrence wins). Structurally non-latency timing
+    (``latency_parameter=False``) is Dirac-at-zero, so the band tau is
+    zero regardless of compatibility ``mu`` / ``sigma`` / ``onset``
+    provenance.
+    The label is the dynamic ``'{tau}d'`` form the legacy public shape
+    uses.
 
     The tau is returned unclamped: deciding that a band beyond the
     bundle's projection horizon (``bundle.max_tau``) is unavailable
     belongs to the consuming reducer (per the field contract), not here.
 
-    Branchless dedup: ``dict.fromkeys`` keeps first occurrence and
-    preserves insertion order, so the deduplicated tau set comes out in
-    quantile order without an ``in``-test branch. ``max(1, round(...))``
-    is the existing discretisation floor named by the plan, not a
-    residual clamp.
+    ``dict.fromkeys`` keeps first occurrence and preserves insertion
+    order, so the deduplicated tau set comes out in quantile order
+    without an ``in``-test branch. Instant latency degenerates to ``0d``;
+    the accessor must not manufacture a positive-day coordinate when the
+    projection surface has correctly collapsed to tau 0.
     """
     taus = dict.fromkeys(
-        max(1, round(log_normal_inverse_cdf(q, mu, sigma) + onset_delta_days))
+        round(
+            0.0 if not latency_parameter
+            else log_normal_inverse_cdf(q, mu, sigma) + onset_delta_days
+        )
         for q in LATENCY_BAND_QUANTILES
     )
     return [(t, f'{t}d') for t in taus]
+
+
+# ── Date-axis projection view (73q Phase 4R Atom 4R.1) ──────────────────
+
+
+@dataclass(frozen=True)
+class DateAxisProjection:
+    """Cohort-list-aligned FC projection arrays for the date reducer.
+
+    Axis 0 of every array is 1:1 with ``frame_evidence.cohort_list`` (the
+    query-scoped Cohort date set), so the date reducer indexes by Cohort
+    position alone. Skipped Cohorts (no admissible root-window carrier
+    evidence, ``N_pop <= 0``) are all-NaN slices: the reducer reads them as
+    ``None`` through the NaN-aware draw-slice helpers, never through an
+    admission branch. This is the date reducer's public projection surface
+    and replaces the ``cohort_projection_status`` / ``projection_index``
+    bridge, which survives only as diagnostic provenance.
+
+    The arrays are the per-Cohort strict empirical and FC continuation
+    surfaces scattered from ``selected_projection.*_by_cohort`` (admitted
+    order) into cohort_list order. ``reason`` carries the per-Cohort
+    base-mass provenance (``root_window_carrier_n`` /
+    ``empty_frames_prior`` / ``no_root_window_evidence``) as aligned
+    metadata. Types are loose (``Any``) to keep this module free of a
+    numpy import.
+    """
+
+    anchor_days: Sequence[str]
+    f_x_draws: Any           # (C, S, T) — conditioned model surface
+    f_y_draws: Any           # (C, S, T)
+    f_rate_draws: Any        # (C, S, T)
+    ef_x_draws: Any          # (C, S, T) — cohort_list order, NaN for skipped
+    ef_y_draws: Any          # (C, S, T)
+    ef_rate_draws: Any       # (C, S, T)
+    ef_forecast_x: Any       # (C, S, T)
+    ef_forecast_y: Any       # (C, S, T)
+    evidence_x_strict: Any   # (C, T) — re-clocked strict empirical X
+    evidence_y_strict: Any   # (C, T) — re-clocked strict empirical Y
+    reason: Sequence[Optional[str]]
 
 
 # ── Shared CF projection bundle (73q Phase 2) ───────────────────────────
@@ -140,6 +187,12 @@ class CFProjectionBundle:
     frame_evidence: Any                  # FrameEvidence (tau_solid_max, tau_future_max)
     runtime: Any                         # ResolvedCFRuntime
     selected_projection: Any             # SelectedCohortRowProjection @ projection_horizon
+    # Cohort-list-aligned FC projection view consumed by the date reducer
+    # (73q Phase 4R Atom 4R.1). One row per ``frame_evidence.cohort_list``
+    # entry; skipped Cohorts are all-NaN slices. This is the date reducer's
+    # public bridge; ``cohort_projection_status`` below is demoted to
+    # diagnostic provenance.
+    date_axis_projection: 'DateAxisProjection'
     selected_retrieval_frontier: Any     # SelectedRetrievalFrontier
     n_by_anchor: Mapping[str, float]
     # Per-anchor base-mass source / skip reason. Skipped active Cohorts
@@ -165,8 +218,12 @@ class CFProjectionBundle:
     # the scalar _runtime_completeness), aligned to cohort order. None when
     # the runtime has no composed CDF.
     completeness_by_cohort: Optional[Any]
-    # Shared latency-band tau set (ordered, deduplicated (tau, label)).
+    # Shared FC contour tau set (ordered, deduplicated (tau, label)).
     latency_band_taus: Sequence[Tuple[int, str]]
+    # Strict-evidence contour tau set for E-mode daily-conversions display.
+    evidence_latency_band_taus: Sequence[Tuple[int, str]]
+    # Conditioned-model contour tau set for F-mode daily-conversions display.
+    model_latency_band_taus: Sequence[Tuple[int, str]]
     row_tau_solid_max: int
     row_tau_future_max: int
     # Explicit scalar metadata sourced from the resolved model object —

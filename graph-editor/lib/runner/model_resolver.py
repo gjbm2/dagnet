@@ -313,7 +313,7 @@ def resolve_model_params(
             or 0.0
         )
 
-    # AP18 guard: respect `latency_parameter: false`.
+    # AP18 guard: respect `latency_parameter`.
     # FE Stage-2 enrichment can stuff synthetic μ/σ/mu_sd into the latency
     # block and into model_vars[*].latency for non-latency edges (default σ
     # fallback at forecasting_settings.default_sigma=0.5). Downstream
@@ -321,8 +321,9 @@ def resolve_model_params(
     # with a synthetic σ=0.5 gets treated as a multi-day-spread carrier and
     # produces a phantom delay in cohort-mode rate trajectories
     # (see test_single_hop_non_latent_upstream_collapses_to_window).
-    # Force a clean Dirac when the edge declares `latency_parameter: false`.
-    latency_parameter_enabled = latency_block.get('latency_parameter') is not False
+    # Only an explicit boolean true enables latency. False or absent are
+    # non-latency per the graph schema / FE type contract.
+    latency_parameter_enabled = latency_block.get('latency_parameter') is True
     if not latency_parameter_enabled:
         edge_mu = 0.0
         edge_sigma = 0.0

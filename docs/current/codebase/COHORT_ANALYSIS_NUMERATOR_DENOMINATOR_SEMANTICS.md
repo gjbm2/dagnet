@@ -738,10 +738,10 @@ absent — the field is absent rather than wrong.
 
 ### 10. Public surfaces come from the runtime, not from callers
 
-`ResolvedCFRuntime.public_moments` is the source of `p_infinity_mean`,
-`p_infinity_sd`, and `p_infinity_sd_epistemic`. Caller-supplied
-legacy moments fall back only when a primitive moment is genuinely
-absent. `ResolvedCFRuntime.project_runtime_provenance` is the source
+Scalar saturation/frontier outputs such as `p@∞` and
+`completeness@frontier` are emitted by scalar reducers over the resolved
+runtime/bundle surfaces, not by cohort-maturity row projection.
+`ResolvedCFRuntime.project_runtime_provenance` is the source
 of carrier-span, subject-span, numerator-representation, and
 admission-policy labels. Consumers must read role-labelled runtime
 fields, not scrape lower-level diagnostic strings.

@@ -138,13 +138,13 @@ A variable is marked `available: false` with a stated reason when:
 - For `completeness`: `completeness_unconditioned_sd` effectively zero
   (same reason).
 
-Low importance-sampling ESS is **not** a failure mode, and no warning
-is surfaced for it: with `_IS_TARGET_ESS = 20` enforced inside
-`compute_forecast_summary`, low post-tempering ESS signals strong
-prior–evidence divergence (the gauge's whole point), not sparse data.
-An earlier "limited evidence" warning was removed because the metric
-was a sampling-quality diagnostic, not an evidence-quantity one, so
-it fired precisely when the surprise signal was strongest.
+Low importance-sampling ESS is **not** a sparse-data failure mode. The
+conditioning path uses the full likelihood and records ESS as a
+sampling-quality diagnostic; it does not temper the posterior to
+maintain an arbitrary ESS floor. An earlier "limited evidence" warning
+was removed because the metric was a sampling-quality diagnostic, not
+an evidence-quantity one, so it fired precisely when the surprise
+signal was strongest.
 
 No analytic fallback, no method-of-moments reconstruction. If the
 engine cannot run, the gauge says so. Previous designs had Phase-1

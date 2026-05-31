@@ -55,7 +55,8 @@ edges:
 simulation:
   mean_daily_traffic: 2000
   n_days: 100
-  kappa_sim_default: 50.0
+  kappa_sim_default: 1000.0
+  kappa_step_default: 1000.0
   failure_rate: 0.05
   drift_sigma: 0.0
   growth_rate_mom: 0.0

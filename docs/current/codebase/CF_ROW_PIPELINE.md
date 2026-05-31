@@ -172,9 +172,7 @@ Observed-evidence fields are separate from projection:
 
 **Source-of-truth note (post-spine cutover).** Production row evidence/rate fields (`rate`, `rate_pure`, `evidence_x`, `evidence_y`) are emitted by `model_span_spine.project_selected_cohort_rows` — the empirical spine `selected_projection` — **not** by `SelectedAClockEvidence.aggregate_by_tau`. The row builder reads them unconditionally for both identity and active carrier (`cohort_forecast_v3.py:5349-5352`; see the `_row_evidence_source` diagnostic note alongside). `aggregate_by_tau` survives only as a shadow-plan diagnostic surface (`_build_generalised_evidence_shadow_plans`). `rate_strict` / `evidence_*_strict` are per-Cohort forward-filled through each Cohort's `tau_max`, so they are **non-null across the full horizon including epoch C** — epoch-C evidence suppression is an FE display choice (§6), not a `None` in the payload.
 
-The old `rate_blended` and terminal-coverage fields have been removed. E mode reads strict evidence; E+F reads the strict evidence layer plus the FC forecast layer (`ef_*`) per the display-mode mapping in §6.
-
-`p_infinity_mean`, `p_infinity_sd`, `p_infinity_sd_epistemic` come from `ResolvedCFRuntime.public_moments`. They are scalar subject-span moments — **not** a promise that the selected-cohort group trajectory converges numerically to the final row midpoint.
+The old `rate_blended`, terminal-coverage fields, and row-level `p_infinity_*` scalar fields have been removed. E mode reads strict evidence; E+F reads the strict evidence layer plus the FC forecast layer (`ef_*`) per the display-mode mapping in §6. Scalar saturation/frontier outputs (`p@∞`, `completeness@frontier`) are owned by the scalar reducer, not by cohort-maturity rows.
 
 ---
 
@@ -251,6 +249,16 @@ Provenance is recorded per anchor: `'root_window_carrier_n'` / `'empty_frames_pr
 `rows[0]['_a_pop_provenance']` — per-anchor `root_window_carrier_n` / `empty_frames_prior` / `no_root_window_evidence` — is attached whenever base-mass provenance exists, independent of `--diag`.
 
 Without `--diag` the `--diag`-only surfaces are absent — the production payload is much smaller. The legacy `_selected_a_clock_evidence` cell dump and `_projection_basis` forensic field were removed at the selected-cohort cutover.
+
+### 10.1 Daily date reducer projection surface (73q Phase 4R)
+
+`reduce_daily_conversions_rows` (the date reducer, sibling of the tau reducer) is a pure coordinate-plane readout over the same `CFProjectionBundle`. Phase 4R (30-May-26) tightened its projection boundary:
+
+- **`date_axis_projection`** — a bundle field aligned one-to-one with `frame_evidence.cohort_list` (one row per query-scoped Cohort date; skipped Cohorts are all-NaN slices). The date reducer indexes by Cohort/date position only and reads its FC count/rate/residual planes from this view. It **replaces** `cohort_projection_status` as the date reducer's public bridge; `cohort_projection_status` (admitted-order `projection_index`) is **demoted to diagnostic provenance**.
+- **Public date serialisation is UK date labels.** The projection view and reducer may use canonical ISO day keys internally for matching, but daily-conversions response fields (`data[].date`, `rate_by_cohort[].date`, `cohort_y_at_age` keys, and `date_range`) must serialise as `d-MMM-yy`. The chart is date-indexed, not timestamp-indexed; FE rendering must not convert these labels into timestamp precision.
+- **`layer` is no longer a backend field.** The daily backend rows carry continuous quantities only (`completeness`, `frontier_age`, per-band `rate`/`bands`, `projected_rate`, `forecast_bands`, `forecast_y`/`x`). The `mature`/`forecast`/`evidence` classification, line dashing, blob alpha, and evidence-vs-forecast styling are **FE display concepts** derived from those continuous fields (`band_tau ≤ frontier_age ⇒ evidence side`). `graphComputeClient` preserves the fields without reinterpretation; `snapshotBuilders.ts` derives display state. The FE no longer clamps a forecast band's lower edge to the evidence rate, nor fabricates a forecast residual via `max(0, projected − evidence)` when the backend `forecast_y` is absent (an absent residual stays absent).
+- **Latency bands** are a uniform FC-plane readout at each band tau (no evidence-vs-forecast branch in the reducer); the `source` tag is removed and the FE classifies the epoch from `frontier_age`.
+- **Completeness** on daily rows and the scalar `fc_frontier_to_terminal_rate_ratio_*` are the FC frontier/terminal rate ratio. The pre-4R `min(eval_age, max_tau)` frontier clip is removed: a Cohort whose frontier exceeds the projection horizon (mature / past-saturation) is **undefined** (NaN per-Cohort / `None` scalar), and is de-poisoned out of the N-weighted mean rather than NaN-poisoning the whole scalar. The mature-Cohort treatment (drop vs read-flat-saturated) is an open decision — see `project-bayes/73q-daily-conversions-shared-runtime-cutover-plan.md` "Phase 4R — open issues" Q1.
 
 ---
 

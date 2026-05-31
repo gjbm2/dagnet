@@ -65,6 +65,7 @@ class TestReadEdgeCohortParams:
         edge = {
             'p': {
                 'latency': {
+                    'latency_parameter': True,
                     'path_mu': 2.5,
                     'path_sigma': 0.5,
                     'path_onset_delta_days': 3.0,
@@ -90,7 +91,7 @@ class TestReadEdgeCohortParams:
     def test_falls_back_to_flat_latency(self):
         edge = {
             'p': {
-                'latency': {'mu': 2.0, 'sigma': 0.4, 'onset_delta_days': 1.0},
+                'latency': {'latency_parameter': True, 'mu': 2.0, 'sigma': 0.4, 'onset_delta_days': 1.0},
                 'forecast': {'mean': 0.75},
             },
         }
@@ -113,18 +114,18 @@ class TestReadEdgeCohortParams:
         assert read_edge_cohort_params(edge) is None
 
     def test_returns_none_without_sigma(self):
-        edge = {'p': {'latency': {'mu': 2.0}, 'forecast': {'mean': 0.8}}}
+        edge = {'p': {'latency': {'latency_parameter': True, 'mu': 2.0}, 'forecast': {'mean': 0.8}}}
         assert read_edge_cohort_params(edge) is None
 
     def test_returns_none_without_probability(self):
-        edge = {'p': {'latency': {'mu': 2.0, 'sigma': 0.5}}}
+        edge = {'p': {'latency': {'latency_parameter': True, 'mu': 2.0, 'sigma': 0.5}}}
         assert read_edge_cohort_params(edge) is None
 
     def test_empty_edge(self):
         assert read_edge_cohort_params({}) is None
 
     def test_zero_sigma_returns_none(self):
-        edge = {'p': {'latency': {'mu': 2.0, 'sigma': 0.0}, 'forecast': {'mean': 0.8}}}
+        edge = {'p': {'latency': {'latency_parameter': True, 'mu': 2.0, 'sigma': 0.0}, 'forecast': {'mean': 0.8}}}
         assert read_edge_cohort_params(edge) is None
 
 
@@ -134,13 +135,13 @@ class TestReadEdgeCohortParams:
 SAMPLE_GRAPH = {
     'edges': [
         {'uuid': 'e1', 'from': 'A', 'to': 'B',
-         'p': {'latency': {'mu': 2.0, 'sigma': 0.4, 'onset_delta_days': 1.0},
+         'p': {'latency': {'latency_parameter': True, 'mu': 2.0, 'sigma': 0.4, 'onset_delta_days': 1.0},
                'forecast': {'mean': 0.9}}},
         {'uuid': 'e2', 'from': 'B', 'to': 'C',
-         'p': {'latency': {'mu': 2.5, 'sigma': 0.5, 'onset_delta_days': 2.0},
+         'p': {'latency': {'latency_parameter': True, 'mu': 2.5, 'sigma': 0.5, 'onset_delta_days': 2.0},
                'forecast': {'mean': 0.8}}},
         {'uuid': 'e3', 'from': 'A', 'to': 'C',
-         'p': {'latency': {'mu': 3.0, 'sigma': 0.6, 'onset_delta_days': 0.0},
+         'p': {'latency': {'latency_parameter': True, 'mu': 3.0, 'sigma': 0.6, 'onset_delta_days': 0.0},
                'forecast': {'mean': 0.3}}},
     ],
 }
@@ -191,12 +192,12 @@ FAN_GRAPH = {
     'edges': [
         {'uuid': 'e_up', 'from': 'A', 'to': 'B',
          'p': {
-             'latency': {'mu': 1.5, 'sigma': 0.4, 'onset_delta_days': 0.0},
+             'latency': {'latency_parameter': True, 'mu': 1.5, 'sigma': 0.4, 'onset_delta_days': 0.0},
              'forecast': {'mean': 0.95},
          }},
         {'uuid': 'e_target', 'from': 'B', 'to': 'C',
          'p': {
-             'latency': {'mu': 2.5, 'sigma': 0.5, 'onset_delta_days': 2.0},
+             'latency': {'latency_parameter': True, 'mu': 2.5, 'sigma': 0.5, 'onset_delta_days': 2.0},
              'forecast': {'mean': 0.15},
          }},
     ],

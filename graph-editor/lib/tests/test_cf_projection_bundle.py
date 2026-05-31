@@ -39,10 +39,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 from runner.cohort_forecast_v3 import (
     build_cf_projection_bundle,
     compute_cohort_maturity_rows_v3,
+    reduce_cohort_maturity_rows,
 )
 from runner.cf_projection_bundle import (
     CFProjectionBundle,
-    latency_band_taus,
+    LATENCY_BAND_QUANTILES,
 )
 
 from test_cohort_maturity_v3_contract import (  # noqa: E402
@@ -100,6 +101,7 @@ def _build_bundle():
         compute_extent=_COMPUTE_EXTENT,
         evidence_candidates=_candidates_for(_ADMITTED_ANCHORS),
         scenario_id='bundle-test',
+        include_epistemic_overlay=True,
     )
     return bundle, graph, frames, anchor_from, sweep_to
 
@@ -209,10 +211,85 @@ class TestBundleProjectionStatusAlignment:
 
 class TestBundleSharedAccessors:
 
-    def test_latency_band_taus_matches_accessor(self):
-        bundle, *_ = _build_bundle()
-        expected = latency_band_taus(_LAT['mu'], _LAT['sigma'], _LAT['onset'])
-        assert bundle.latency_band_taus == expected
+    def test_latency_band_taus_are_scoped_request_cdf_quantiles(self):
+        bundle, _graph, _frames, _anchor_from, sweep_to = _build_bundle()
+        tau_rows = reduce_cohort_maturity_rows(
+            bundle,
+            band_level=0.90,
+            sweep_to=sweep_to,
+            emit_diagnostics=False,
+        )
+        def _expected(field):
+            rows = [
+                row for row in tau_rows
+                if isinstance(row.get(field), (int, float))
+            ]
+            terminal = float(rows[-1][field])
+            taus = dict.fromkeys(
+                int(next(
+                    row['tau_days'] for row in rows
+                    if float(row[field]) >= q * terminal
+                ))
+                for q in LATENCY_BAND_QUANTILES
+            )
+            return [(tau, f'{tau}d') for tau in taus]
+
+        assert bundle.latency_band_taus == _expected('projected_rate')
+        assert bundle.evidence_latency_band_taus == _expected('rate')
+        assert bundle.model_latency_band_taus == _expected('model_midpoint')
+
+    def test_fc_and_evidence_contour_taus_are_independent(self):
+        bundle, _graph, _frames, _anchor_from, sweep_to = _build_bundle()
+        tau_rows = reduce_cohort_maturity_rows(
+            bundle,
+            band_level=0.90,
+            sweep_to=sweep_to,
+            emit_diagnostics=False,
+        )
+        projected = [
+            row for row in tau_rows
+            if isinstance(row.get('projected_rate'), (int, float))
+        ]
+        evidence = [
+            row for row in tau_rows
+            if isinstance(row.get('rate'), (int, float))
+        ]
+        model = [
+            row for row in tau_rows
+            if isinstance(row.get('model_midpoint'), (int, float))
+        ]
+        terminal = float(projected[-1]['projected_rate'])
+        fc_taus = dict.fromkeys(
+            int(next(
+                row['tau_days'] for row in projected
+                if float(row['projected_rate']) >= q * terminal
+            ))
+            for q in LATENCY_BAND_QUANTILES
+        )
+        evidence_terminal = float(evidence[-1]['rate'])
+        evidence_taus = dict.fromkeys(
+            int(next(
+                row['tau_days'] for row in evidence
+                if float(row['rate']) >= q * evidence_terminal
+            ))
+            for q in LATENCY_BAND_QUANTILES
+        )
+        model_terminal = float(model[-1]['model_midpoint'])
+        model_taus = dict.fromkeys(
+            int(next(
+                row['tau_days'] for row in model
+                if float(row['model_midpoint']) >= q * model_terminal
+            ))
+            for q in LATENCY_BAND_QUANTILES
+        )
+
+        assert bundle.latency_band_taus == [(tau, f'{tau}d') for tau in fc_taus]
+        assert bundle.evidence_latency_band_taus == [
+            (tau, f'{tau}d') for tau in evidence_taus
+        ]
+        assert bundle.model_latency_band_taus == [
+            (tau, f'{tau}d') for tau in model_taus
+        ]
 
     def test_per_cohort_completeness_aligned_to_cohort_list(self):
         bundle, *_ = _build_bundle()
@@ -220,7 +297,17 @@ class TestBundleSharedAccessors:
         assert comp is not None
         # Completeness is cohort_list-aligned (C_all), not projection-aligned.
         assert comp.shape == (len(bundle.frame_evidence.cohort_list),)
-        assert np.all(comp >= 0.0) and np.all(comp <= 1.0)
+        finite = np.isfinite(comp)
+        assert finite.any(), "fixture must include at least one defined completeness"
+        assert np.all(comp[finite] >= 0.0) and np.all(comp[finite] <= 1.0)
+        # Skipped/undefined Cohorts stay aligned as NaN rather than being
+        # dropped or coerced into a fake completeness value.
+        skipped = [
+            idx for idx, status in enumerate(bundle.cohort_projection_status)
+            if status['projection_index'] is None
+        ]
+        assert skipped, "fixture must include skipped Cohorts"
+        assert np.all(np.isnan(comp[skipped]))
 
 
 class TestBundleAggregateConsistency:

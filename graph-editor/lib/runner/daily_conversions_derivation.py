@@ -9,6 +9,13 @@ from collections import defaultdict
 from typing import List, Dict, Any
 from datetime import date, datetime
 
+_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+           'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def _format_date_uk(day: date) -> str:
+    return f"{day.day}-{_MONTHS[day.month - 1]}-{str(day.year)[-2:]}"
+
 
 def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -112,8 +119,9 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     
     total = sum(daily_totals.values())
     sorted_dates = sorted(daily_totals.keys())
+    sorted_cohort_dates = sorted(cohort_xy.keys())
     data = [
-        {'date': d.isoformat(), 'conversions': count}
+        {'date': _format_date_uk(d), 'conversions': count}
         for d, count in sorted(daily_totals.items())
     ]
 
@@ -125,7 +133,7 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         y_val = xy['y']
         rate = y_val / x_val if x_val > 0 else None
         rate_by_cohort.append({
-            'date': anchor_day.isoformat(),
+            'date': _format_date_uk(anchor_day),
             'x': x_val,
             'y': y_val,
             'rate': rate,
@@ -134,7 +142,7 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Convert cohort_y_at_age to string-keyed for JSON serialisation
     y_at_age_out: Dict[str, Dict[str, int]] = {}
     for (ad, age), y_val in cohort_y_at_age.items():
-        ad_str = ad.isoformat()
+        ad_str = _format_date_uk(ad)
         if ad_str not in y_at_age_out:
             y_at_age_out[ad_str] = {}
         y_at_age_out[ad_str][str(age)] = y_val
@@ -146,8 +154,8 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         'cohort_y_at_age': y_at_age_out,
         'total_conversions': total,
         'date_range': {
-            'from': sorted_dates[0].isoformat() if sorted_dates else None,
-            'to': sorted_dates[-1].isoformat() if sorted_dates else None,
+            'from': _format_date_uk(sorted_cohort_dates[0]) if sorted_cohort_dates else None,
+            'to': _format_date_uk(sorted_cohort_dates[-1]) if sorted_cohort_dates else None,
         }
     }
 

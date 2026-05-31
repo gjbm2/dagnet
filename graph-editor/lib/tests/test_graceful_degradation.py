@@ -179,7 +179,7 @@ class TestGracefulDegradation:
                 "edge_id": "e1",
                 "from": "u-a",
                 "to": "u-b",
-                "p": {"latency": {"mu": 0.0, "sigma": 0.1, "onset_delta_days": 0.0}},
+                "p": {"latency": {"latency_parameter": True, "mu": 0.0, "sigma": 0.1, "onset_delta_days": 0.0}},
             }],
         }
 

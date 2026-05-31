@@ -1122,6 +1122,9 @@ class SelectedCohortRowProjection:
     f_rate_draws: np.ndarray             # (S, T) — unspliced; f_y / f_x
     f_x_draws: np.ndarray                # (S, T) — unspliced; cumulative
     f_y_draws: np.ndarray                # (S, T) — unspliced; cumulative
+    f_x_draws_by_cohort: np.ndarray      # (C, S, T)
+    f_y_draws_by_cohort: np.ndarray      # (C, S, T)
+    f_rate_draws_by_cohort: np.ndarray   # (C, S, T) — NaN on 0/0
     applicability_row: np.ndarray         # (T,) — applicable cohorts / selected cohorts
     applicable_cohort_count: np.ndarray   # (T,)
     evidence_x_strict_by_anchor_tau: Mapping[Any, np.ndarray]   # (T,)
@@ -2282,6 +2285,8 @@ def project_selected_cohort_rows(
         out=np.zeros_like(f_y_draws),
         where=f_x_draws > 0.0,
     )
+    with np.errstate(divide='ignore', invalid='ignore'):
+        f_rate_by_cohort = y_model_by_anchor / x_model_by_anchor
 
     evidence_x_strict_by_anchor_tau: Dict[Any, np.ndarray] = {}
     evidence_y_strict_by_anchor_tau: Dict[Any, np.ndarray] = {}
@@ -2363,6 +2368,9 @@ def project_selected_cohort_rows(
         f_rate_draws=f_rate_draws,
         f_x_draws=f_x_draws,
         f_y_draws=f_y_draws,
+        f_x_draws_by_cohort=x_model_by_anchor,
+        f_y_draws_by_cohort=y_model_by_anchor,
+        f_rate_draws_by_cohort=f_rate_by_cohort,
         applicability_row=applicability_row,
         applicable_cohort_count=applicable_cohort_count,
         evidence_x_strict_by_anchor_tau=evidence_x_strict_by_anchor_tau,

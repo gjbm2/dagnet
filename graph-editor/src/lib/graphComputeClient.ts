@@ -15,6 +15,7 @@
 
 import { PYTHON_API_BASE as API_BASE_URL } from './pythonApiBase';
 import { buildForecastingSettings } from '../constants/latency';
+import { normalizeToISO } from './dateFormat';
 
 const USE_MOCK = (typeof import.meta.env !== 'undefined' && import.meta.env.VITE_USE_MOCK_COMPUTE === 'true');
 
@@ -251,6 +252,10 @@ export class GraphComputeClient {
     } catch {
       return false;
     }
+  }
+
+  private essThresholdCacheKeyPart(): string {
+    return this.getUrlSearchParams().has('essthreshold') ? '|essthreshold:1' : '';
   }
 
   /**
@@ -777,10 +782,10 @@ export class GraphComputeClient {
 
         globalTotalConversions += r.total_conversions || 0;
         const dateRange = r.date_range;
-        if (dateRange?.from && (!globalDateFrom || dateRange.from < globalDateFrom)) {
+        if (dateRange?.from && (!globalDateFrom || normalizeToISO(dateRange.from) < normalizeToISO(globalDateFrom))) {
           globalDateFrom = dateRange.from;
         }
-        if (dateRange?.to && (!globalDateTo || dateRange.to > globalDateTo)) {
+        if (dateRange?.to && (!globalDateTo || normalizeToISO(dateRange.to) > normalizeToISO(globalDateTo))) {
           globalDateTo = dateRange.to;
         }
 
@@ -796,6 +801,7 @@ export class GraphComputeClient {
               y: Number(row.y ?? 0),
               rate: row.rate != null && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null,
               completeness: row.completeness != null ? Number(row.completeness) : null,
+              frontier_age: row.frontier_age != null ? Number(row.frontier_age) : null,
               layer: row.layer ?? null,
               evidence_y: row.evidence_y != null ? Number(row.evidence_y) : null,
               forecast_x: row.forecast_x != null ? Number(row.forecast_x) : null,
@@ -803,8 +809,14 @@ export class GraphComputeClient {
               projected_x: row.projected_x != null ? Number(row.projected_x) : null,
               projected_y: row.projected_y != null ? Number(row.projected_y) : null,
               projected_rate: row.projected_rate != null ? Number(row.projected_rate) : null,
+              model_projected_x: row.model_projected_x != null ? Number(row.model_projected_x) : null,
+              model_projected_y: row.model_projected_y != null ? Number(row.model_projected_y) : null,
+              model_projected_rate: row.model_projected_rate != null ? Number(row.model_projected_rate) : null,
+              model_forecast_bands: row.model_forecast_bands ?? null,
               forecast_bands: row.forecast_bands ?? null,
               latency_bands: row.latency_bands ?? null,
+              evidence_latency_bands: row.evidence_latency_bands ?? null,
+              model_latency_bands: row.model_latency_bands ?? null,
             });
           }
         } else {
@@ -1732,6 +1744,7 @@ export class GraphComputeClient {
       + `|vis:${visibilityMode}`
       + ((analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2' || analysisType === 'cohort_maturity_v1') ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (displaySig ? `|ds:${this.hashString(displaySig)}` : '')
+      + this.essThresholdCacheKeyPart()
       + (testFixture ? `|tf:${testFixture}:${this.getUrlSearchParams().toString()}` : '');
     if (!bypassCache) {
       const cached = this.analysisCache.get(cacheKey);
@@ -1961,6 +1974,7 @@ export class GraphComputeClient {
       + `|vis:${visibilityModes}`
       + ((analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2' || analysisType === 'cohort_maturity_v1') ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '')
+      + this.essThresholdCacheKeyPart()
       + (multiTestFixture ? `|tf:${multiTestFixture}:${this.getUrlSearchParams().toString()}` : '');
     
     // Check cache first (unless explicitly bypassed via URL params for debugging).

@@ -129,6 +129,24 @@ analyses:
     runner: path_runner
     runner: path_runner
 
+  # from(A).to(B) - surprise gauge (doc 55) — Expectation Gauge
+  # Two-distribution z-score comparing the FC continuation against the
+  # unconditioned model overlay (73q Phase 5a). The reducer is the shared
+  # scalar reducer; the response framing (z, quantile, zone) lives in the
+  # surprise_gauge handler.
+  - id: surprise_gauge
+    name: "Expectation Gauge"
+    description: "Two-distribution surprise score for the per-edge conversion rate and completeness"
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
+    # Reducer over the shared CF projection bundle (73q Phase 5a): scalar
+    # reducer — collapse both axes, emit FC predictive + unc epistemic
+    # marginal pairs for the gauge's combined-spread z-score.
+    reducer: cf_scalar
+
   # from(A).to(B) - lag histogram (snapshot DB analysis)
   - id: lag_histogram
     name: "Lag Histogram"

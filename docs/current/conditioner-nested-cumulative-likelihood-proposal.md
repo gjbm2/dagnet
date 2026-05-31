@@ -66,7 +66,7 @@ These are the **mathematical** cases of the likelihood, not implementation branc
 
 - **Single retrieval per cohort (m=1):** `(k₁ − 0)·log(p·F(τ₁)) + (n_d − k₁)·log(1 − p·F(τ₁))` — the pre-existing per-row Binomial, recovered exactly.
 - **Non-latent timing (F ≡ 1):** the literal multinomial form is undefined (interior cells have probability 0). The degeneration is the cohort-level marginal Binomial: per cohort take (n_d, kₘ) at the latest retrieval and apply Beta-Binomial conjugate on summed totals. This matches the Bayes compiler's no-latency treatment (I-44: non-latent is a degeneration of the latent semantic, not a parallel route).
-- **No evaluable likelihood** (no timing grid, no row with τ > 0, or IS unable to find an ESS-feasible λ): the unconditioned prior is the answer (I-26).
+- **No evaluable likelihood** (no timing grid, no row with τ > 0, or full-likelihood IS weights cannot be normalised): the unconditioned prior is the answer (I-26).
 
 ## 4. Implementation: plan → evaluate → materialise
 

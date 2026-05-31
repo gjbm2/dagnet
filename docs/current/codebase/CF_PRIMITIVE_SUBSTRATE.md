@@ -100,7 +100,7 @@ The five primitive states:
 | Status | When | `is_draw_coherent` | `probability_draws()` returns |
 |---|---|---|---|
 | `CONDITIONED` | Evidence was admitted and moved the posterior | True | Per-draw conditioned IS particles |
-| `PRIOR_ONLY` | Evidence was empty (zero-row weighted view, all rows off-clock, or IS failed to find ESS-feasible λ) | True | Prior draws (`Beta(α, β)` samples) |
+| `PRIOR_ONLY` | Evidence was empty, all rows were off-clock, no latent rows were evaluable, or full-likelihood IS weights could not be normalised | True | Prior draws (`Beta(α, β)` samples) |
 | `STRUCTURALLY_DETERMINISTIC` | Graph semantics fix `p` (no evidence consulted) | True | Constant draws at the deterministic `p` |
 | `UNSUPPORTED_RESIDUAL` | Composition needed `1 − p` sibling, residual closure, or rejected a prepared span | False | Raises `DrawFamilyUnavailable` |
 | `DEGRADED` | Arrival weights degraded (no path / horizon inadequate) — every row rejected off-clock | False | Raises `DrawFamilyUnavailable` |
@@ -216,7 +216,7 @@ The plan emits an `evaluable` flag and an `unevaluable_reason` (`no_evidence`, `
 **Evaluate** (`_evaluate_likelihood_plan`):
 - Not evaluable → `prior_only` with reason.
 - `NON_LATENT` → cohort-level Beta-Binomial conjugate update on `(cohort_n, cohort_k)` against the prior.
-- `LATENT` → multinomial-cell importance sampling. Proposal: predictive Beta `(α_pred, β_pred)` for `p`, multivariate-normal for `(μ, σ, onset)` with `onset_mu_corr`. Per-cohort log-likelihood is the cell-by-cell multinomial: `Σᵢ (kᵢ − kᵢ₋₁)·log(p·(F(τᵢ) − F(τᵢ₋₁))) + (n_d − kₘ)·log(1 − p·F(τₘ))`. Tempering λ bisected to hit ESS ≥ 20; reaches λ=1 in the well-conditioned case. IS resample produces conditioned `p_draws` and joint `cdf_draws`.
+- `LATENT` → multinomial-cell importance sampling. Proposal: predictive Beta `(α_pred, β_pred)` for `p`, multivariate-normal for `(μ, σ, onset)` with `onset_mu_corr`. Per-cohort log-likelihood is the cell-by-cell multinomial: `Σᵢ (kᵢ − kᵢ₋₁)·log(p·(F(τᵢ) − F(τᵢ₋₁))) + (n_d − kₘ)·log(1 − p·F(τₘ))`. The full likelihood is used (`λ=1`); ESS is recorded as a diagnostic of particle quality and does not temper the posterior. IS resample produces conditioned `p_draws` and joint `cdf_draws`.
 
 **Materialise**:
 - `prior_only` → `_make_prior_only_primitive` (status = `PRIOR_ONLY`, draws sampled from the prior under `'primitive_p_draws'` derivation).

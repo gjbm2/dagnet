@@ -1,15 +1,15 @@
 # CF Spine Detachment And Analysis Standardisation Master Plan
 
 **Date:** 26-May-26  
-**Status:** Draft for review  
+**Status:** Draft for review; baseline refreshed 28-May-26  
 **Scope:** Finish detaching the conditioned-forecast spine from `cohort_forecast_v3`, standardise `cohort_maturity` as the canonical analysis type, and migrate remaining forecast-backed analyses onto shared runtime/projection surfaces.
 
 ## Implementation Progress
 
 <!-- managed manually until this plan is adopted by /implement-carefully -->
 
-- [ ] Stage 0 - Reconcile The Mid-Flight Baseline
-- [ ] Stage 1 - Complete The 73q Shared Projection-Bundle Cutover
+- [x] Stage 0 - Reconcile The Mid-Flight Baseline - completed 28-May-26 in this note
+- [/] Stage 1 - Complete The 73q Shared Projection-Bundle Cutover - daily conversions and scalar CF are cut over; 73q remains open for remaining consumer/cleanup phases
 - [ ] Stage 2 - Retire `cohort_maturity_v1` And `cohort_maturity_v2`
 - [ ] Stage 3 - Move `surprise_gauge` Off The Legacy Trajectory Engine
 - [ ] Stage 4 - Delete The Legacy Trajectory Engine Public Path
@@ -22,9 +22,9 @@
 
 We are halfway through the architectural migration, not at the finish line.
 
-The hard numerical spine is largely present. `cohort_maturity` v3 and `conditioned_forecast` both build a request-scoped `ResolvedCFRuntime` and project through the selected-Cohort spine. The frontier-conditioned chart surfaces are named and mostly wired: strict evidence, `f_*` conditioned model, `ef_*` frontier-conditioned forecast, and optional model overlay.
+The hard numerical spine is largely present. `cohort_maturity`, `daily_conversions`, and `conditioned_forecast` all build a request-scoped `ResolvedCFRuntime` and reduce a shared `CFProjectionBundle`: `cohort_maturity` through the tau reducer, `daily_conversions` through the date reducer, and `conditioned_forecast` through the scalar reducer. The frontier-conditioned chart surfaces are named and wired for these consumers: strict evidence, `f_*` conditioned model, `ef_*` frontier-conditioned forecast, and optional model overlay.
 
-The remaining problem is ownership and reachability. `cohort_forecast_v3.py` still owns the runtime object, candidate builders, frame-to-runtime assembly, frontier helper, and tau-row projection. `daily_conversions` and `surprise_gauge` still rely on the legacy trajectory engine. `cohort_maturity_v1` and `cohort_maturity_v2` still exist as live dispatch identifiers. The docs still describe both the old and new architectures in different places.
+The remaining problem is ownership and reachability. `cohort_forecast_v3.py` still owns the runtime object, candidate builders, frame-to-runtime assembly, selected-frontier helper, projection-bundle builder, scalar/date/tau reducers, and tau-row projection. `surprise_gauge` still relies on the legacy trajectory engine. `cohort_maturity_v1` and `cohort_maturity_v2` still exist as live dispatch identifiers. The docs still describe both the old and new architectures in different places.
 
 The desired end state is:
 
@@ -37,15 +37,17 @@ The desired end state is:
 
 ## Current State
 
-The current live state has four important facts.
+The current live state has five important facts.
 
 First, the spine cutover has happened for the cohort-maturity row path. The row projector calls `model_span_spine.project_selected_cohort_rows`, and the public chart fields are now mapped to strict evidence, `f_*`, `ef_*`, and optional overlay surfaces.
 
-Second, the runtime and projection orchestration are not detached. `ResolvedCFRuntime`, `build_resolved_cf_runtime`, superset candidate builders, selected retrieval frontier construction, frame evidence setup, and `_project_runtime_rows` still live in `cohort_forecast_v3.py`.
+Second, 73q Phases 1-4 have landed: `daily_conversions` no longer calls the legacy trajectory engine for forecast enrichment. It resolves subjects, prepares the shared forecast bundle through `runner/cf_analysis.py`, and applies `reduce_daily_conversions_rows`. Observed calendar counts remain owned by `derive_daily_conversions`.
 
-Third, the standard analyse pathway is not yet standard. `cohort_maturity` is special-cased in the backend dispatcher and `conditioned_forecast` is still an enrichment endpoint, not an ordinary analysis type. The two paths duplicate preparation and candidate-wiring logic before calling the same row builder.
+Third, `conditioned_forecast` has also moved to the scalar reducer. `_handle_conditioned_forecast_impl` now calls `prepare_cf_scalar_bundle` and `reduce_cf_scalars`, then frames the graph-enrichment response from scalar output plus bundle/runtime metadata. It no longer calls the cohort-maturity tau reducer or scrapes tau rows. The performance optimisation is not complete: `prepare_cf_scalar_bundle` still wraps `prepare_cf_projection_bundle`, still builds per-Cohort projection arrays, and currently passes `mc_draws_override=None`.
 
-Fourth, several public analyses still bypass the shared spine. `daily_conversions` has a detailed 73q plan to move onto a date reducer over a shared projection bundle, but it still calls the legacy trajectory engine today. `surprise_gauge` also calls the legacy trajectory engine. `conversion_funnel` consumes public CF scalars, but its own funnel reducer remains a separate hold-out engine.
+Fourth, the runtime and projection orchestration are not detached. `ResolvedCFRuntime`, `build_resolved_cf_runtime`, superset candidate builders, selected retrieval frontier construction, frame evidence setup, `build_cf_projection_bundle`, `_project_runtime_rows`, and the tau/date/scalar reducers still live in `cohort_forecast_v3.py`.
+
+Fifth, the remaining public-path legacy engine consumer is `surprise_gauge`. `conversion_funnel` consumes public CF scalars, but its own funnel reducer remains a separate hold-out engine. `cohort_maturity_v1` and `cohort_maturity_v2` remain live dispatch identifiers and must be retired before the neutral extraction so that the extraction does not preserve three cohort-maturity surfaces.
 
 ## Design Principles
 
@@ -67,12 +69,14 @@ The target shape is a shared CF projection pipeline with analysis-specific reduc
 
 The shared part owns subject resolution, forecast preparation, evidence candidate construction, runtime construction, selected retrieval frontier, projection-bundle construction, runtime provenance, and per-Cohort/per-tau surfaces.
 
+Predictive dispersion for the FC `ef_*` surface is owned by the kappa-realised FC proposal, [`fc-kappa-predictive-dispersion-proposal-26-May-26.md`](fc-kappa-predictive-dispersion-proposal-26-May-26.md). That proposal is not chart-only: when it lands, scalar reducers and `surprise_gauge` must consume the same kappa-realised FC predictive surface rather than the collapsed `alpha_pred` / `beta_pred` compatibility surface.
+
 Reducers then consume that bundle:
 
 - `cohort_maturity` uses a tau reducer: collapse selected Cohorts by relative age and emit chart rows.
 - `daily_conversions` uses a date reducer: keep selected Cohorts as dated rows and read contract-specific tau positions.
 - `conditioned_forecast` uses a scalar reducer: read `p@infinity`, completeness, evidence totals, and provenance for graph enrichment or direct scalar consumers.
-- `surprise_gauge` uses a diagnostic scalar reducer: compare observed evidence against runtime-projected posterior surfaces without calling the trajectory engine.
+- `surprise_gauge` uses a diagnostic scalar reducer: compare unconditioned selected-Cohort surface values against FC evidence-conditioned selected-Cohort surface values without calling the trajectory engine.
 
 The file layout after detachment should make that ownership obvious. A neutral runtime/projection module should own CF spine construction. `cohort_forecast_v3.py` should either disappear or become a thin compatibility wrapper for the `cohort_maturity` tau reducer until all callers are renamed.
 
@@ -95,11 +99,11 @@ Stop condition: a short baseline note is added to this plan or to an adjacent st
 
 ## Stage 1 - Complete The 73q Shared Projection-Bundle Cutover
 
-This is the next substantive stage.
+This stage is mostly discharged by 73q Phases 1-4, but 73q as a programme is not closed.
 
-73q should remain the detailed execution plan for `daily_conversions`. This umbrella plan depends on 73q producing a shared CF projection bundle that is not cohort-maturity-specific.
+73q remains the detailed execution plan for the shared projection-bundle cutover and its immediate consumers. The bundle and sibling reducers now exist for `cohort_maturity`, `daily_conversions`, and `conditioned_forecast`. The remaining 73q-owned work is the consumer/cleanup tail: `surprise_gauge`, scalar-callsite draw-count/performance cleanup, v1/v2 retirement, and stale-test/doc cleanup as recorded in 73q's progress section.
 
-The bundle must expose the data needed by both reducers:
+The bundle must expose the data needed by the sibling reducers:
 
 - frame evidence and Cohort metadata from the existing frame-evidence builder;
 - the request-scoped runtime;
@@ -108,11 +112,13 @@ The bundle must expose the data needed by both reducers:
 - per-Cohort `ef_*` surfaces, strict evidence surfaces, and projection status;
 - per-Cohort completeness readouts before cross-Cohort aggregation.
 
-The daily-conversions date reducer then reads from that bundle instead of calling the legacy trajectory engine. Observed daily conversion counts remain owned by `derive_daily_conversions`; projection fields are read from the shared bundle.
+The daily-conversions date reducer now reads from that bundle instead of calling the legacy trajectory engine. Observed daily conversion counts remain owned by `derive_daily_conversions`; projection fields are read from the shared bundle.
 
 Stage 1 must not scrape public cohort-maturity tau rows to feed daily conversions. The shared bundle is the common input; tau rows and date rows are sibling readouts.
 
 Stop condition: `daily_conversions` no longer imports or calls the legacy trajectory engine for row annotation or latency-band projection. Its projection fields are produced by the date reducer over the shared bundle. 73q's strict expected-fails that name the daily-conversions legacy gap have either flipped and been deleted, or are explicitly reclassified with maintainer approval.
+
+Current status (28-May-26): the production code condition is met. Do not start Stage 5's neutral module extraction until 73q's remaining consumer/cleanup phases are either complete or explicitly deferred, so the extraction does not freeze mid-flight contracts.
 
 ## Stage 2 - Retire `cohort_maturity_v1` And `cohort_maturity_v2`
 
@@ -132,17 +138,19 @@ Stop condition: a request or saved analysis using v1 or v2 resolves to `cohort_m
 
 ## Stage 3 - Move `surprise_gauge` Off The Legacy Trajectory Engine
 
-After 73q, `surprise_gauge` should be the remaining public caller that still needs the legacy trajectory engine for forecast-backed semantics.
+`surprise_gauge` is the remaining public caller that still needs the legacy trajectory engine for forecast-backed semantics. 73q Phase 5a currently owns this migration. If 73q closes it, this stage becomes verification and deletion cleanup rather than a new implementation stage.
 
 This stage builds a diagnostic scalar reducer over the same runtime/projection bundle. The reducer should answer the existing surprise-gauge question without constructing `CohortEvidence` by hand and without importing the trajectory engine.
 
-The migration should preserve the current user-facing concept: a compact diagnostic of whether observed evidence is surprising relative to the model. What changes is the authority for the model/evidence comparison. It should read from the runtime's conditioned and unconditioned surfaces, plus the admitted evidence/provenance surfaces, rather than from the old trajectory return object.
+The migration should preserve the user-facing concept: a compact diagnostic of whether the selected Cohort set's evidence-conditioned forecast is surprising relative to the unconditioned model expectation. The `p` comparison is unconditioned selected-Cohort rate at saturation versus FC selected-Cohort rate at saturation. The `completeness` comparison is unconditioned frontier/saturation rate ratio versus FC frontier/saturation rate ratio. Both comparisons stay on selected-Cohort `Y / X` surfaces.
+
+The dispersion contract for this diagnostic must follow the kappa proposal above: the unconditioned side uses the model-overlay epistemic surface, while the FC side uses the kappa-realised predictive surface when that work lands. Do not bake collapsed `alpha_pred` / `beta_pred` into the diagnostic scalar reducer as a permanent FC predictive dispersion source.
 
 Stop condition: `surprise_gauge` no longer imports or calls the legacy trajectory engine. Its tests cover prior-only, evidence-conditioned, and unavailable cases through the new reducer.
 
 ## Stage 4 - Delete The Legacy Trajectory Engine Public Path
 
-After `daily_conversions` and `surprise_gauge` migrate, the legacy trajectory engine should have no public production caller.
+After `surprise_gauge` migrates, the legacy trajectory engine should have no public production caller.
 
 This stage is deletion and proof, not new behaviour. Verify every remaining caller of the trajectory engine and classify it as test oracle, historical compatibility, or dead code. Remove public-path callers first, then delete or quarantine the obsolete carrier types, node-arrival cache helpers, and trajectory-return structures that are no longer needed.
 
@@ -152,7 +160,7 @@ Stop condition: production code has zero calls to the legacy trajectory engine, 
 
 ## Stage 5 - Extract Neutral CF Runtime And Projection Modules
 
-Only after multiple consumers are on the shared bundle should the module ownership be cleaned up.
+Only after 73q's remaining consumer/cleanup phases are complete or explicitly deferred should the module ownership be cleaned up. Multiple consumers are already on the shared bundle (`cohort_maturity`, `daily_conversions`, and `conditioned_forecast`); the blocker is avoiding a structural extraction while 73q is still changing the scalar and diagnostic consumer contracts.
 
 Move neutral CF concepts out of `cohort_forecast_v3.py` into appropriately named runtime/projection modules. The exact file names can be decided during implementation, but ownership should separate:
 
@@ -163,6 +171,14 @@ Move neutral CF concepts out of `cohort_forecast_v3.py` into appropriately named
 - tau reducer for `cohort_maturity`;
 - date reducer for `daily_conversions`;
 - scalar reducers for `conditioned_forecast` and `surprise_gauge`.
+
+Known current contents to lift from `cohort_forecast_v3.py` after 73q:
+
+- candidate construction: `build_carrier_superset_candidates_by_edge`, `build_superset_candidates_by_edge`, `_aggregate_request_candidates`;
+- runtime construction: `ResolvedCFRuntime`, `_runtime_seed`, `_runtime_scope`, `_primitive_scope_dates_for_edge`, `_build_span_resolutions`, `build_resolved_cf_runtime`;
+- projection-bundle support: `_derive_saturation_tau`, `_root_window_carrier_n_by_anchor_day`, selected retrieval frontier helpers, `_runtime_completeness`, `FrameEvidence`, `build_cohort_evidence_from_frames`, `build_cf_projection_bundle`;
+- reducers: `reduce_cohort_maturity_rows`, `reduce_daily_conversions_rows`, `reduce_cf_scalars`, `CFScalarReduction`;
+- compatibility wrapper: `compute_cohort_maturity_rows_v3`, which should become a thin import wrapper or disappear once callers are repointed.
 
 The extraction should be mechanical wherever possible. Behavioural changes belong in Stages 1 and 3; Stage 5 should make the existing shared architecture visible in the file structure.
 
@@ -180,7 +196,7 @@ The target is one forecast-backed analyse path:
 4. call the reducer registered for the requested analysis type;
 5. wrap the result in the standard analysis response envelope.
 
-`conditioned_forecast` may remain an enrichment endpoint for the fetch pipeline, but the scalar reducer it calls should be the same one available to standard analysis dispatch. The endpoint should be a transport convenience, not a separate implementation path.
+`conditioned_forecast` may remain an enrichment endpoint for the fetch pipeline, but the scalar reducer it calls should be declared through the same forecast-backed reducer/client registry as standard analysis dispatch. The endpoint should be a transport convenience, not a separate implementation path. It does not need to masquerade as a render-only analysis type in `analysis_types.yaml`, but the reducer choice should be declarative rather than a bespoke import in the handler.
 
 This stage should also clarify the FE request contract for analyses that need candidate regimes without using the snapshot-envelope response shape. The current `conversion_funnel` asymmetry is deliberate but should not be copied implicitly.
 
@@ -227,7 +243,7 @@ The whole programme is complete when:
 
 - `cohort_maturity` is the only live cohort-maturity identifier in normal UI and CLI examples;
 - v1/v2 are accepted only as deprecated aliases at explicit compatibility boundaries;
-- `daily_conversions` and `surprise_gauge` no longer call the legacy trajectory engine;
+- `surprise_gauge` no longer calls the legacy trajectory engine;
 - production code has zero public-path calls to the legacy trajectory engine;
 - neutral CF runtime/projection modules own the spine;
 - `cohort_maturity`, `daily_conversions`, and `conditioned_forecast` read sibling outputs of the same shared bundle;

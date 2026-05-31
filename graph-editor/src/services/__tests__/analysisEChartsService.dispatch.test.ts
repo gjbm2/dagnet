@@ -378,9 +378,9 @@ describe('buildHistogramEChartsOption', () => {
 
 const DAILY_CONVERSIONS_RESULT = {
   data: [
-    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-01', rate: 0.42, x: 1000, y: 420, evidence_y: 350, forecast_y: 70, projected_y: 420 },
-    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-02', rate: 0.45, x: 1100, y: 495, evidence_y: 400, forecast_y: 95, projected_y: 495 },
-    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-03', rate: 0.40, x: 950, y: 380, evidence_y: 380, forecast_y: 0, projected_y: 380 },
+    { scenario_id: 'current', subject_id: 'edge1', date: '1-Oct-25', rate: 0.42, x: 1000, y: 420, evidence_y: 350, forecast_y: 70, projected_y: 420 },
+    { scenario_id: 'current', subject_id: 'edge1', date: '2-Oct-25', rate: 0.45, x: 1100, y: 495, evidence_y: 400, forecast_y: 95, projected_y: 495 },
+    { scenario_id: 'current', subject_id: 'edge1', date: '3-Oct-25', rate: 0.40, x: 950, y: 380, evidence_y: 380, forecast_y: 0, projected_y: 380 },
   ],
   dimension_values: {
     scenario_id: { current: { name: 'Base', colour: '#3b82f6' } },
@@ -403,6 +403,21 @@ describe('buildDailyConversionsEChartsOption', () => {
     for (const s of option.series) {
       expect(s.data).toHaveLength(3);
     }
+  });
+
+  it('should render the exact supplied UK date range on the daily-conversions axis', () => {
+    const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
+    expect(option.xAxis.type).toBe('category');
+    expect(option.xAxis.data).toEqual(['1-Oct-25', '2-Oct-25', '3-Oct-25']);
+    expect(option.xAxis.min).toBeUndefined();
+    expect(option.xAxis.max).toBeUndefined();
+    expect(option.series[0].data[0][0]).toBe('1-Oct-25');
+    expect(option.series[0].data.at(-1)[0]).toBe('3-Oct-25');
+    expect(option.series[0].data[0][0]).not.toContain('T');
+    expect(option.xAxis.axisLabel.formatter('1-Oct-25')).toBe('1-Oct');
+    expect(option.xAxis.axisLabel.formatter('3-Oct-25')).toBe('3-Oct');
+    expect(option.tooltip.formatter([{ value: ['1-Oct-25', 350], seriesIndex: 0, marker: '', seriesName: 'Evidence' }])).toContain('<strong>1-Oct-25</strong>');
+    expect(option.tooltip.formatter([{ value: ['3-Oct-25', 380], seriesIndex: 0, marker: '', seriesName: 'Evidence' }])).toContain('<strong>3-Oct-25</strong>');
   });
 
   it('should assign bars to yAxisIndex 0 and lines to yAxisIndex 1', () => {
@@ -438,6 +453,37 @@ describe('buildDailyConversionsEChartsOption', () => {
     expect(dottedLine.showSymbol).toBe(false);
   });
 
+  it('keeps daily evidence rate dashed after the first immature Cohort', () => {
+    const wobblingCompleteness = {
+      ...DAILY_CONVERSIONS_RESULT,
+      data: [
+        { scenario_id: 'current', subject_id: 'edge1', date: '1-Oct-25', rate: 0.42, x: 1000, y: 420, evidence_y: 420, forecast_y: 0, projected_x: 1000, projected_y: 420, projected_rate: 0.42, completeness: 0.99 },
+        { scenario_id: 'current', subject_id: 'edge1', date: '2-Oct-25', rate: 0.45, x: 1100, y: 495, evidence_y: 495, forecast_y: 0, projected_x: 1100, projected_y: 495, projected_rate: 0.45, completeness: 0.94 },
+        { scenario_id: 'current', subject_id: 'edge1', date: '3-Oct-25', rate: 0.40, x: 950, y: 380, evidence_y: 380, forecast_y: 0, projected_x: 950, projected_y: 380, projected_rate: 0.40, completeness: 0.97 },
+      ],
+    };
+    const option = buildDailyConversionsEChartsOption(
+      wobblingCompleteness,
+      { smooth_lines: false },
+      { visibleScenarioIds: ['current'] },
+    );
+    const solidLine = option.series.find((s: any) => s.type === 'line' && s.lineStyle?.type === 'solid');
+    const dashedLine = option.series.find((s: any) => s.type === 'line' && s.lineStyle?.type === 'dashed');
+
+    expect(solidLine.data).toEqual([
+      ['1-Oct-25', 0.42],
+      ['2-Oct-25', null],
+      ['3-Oct-25', null],
+    ]);
+    // The recovered 0.97 completeness point remains in the dashed series:
+    // one visual break at the first immature Cohort, no threshold toggling.
+    expect(dashedLine.data).toEqual([
+      ['1-Oct-25', 0.42],
+      ['2-Oct-25', 0.45],
+      ['3-Oct-25', 0.40],
+    ]);
+  });
+
   it('should stack bars so total height = N', () => {
     const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
     const bars = option.series.filter((s: any) => s.type === 'bar');
@@ -450,6 +496,110 @@ describe('buildDailyConversionsEChartsOption', () => {
       const row = DAILY_CONVERSIONS_RESULT.data[i];
       expect(e + f + n).toBeCloseTo(row.x);
     }
+  });
+
+  it('73q-4R.6: does not fabricate the forecast residual when backend forecast_y is undefined', () => {
+    // projected_y (420) exceeds evidence_y (350) but the row carries NO
+    // forecast_y. Pre-4R.6 the Forecast bar was Math.max(0, projected_y −
+    // evidence_y) = 70 — a residual fabricated by the chart. Post-4R.6 an
+    // absent backend residual stays 0: display must not claim an FC residual
+    // the backend did not emit.
+    const result = {
+      ...DAILY_CONVERSIONS_RESULT,
+      data: [
+        { scenario_id: 'current', subject_id: 'edge1', date: '1-Oct-25', rate: 0.42, x: 1000, y: 420, evidence_y: 350, projected_y: 420 },
+      ],
+    };
+    const option = buildDailyConversionsEChartsOption(result, {}, { visibleScenarioIds: ['current'] });
+    const bars = option.series.filter((s: any) => s.type === 'bar');
+    // bars[0] = E (evidence), bars[1] = F (forecast residual), bars[2] = N remainder.
+    expect(bars[1].data[0][1]).toBe(0);
+  });
+
+  it('renders latency bands as continuous FC contour lines over the date axis', () => {
+    const withLatencyContours = {
+      ...DAILY_CONVERSIONS_RESULT,
+      data: [
+        { scenario_id: 'current', subject_id: 'edge1', date: '1-Oct-25', rate: 0.42, x: 1000, y: 420, evidence_y: 420, forecast_y: 0, projected_x: 1000, projected_y: 420, projected_rate: 0.42, frontier_age: 10, latency_bands: { '8d': { rate: 0.30 } } },
+        { scenario_id: 'current', subject_id: 'edge1', date: '2-Oct-25', rate: 0.45, x: 1100, y: 495, evidence_y: 495, forecast_y: 0, projected_x: 1100, projected_y: 495, projected_rate: 0.45, frontier_age: 6, latency_bands: { '8d': { rate: 0.35 } } },
+        { scenario_id: 'current', subject_id: 'edge1', date: '3-Oct-25', rate: 0.40, x: 950, y: 380, evidence_y: 380, forecast_y: 0, projected_x: 950, projected_y: 380, projected_rate: 0.40, frontier_age: 12, latency_bands: { '8d': { rate: 0.38 } } },
+      ],
+    };
+    const option = buildDailyConversionsEChartsOption(
+      withLatencyContours,
+      { show_latency_bands: true, smooth_lines: false },
+      { visibleScenarioIds: ['current'] },
+    );
+    const latencyLines = option.series.filter((s: any) => s.name === '8d');
+
+    expect(latencyLines).toHaveLength(1);
+    expect(latencyLines[0].data).toEqual([
+      ['1-Oct-25', 0.30],
+      ['2-Oct-25', 0.35],
+      ['3-Oct-25', 0.38],
+    ]);
+  });
+
+  it('renders latency bands against the strict evidence surface in evidence-only mode', () => {
+    const withLatencyContours = {
+      ...DAILY_CONVERSIONS_RESULT,
+      dimension_values: {
+        ...DAILY_CONVERSIONS_RESULT.dimension_values,
+        scenario_id: { current: { name: 'Base', colour: '#3b82f6', visibility_mode: 'e' } },
+      },
+      data: [
+        { scenario_id: 'current', subject_id: 'edge1', date: '1-Oct-25', rate: 0.42, x: 1000, y: 420, evidence_y: 420, projected_x: 1000, projected_y: 420, projected_rate: 0.42, latency_bands: { '8d': { rate: 0.30 } }, evidence_latency_bands: { '6d': { rate: 0.20 } } },
+        { scenario_id: 'current', subject_id: 'edge1', date: '2-Oct-25', rate: 0.45, x: 1100, y: 495, evidence_y: 495, projected_x: 1100, projected_y: 495, projected_rate: 0.45, latency_bands: { '8d': { rate: 0.35 } }, evidence_latency_bands: { '6d': { rate: 0.25 } } },
+      ],
+    };
+    const option = buildDailyConversionsEChartsOption(
+      withLatencyContours,
+      { show_latency_bands: true, smooth_lines: false },
+      { visibleScenarioIds: ['current'] },
+    );
+    const latencyLine = option.series.find((s: any) => s.name === '6d');
+
+    expect(latencyLine.data).toEqual([
+      ['1-Oct-25', 0.20],
+      ['2-Oct-25', 0.25],
+    ]);
+  });
+
+  it('renders F mode from conditioned model fields and contours, not FC', () => {
+    const fMode = {
+      ...DAILY_CONVERSIONS_RESULT,
+      dimension_values: {
+        ...DAILY_CONVERSIONS_RESULT.dimension_values,
+        scenario_id: { current: { name: 'Base', colour: '#3b82f6', visibility_mode: 'f' } },
+      },
+      data: [
+        { scenario_id: 'current', subject_id: 'edge1', date: '1-Oct-25', rate: 0.42, x: 1000, y: 420, evidence_y: 420, forecast_y: 0, projected_x: 1000, projected_y: 700, projected_rate: 0.70, forecast_bands: { '80': [0.68, 0.90] }, model_projected_x: 1000, model_projected_y: 550, model_projected_rate: 0.55, model_forecast_bands: { '80': [0.53, 0.57] }, latency_bands: { '8d': { rate: 0.70 } }, model_latency_bands: { '5d': { rate: 0.55 } } },
+        { scenario_id: 'current', subject_id: 'edge1', date: '2-Oct-25', rate: 0.45, x: 1100, y: 495, evidence_y: 495, forecast_y: 0, projected_x: 1100, projected_y: 880, projected_rate: 0.80, forecast_bands: { '80': [0.78, 0.95] }, model_projected_x: 1100, model_projected_y: 660, model_projected_rate: 0.60, model_forecast_bands: { '80': [0.58, 0.62] }, latency_bands: { '8d': { rate: 0.80 } }, model_latency_bands: { '5d': { rate: 0.60 } } },
+      ],
+    };
+    const option = buildDailyConversionsEChartsOption(
+      fMode,
+      { show_latency_bands: true, smooth_lines: false },
+      { visibleScenarioIds: ['current'] },
+    );
+    const forecastLine = option.series.find((s: any) => s.name === 'Forecast %');
+    const latencyLine = option.series.find((s: any) => s.name === '5d');
+    const fcLatencyLine = option.series.find((s: any) => s.name === '8d');
+    const fan = option.series.find((s: any) => s.type === 'custom');
+
+    expect(forecastLine.data).toEqual([
+      ['1-Oct-25', 0.55],
+      ['2-Oct-25', 0.60],
+    ]);
+    expect(latencyLine.data).toEqual([
+      ['1-Oct-25', 0.55],
+      ['2-Oct-25', 0.60],
+    ]);
+    expect(fcLatencyLine).toBeUndefined();
+    expect(fan.data).toEqual([
+      ['1-Oct-25', 0.57],
+      ['2-Oct-25', 0.62],
+    ]);
   });
 
   it('should filter by visibleScenarioIds', () => {

@@ -185,6 +185,49 @@ same projection pattern. Until then, the gauge is silent on them.
 
 ## 3. The two variables
 
+> **73q Phase 5a update (28-May-26)**: the surprise gauge has been
+> migrated onto the shared CF projection bundle's scalar reducer
+> (`reduce_cf_scalars` in `runner/cohort_forecast_v3.py`). The variable
+> list (`p`, `completeness`), the zone classification thresholds, the
+> unavailable-with-reason error paths, and the FE response shape are
+> unchanged. The data-source plumbing and the dispersion decomposition
+> have moved:
+>
+> - **Needle** for both variables now reads the FC (frontier-conditioned)
+>   continuation surface — `selected_projection.ef_rate_draws` at
+>   `bundle.max_tau` for `p`, and the FC per-Cohort rate-ratio
+>   `rate(frontier_c)/rate(saturation)` N-weighted across admitted
+>   cohorts for `completeness`. Predictive basis.
+> - **Dial** for both variables reads the **epistemic** unconditioned
+>   overlay at `runtime.unconditioned_overlays['epistemic']`. The
+>   `predictive`-dial framing in §3.1 below was the pre-migration
+>   reading; the new design's z denominator is combined-spread
+>   `sqrt(needle_sd_predictive² + dial_sd_epistemic²)`, which collapses
+>   to ≈ `needle_sd_predictive` because epistemic SD is typically tiny
+>   (it carries only model-parameter uncertainty, no κ-inflated
+>   observation noise). Numerically the new z-score tracks the older
+>   predictive-dial-only formulation when evidence dominates the prior.
+> - The `p` z-score is now a clean comparison of FC posterior asymptote
+>   against unconditioned prior asymptote; maturity is no longer baked
+>   into `p` via a `p × c` per-draw product (that mixing was the source
+>   of the §3.1 narrative about "posterior-predictive expected rate at
+>   the current window's maturity"). The `completeness` variable is the
+>   maturity comparison standalone — rate(frontier)/rate(saturation)
+>   under the FC needle vs CDF(eval_age)/CDF(asymptote) under the
+>   unconditioned dial.
+> - `Σk/Σn` is still surfaced on the gauge response (`evidence_n`,
+>   `evidence_k`, `evidence_rate`) as display context but is **not**
+>   consumed by the z math. The FC needle already incorporates that
+>   evidence via conditioning.
+>
+> The §3.1–§3.2 narrative below is preserved verbatim as the
+> pre-migration design record. See 73q plan §5a (line 438-440) for the
+> field-by-field readout contract and the `CFScalarReduction` field
+> naming convention (`fc_terminal_rate_*` / `unconditioned_terminal_rate_*`
+> / `fc_frontier_to_terminal_rate_ratio_*` /
+> `unconditioned_frontier_to_terminal_cdf_ratio_*` /
+> `strict_empirical_terminal_evidence_*`).
+
 ### 3.1 Variable `p` — conversion rate
 
 The posterior-predictive expected rate at the current window's maturity
@@ -277,15 +320,13 @@ following hold:
   model has degenerated to a point mass; nothing is surprising by
   construction).
 
-Low IS ESS is **not** a failure mode and **not** surfaced to the
-user as a warning either. With `_IS_TARGET_ESS = 20` enforced inside
-`compute_forecast_summary`, the post-tempering ESS is bounded in
-`[20, S]` whenever conditioning fires; a value near the floor signals
-strong prior–evidence divergence, which is the gauge's whole point —
-not a weak-evidence diagnostic. An earlier `'limited_evidence'`
-warning was removed (20-Apr-26) because the metric was a
-sampling-quality diagnostic, not an evidence-quantity one, and so
-fired precisely when the surprise signal was strongest.
+Low IS ESS is **not** a weak-evidence failure mode. The conditioning
+path uses the full likelihood and records ESS as a sampling-quality
+diagnostic; it does not temper the posterior to maintain an arbitrary
+ESS floor. An earlier `'limited_evidence'` warning was removed
+(20-Apr-26) because the metric was a sampling-quality diagnostic, not
+an evidence-quantity one, and so fired precisely when the surprise
+signal was strongest.
 
 There is no analytic fallback, no method-of-moments reconstruction, no
 "best effort" number for the failure modes above. Unavailable means

@@ -132,45 +132,45 @@ def _compute_surprise_gauge(
     target_id: Optional[str],
     subj: Dict[str, Any],
     data: Dict[str, Any],
+    scenario: Dict[str, Any],
     *,
     effective_query_dsl: str = '',
 ) -> Dict[str, Any]:
-    """Surprise gauge: thin projection of compute_forecast_trajectory (doc 55).
+    """Surprise gauge: scalar-reducer callsite over the shared CF bundle
+    (doc 55, 73q Phase 5a).
 
-    POST-73n STATUS — surprise_gauge is one of the two surviving
-    `compute_forecast_trajectory` consumers (the other is
-    `daily_conversions`). The CF row/scalar path migrated to
-    ``ResolvedCFRuntime`` in 73n; this gauge has not. Migrating it onto
-    the primitive runtime is the precondition for deleting the
-    trajectory engine — see TODO.md "73n follow-up".
+    The gauge is a two-distribution z-score over four marginal pairs the
+    scalar reducer emits at ``bundle.saturation_tau``:
 
-    Two variables:
-      - p: observed Σk/Σn vs unconditioned posterior-predictive rate
-           (pp_rate_unconditioned moments from the trajectory).
-      - completeness: unconditioned vs IS-conditioned posterior completeness.
-                      Dial = unconditioned (model baseline); needle =
-                      conditioned (evidence-informed).
+      needle: FC predictive (post-evidence continuation, predictive σ)
+      dial:   unconditioned epistemic (model overlay, epistemic σ)
 
-    Both variables are single-number z-score projections of fields
-    returned by compute_forecast_trajectory. No analytic fallback, no
-    bespoke maths, no model_vars branching. If the trajectory cannot
-    be computed (no resolved params, no snapshot rows, no valid
-    cohorts, engine error, degenerate posterior), the variable reports
-    available: false with a reason. Low IS ESS is not a failure — it
-    displays with a warning icon (doc 55 §3.3).
+      z = (needle_mean − dial_mean) / sqrt(needle_sd² + dial_sd²)
+
+    Two variables, same shape:
+
+      - p: FC vs unconditioned posterior on the asymptotic per-arrival rate.
+        "Did the evidence shift my belief about the conversion rate?"
+      - completeness: FC vs unconditioned posterior on rate(frontier)/rate(∞).
+        "Did the evidence shift my belief about how mature this cohort is?"
+
+    The raw evidence sums (Σn, Σk) are surfaced on the response as
+    display context — they are not consumed by the gauge maths (the FC
+    needle already incorporates them).
+
+    No analytic fallback, no bespoke maths, no model_vars branching. If
+    the bundle cannot be built (no resolved params, σ ≤ 0, no snapshot
+    rows, missing subject fields), the variable reports available: false
+    with a reason.
     """
     from runner.model_resolver import resolve_model_params
-    from runner.forecast_runtime import (
-        build_prepared_runtime_bundle,
-        get_cf_mode_and_reason,
+    from runner.forecast_preparation import (
+        extract_forecast_context_scope,
+        prepare_forecast_subject_group,
     )
-    from runner.forecast_preparation import prepare_forecast_subject_group
-    from runner.forecast_state import (
-        compute_forecast_trajectory,
-        CohortEvidence,
-        build_node_arrival_cache,
-    )
-    from datetime import date as date_type
+    from runner.cf_analysis import prepare_cf_scalar_bundle
+    from runner.cohort_forecast_v3 import reduce_cf_scalars
+    from runner.forecast_runtime import parse_asat_from_dsl
 
     def norm_cdf(z: float) -> float:
         return 0.5 * math.erfc(-z / math.sqrt(2.0))
@@ -222,20 +222,6 @@ def _compute_surprise_gauge(
     if not edge:
         return _unavailable('Edge not found')
 
-    _node_ref_to_id = {}
-    _node_ref_to_cache_key = {}
-    for _node in graph_data.get('nodes', []):
-        _node_id = str(_node.get('id') or _node.get('uuid') or '')
-        _node_uuid = str(_node.get('uuid') or _node_id)
-        _cache_key = _node_uuid or _node_id
-        if _node_id:
-            _node_ref_to_id[_node_id] = _node_id
-            if _cache_key:
-                _node_ref_to_cache_key[_node_id] = _cache_key
-        if _node_uuid:
-            _node_ref_to_id[_node_uuid] = _node_id or _node_uuid
-            _node_ref_to_cache_key[_node_uuid] = _cache_key
-
     # ── Scope / temporal mode from DSL ──────────────────────────
     query_dsl = data.get('query_dsl') or data.get('analytics_dsl') or ''
     subj_slice_keys = subj.get('slice_keys') or []
@@ -268,38 +254,41 @@ def _compute_surprise_gauge(
         return _unavailable('No resolved model params (σ must be > 0)')
 
     # ── Subject must carry snapshot-query fields ────────────────
-    param_id = subj.get('param_id')
-    core_hash = subj.get('core_hash')
-    anchor_from_str = subj.get('anchor_from')
-    anchor_to_str = subj.get('anchor_to')
-    if not (param_id and core_hash and anchor_from_str and anchor_to_str):
+    if not (
+        subj.get('param_id') and subj.get('core_hash')
+        and subj.get('anchor_from') and subj.get('anchor_to')
+    ):
         print("[surprise_gauge] missing subject fields for snapshot query")
         return _unavailable('Missing subject fields for snapshot query')
-    anchor_from = date_type.fromisoformat(str(anchor_from_str)[:10])
-    anchor_to = date_type.fromisoformat(str(anchor_to_str)[:10])
 
     # ── Prepare snapshots/evidence via the shared forecast path ────────
-    # Keep the gauge's scalar projection, but align its snapshot reads,
-    # sweep bounds, and temporal regime selection with the forecast
-    # consumers that already use `prepare_forecast_subject_group`.
+    scenario_id = str(scenario.get('scenario_id', ''))
+    combined_temporal_dsl_full = f"{effective_query_dsl} {query_dsl}".strip()
+    sg_as_at = parse_asat_from_dsl(combined_temporal_dsl_full)
+    context_scope = extract_forecast_context_scope(
+        combined_temporal_dsl_full,
+        mece_dimensions=data.get('mece_dimensions') or [],
+    )
     try:
         preparation = prepare_forecast_subject_group(
             graph_data=graph_data,
             subjects=[subj],
             is_window=is_window,
             log_prefix='[surprise_gauge]',
+            as_at=sg_as_at,
+            scenario_id=scenario_id,
+            context_scope=context_scope,
         )
     except Exception as e:
         print(f"[surprise_gauge] forecast preparation failed: {e}")
         return _unavailable('Snapshot query failed')
 
-    # ── Derive cohort frames ────────────────────────────────────
-    # No-data conditions (empty preparation, no frames, no data points,
-    # no cohorts in window) are NOT failures. They are legitimate
-    # degenerate states: observed=0 with no evidence is information,
-    # naturally compared to the unconditioned prior (pp_rate_unconditioned).
-    # compute_forecast_trajectory returns zero/None scalars when inputs
-    # are empty → needle at centre, zone 'expected'.
+    if not preparation.last_edge_id:
+        return _unavailable('No resolvable subject edge for gauge')
+
+    # Retrieved-at for display: latest frame's snapshot_date (the FE
+    # renders this beside the gauge to date the evidence). Pure display
+    # metadata — not part of the gauge maths.
     derivation = (
         preparation.per_edge_results[0].get('derivation_result', {})
         if preparation.per_edge_results
@@ -307,201 +296,122 @@ def _compute_surprise_gauge(
     )
     frames = derivation.get('frames', [])
     last_frame = frames[-1] if frames else {}
-    data_points = last_frame.get('data_points', [])
+    retrieved_at = str(last_frame.get('snapshot_date', ''))[:10] or None
 
-    last_frame_date = None
-    sd_str = str(last_frame.get('snapshot_date', ''))[:10]
-    if sd_str:
-        try:
-            last_frame_date = date_type.fromisoformat(sd_str)
-        except (ValueError, TypeError):
-            pass
-
-    # ── Extract cohort frames as engine CohortEvidence ──────────
-    # Observed Σk, Σn come from the same rows the engine consumes —
-    # observed and expected share a single source of truth (doc 55 §4.4).
-    # Trajectory wants (obs_x, obs_y) trajectories; the gauge only has
-    # frontier snapshots, so build a degenerate trajectory of length
-    # frontier_age+1 padded with x_frozen/y_frozen. The trajectory's
-    # rate_draws output is unused here — only the IS conditioning and
-    # the n-weighted completeness scalars matter.
-    engine_cohorts: List[CohortEvidence] = []
-    total_k = 0.0
-    total_n = 0.0
-    max_age = 0
-    for dp in data_points:
-        ad_str = str(dp.get('anchor_day', ''))[:10]
-        try:
-            ad = date_type.fromisoformat(ad_str)
-        except (ValueError, TypeError):
-            continue
-        if ad < anchor_from or ad > anchor_to:
-            continue
-        x_val = dp.get('x', 0)
-        y_val = dp.get('y', 0)
-        if not isinstance(x_val, (int, float)) or x_val <= 0:
-            continue
-        if not isinstance(y_val, (int, float)):
-            y_val = 0
-        age = (last_frame_date - ad).days if last_frame_date else 0
-        if age < 0:
-            continue
-        age_i = int(round(age))
-        x_f = float(x_val)
-        y_f = float(y_val)
-        engine_cohorts.append(CohortEvidence(
-            obs_x=[x_f] * (age_i + 1),
-            obs_y=[y_f] * (age_i + 1),
-            x_frozen=x_f,
-            y_frozen=y_f,
-            frontier_age=age_i,
-            a_pop=x_f,
-            eval_age=age_i,
-        ))
-        total_k += y_f
-        total_n += x_f
-        if age_i > max_age:
-            max_age = age_i
-
-    # ── Upstream carrier (cohort mode) ──────────────────────────
-    from_node_arrival = None
-    anchor_id = None
-    if not is_window:
-        try:
-            anchor_id = preparation.anchor_node
-            if not anchor_id:
-                for n in graph_data.get('nodes', []):
-                    if (n.get('entry') or {}).get('is_start'):
-                        anchor_id = n.get('uuid') or n.get('id')
-                        break
-            if anchor_id is None and graph_data.get('nodes'):
-                anchor_id = (graph_data['nodes'][0].get('uuid')
-                             or graph_data['nodes'][0].get('id', ''))
-            anchor_cache_key = (
-                _node_ref_to_cache_key.get(str(anchor_id or ''), str(anchor_id or ''))
-                if anchor_id else None
-            )
-            if anchor_cache_key:
-                cache = build_node_arrival_cache(
-                    graph_data, anchor_id=anchor_cache_key, max_tau=400,
-                )
-                from_cache_key = _node_ref_to_cache_key.get(
-                    str(edge.get('from', '') or ''),
-                    str(edge.get('from', '') or ''),
-                )
-                from_node_arrival = cache.get(from_cache_key)
-        except Exception as e:
-            print(f"[surprise_gauge] node arrival cache failed: {e}")
-
-    # ── Call CF engine ──────────────────────────────────────────
-    from_node_id = _node_ref_to_id.get(str(edge.get('from', '') or ''), str(edge.get('from', '') or ''))
-    to_node_id = _node_ref_to_id.get(str(edge.get('to', '') or ''), str(edge.get('to', '') or ''))
-    cf_mode_value = 'sweep'
-    cf_reason_value: Optional[str] = None
-    runtime_bundle = build_prepared_runtime_bundle(
-        mode='window' if is_window else 'cohort',
-        query_from_node=from_node_id,
-        query_to_node=to_node_id,
-        anchor_node_id=_node_ref_to_id.get(str(anchor_id or ''), str(anchor_id or '')) or from_node_id,
-        is_multi_hop=False,
-        from_node_arrival=from_node_arrival,
-        numerator_representation='factorised',
-        p_conditioning_source='aggregate_evidence',
-        p_conditioning_evidence_points=len(engine_cohorts),
-        p_conditioning_total_x=total_n,
-        p_conditioning_total_y=total_k,
-        resolved_params=resolved,
-        cf_mode=cf_mode_value,
-        cf_reason=cf_reason_value,
+    # ── Build the shared scalar bundle (FC + unc epistemic overlay) ──
+    cf_compute_extent = _compute_extent_for_scenario(
+        display_settings=(
+            scenario.get('display_settings')
+            or data.get('display_settings')
+            or {}
+        ),
+        visibility_mode='f+e',
+        anchor_from=preparation.anchor_from,
+        sweep_to=preparation.sweep_to,
+        graph_data=graph_data,
+        last_edge_id=preparation.last_edge_id,
+        forecasting_settings=__import__(
+            'runner.forecasting_settings', fromlist=['current_settings'],
+        ).current_settings(),
+        is_window=is_window,
+        query_from_node=preparation.query_from_node or '',
+        query_to_node=preparation.query_to_node or '',
+        anchor_node=preparation.anchor_node,
     )
-    # Sweep horizon: cover the largest cohort age. +30 day buffer keeps
-    # the splice tail safely past every cohort's frontier without
-    # bloating the τ axis.
-    sweep_max_tau = max_age + 30 if engine_cohorts else 30
     try:
-        trajectory = compute_forecast_trajectory(
-            resolved=resolved,
-            cohorts=engine_cohorts,
-            max_tau=sweep_max_tau,
-            from_node_arrival=from_node_arrival,
-            runtime_bundle=runtime_bundle,
+        prepared = prepare_cf_scalar_bundle(
+            preparation,
+            graph_data=graph_data,
+            subjects=[subj],
+            is_window=is_window,
+            context_scope=context_scope,
+            scenario_id=scenario_id,
+            as_at=sg_as_at,
+            candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+            per_edge_results_by_uuid={},
+            compute_extent=cf_compute_extent,
+            log_prefix='[surprise_gauge]',
+            include_epistemic_overlay=True,
         )
     except Exception as e:
-        print(f"[surprise_gauge] compute_forecast_trajectory failed: {e}")
-        return _unavailable('Forecast engine failed')
+        print(f"[surprise_gauge] bundle preparation failed: {e}")
+        return _unavailable('Bundle preparation failed')
 
-    # ── Project trajectory → gauge variables ────────────────────
-    obs_rate = total_k / total_n if total_n > 0 else 0.0
-    retrieved_at = last_frame_date.isoformat() if last_frame_date else None
+    scalars = reduce_cf_scalars(prepared.bundle)
 
-    # Trajectory leaves the unconditioned scalars at None when no cohort
-    # carries an eval_age (degenerate empty input). Coerce to 0 so the
-    # gauge renders "expected == observed → no surprise" rather than
-    # crashing on None arithmetic.
-    pp_unc_mean = float(trajectory.pp_rate_unconditioned or 0.0)
-    pp_unc_sd = float(trajectory.pp_rate_unconditioned_sd or 0.0)
-    comp_cond = float(trajectory.completeness_mean or 0.0)
-    comp_cond_sd = float(trajectory.completeness_sd or 0.0)
-    comp_unc = float(trajectory.completeness_unconditioned or 0.0)
-    comp_unc_sd = float(trajectory.completeness_unconditioned_sd or 0.0)
+    # ── Compute combined-spread z-scores ────────────────────────
+    # z = (needle_mean − dial_mean) / sqrt(needle_sd² + dial_sd²)
+    # The denominator floors at 1e-12 to give a defined z under a
+    # degenerate prior (e.g. a cohort too young for onset, tight σ → 0):
+    # at that point a zero-distance needle reads z = 0 ("no surprise"),
+    # any other distance reads as extreme. Doc 55 §3.3.
+    def _combined_z(needle_mean: float, needle_sd: float,
+                    dial_mean: float, dial_sd: float) -> float:
+        denom = math.sqrt(max(needle_sd, 0.0) ** 2 + max(dial_sd, 0.0) ** 2)
+        denom = denom if denom > 1e-12 else 1e-12
+        return (needle_mean - dial_mean) / denom
 
-    variables: List[Dict[str, Any]] = []
+    p_needle_mean = float(scalars.fc_terminal_rate_mean or 0.0)
+    p_needle_sd = float(scalars.fc_terminal_rate_sd_predictive or 0.0)
+    p_dial_mean = float(scalars.unconditioned_terminal_rate_mean_epistemic or 0.0)
+    p_dial_sd = float(scalars.unconditioned_terminal_rate_sd_epistemic or 0.0)
 
-    # Degenerate-SD handling: a zero unconditioned SD is a respectable
-    # edge condition (tight prior — e.g. cohort too young for onset to
-    # have fired, so the model predicts zero conversions with zero
-    # spread), not a failure. The gauge renders "expected == observed
-    # → no surprise" (z = 0, quantile = 0.5) or "expected ≠ observed
-    # → extreme tail" (|z| very large, quantile → 0 or 1). Doc 55 §3.3.
-    def _sd_z(obs: float, exp: float, sd: float) -> float:
-        sd_denom = sd if sd > 1e-12 else 1e-12
-        return (obs - exp) / sd_denom
+    c_needle_mean = float(scalars.fc_frontier_to_terminal_rate_ratio_mean or 0.0)
+    c_needle_sd = float(scalars.fc_frontier_to_terminal_rate_ratio_sd_predictive or 0.0)
+    c_dial_mean = float(scalars.unconditioned_frontier_to_terminal_cdf_ratio_mean or 0.0)
+    c_dial_sd = float(scalars.unconditioned_frontier_to_terminal_cdf_ratio_sd_epistemic or 0.0)
 
-    # p variable
-    z_p = _sd_z(obs_rate, pp_unc_mean, pp_unc_sd)
+    z_p = _combined_z(p_needle_mean, p_needle_sd, p_dial_mean, p_dial_sd)
     q_p = float(norm_cdf(z_p))
-    variables.append({
-        'name': 'p',
-        'label': 'Conversion rate',
-        'quantile': round(q_p, 6),
-        'sigma': round(z_p, 3),
-        'observed': round(obs_rate, 6),
-        'expected': round(pp_unc_mean, 6),
-        'posterior_sd': round(pp_unc_sd, 6),
-        'combined_sd': round(pp_unc_sd, 6),
-        'completeness': round(comp_unc, 4),
-        'evidence_n': int(round(total_n)),
-        'evidence_k': int(round(total_k)),
-        'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
-        'zone': classify_zone(q_p),
-        'available': True,
-    })
-
-    # completeness variable — dial centred on unconditioned mean,
-    # needle at conditioned mean. Surprise = how much the evidence
-    # shifted the model's view of maturity.
-    z_c = _sd_z(comp_cond, comp_unc, comp_unc_sd)
+    z_c = _combined_z(c_needle_mean, c_needle_sd, c_dial_mean, c_dial_sd)
     q_c = float(norm_cdf(z_c))
-    variables.append({
-        'name': 'completeness',
-        'label': 'Completeness',
-        'quantile': round(q_c, 6),
-        'sigma': round(z_c, 3),
-        # Dial shows expected (unconditioned); needle shows
-        # observed (conditioned). Same convention as p.
-        'observed': round(comp_cond, 6),
-        'expected': round(comp_unc, 6),
-        'posterior_sd': round(comp_unc_sd, 6),
-        'combined_sd': round(comp_unc_sd, 6),
-        # Raw pair — convenient for detail rendering.
-        'unconditioned': round(comp_unc, 6),
-        'unconditioned_sd': round(comp_unc_sd, 6),
-        'conditioned': round(comp_cond, 6),
-        'conditioned_sd': round(comp_cond_sd, 6),
-        'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
-        'zone': classify_zone(q_c),
-        'available': True,
-    })
+
+    total_n = int(scalars.strict_empirical_terminal_evidence_n or 0)
+    total_k = int(scalars.strict_empirical_terminal_evidence_k or 0)
+    obs_rate = float(total_k) / float(total_n) if total_n > 0 else 0.0
+    combined_sd_p = math.sqrt(p_needle_sd ** 2 + p_dial_sd ** 2)
+    combined_sd_c = math.sqrt(c_needle_sd ** 2 + c_dial_sd ** 2)
+
+    cf_mode_value = prepared.bundle.cf_mode or 'sweep'
+    cf_reason_value: Optional[str] = prepared.bundle.cf_reason
+
+    variables: List[Dict[str, Any]] = [
+        {
+            'name': 'p',
+            'label': 'Conversion rate',
+            'quantile': round(q_p, 6),
+            'sigma': round(z_p, 3),
+            # Gauge needle/dial: FC posterior vs unconditioned prior.
+            'observed': round(p_needle_mean, 6),
+            'expected': round(p_dial_mean, 6),
+            'posterior_sd': round(p_dial_sd, 6),
+            'combined_sd': round(combined_sd_p, 6),
+            # Raw evidence (display context — not consumed by the maths).
+            'completeness': round(c_dial_mean, 4),
+            'evidence_n': total_n,
+            'evidence_k': total_k,
+            'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
+            'zone': classify_zone(q_p),
+            'available': True,
+        },
+        {
+            'name': 'completeness',
+            'label': 'Completeness',
+            'quantile': round(q_c, 6),
+            'sigma': round(z_c, 3),
+            'observed': round(c_needle_mean, 6),
+            'expected': round(c_dial_mean, 6),
+            'posterior_sd': round(c_dial_sd, 6),
+            'combined_sd': round(combined_sd_c, 6),
+            'unconditioned': round(c_dial_mean, 6),
+            'unconditioned_sd': round(c_dial_sd, 6),
+            'conditioned': round(c_needle_mean, 6),
+            'conditioned_sd': round(c_needle_sd, 6),
+            'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
+            'zone': classify_zone(q_c),
+            'available': True,
+        },
+    ]
 
     result: Dict[str, Any] = {
         'analysis_type': 'surprise_gauge',
@@ -509,17 +419,15 @@ def _compute_surprise_gauge(
         'variables': variables,
         'reference_source': resolved.source,
         'cf_mode': cf_mode_value,
-        'is_ess': round(float(trajectory.is_ess or 0.0), 1),
     }
     if cf_reason_value is not None:
         result['cf_reason'] = cf_reason_value
 
-    print(f"[surprise_gauge] source={resolved.source} is_ess={float(trajectory.is_ess or 0.0):.1f} "
-          f"p: obs={obs_rate:.4f} exp={pp_unc_mean:.4f} "
-          f"sd={pp_unc_sd:.4f} "
-          f"c: unc={comp_unc:.4f} "
-          f"cond={comp_cond:.4f} "
-          f"unc_sd={comp_unc_sd:.4f}")
+    print(f"[surprise_gauge] source={resolved.source} cf_mode={cf_mode_value} "
+          f"p: needle={p_needle_mean:.4f}±{p_needle_sd:.4f} "
+          f"dial={p_dial_mean:.4f}±{p_dial_sd:.4f} z={z_p:.3f} "
+          f"c: needle={c_needle_mean:.4f}±{c_needle_sd:.4f} "
+          f"dial={c_dial_mean:.4f}±{c_dial_sd:.4f} z={z_c:.3f}")
 
     return result
 
@@ -1981,22 +1889,25 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
     """Daily conversions on the shared CF runtime (73q Phase 4).
 
     A client of the same preparation→bundle boundary cohort_maturity uses:
-    resolve subjects → build the one shared ``CFProjectionBundle`` → reduce
-    it with the registry-selected date reducer. The observed ``data`` /
-    ``cohort_y_at_age`` / ``total_conversions`` / ``date_range`` and the
-    observed ``x`` / ``y`` / ``rate`` per Cohort stay owned by
-    ``derive_daily_conversions`` over raw snapshot rows — the bundle is a
-    Cohort×tau projection, not the calendar-delta observed series — and the
-    date reducer joins each observed row to its Cohort by ``anchor_day``.
+    admit shared forecast evidence → build the one shared
+    ``CFProjectionBundle`` → reduce it with the registry-selected date
+    reducer. The observed ``data`` / ``cohort_y_at_age`` /
+    ``total_conversions`` / ``date_range`` and the observed ``x`` / ``y`` /
+    ``rate`` per Cohort stay owned by ``derive_daily_conversions`` over the
+    shared admitted rows — the SAME asat-bounded rows the bundle is built
+    from, so observed and forecast cannot diverge on admission frontier (the
+    bundle is a Cohort×tau projection, not the calendar-delta observed
+    series) — and the date reducer joins each observed row to its Cohort by
+    ``anchor_day``. Daily has no bespoke pre-reducer admission: no second
+    ``query_snapshots`` fetch, no daily-specific read mode, no separate
+    regime selection. See single-evidence-admission-binding plan Stage 2.
     """
-    from datetime import date, datetime
-    from snapshot_service import query_snapshots
     from runner.daily_conversions_derivation import derive_daily_conversions
-    from runner.forecast_preparation import (
-        extract_forecast_context_scope,
-        prepare_forecast_subject_group,
-        resolve_forecast_subjects,
+    from runner.forecast_admission import (
+        admit_forecast_evidence,
+        admitted_rows_for_target,
     )
+    from runner.forecast_preparation import extract_forecast_context_scope
     from runner.forecast_runtime import (
         parse_asat_from_dsl,
         serialise_rate_evidence_provenance,
@@ -2004,7 +1915,6 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
     from runner.cf_analysis import prepare_cf_projection_bundle, reducer_for
     from runner.forecasting_settings import settings_from_dict
 
-    analysis_type = 'daily_conversions'
     scenarios = data.get('scenarios', [])
     top_analytics_dsl = data.get('analytics_dsl', '')
     display_settings = data.get('display_settings') or {}
@@ -2019,15 +1929,21 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
         scenario_id = scenario.get('scenario_id', 'unknown')
         graph_data = scenario.get('graph') or {}
 
-        subjects = resolve_forecast_subjects(
+        query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
+
+        # Shared forecast admission — the same cohort-maturity evidence binder
+        # cohort_maturity uses. One asat-bounded admitted-row set feeds BOTH
+        # the observed series and the CF projection bundle; daily carries no
+        # bespoke pre-reducer admission of its own.
+        preparation = admit_forecast_evidence(
             graph_data=graph_data,
             scenario=scenario,
             top_analytics_dsl=top_analytics_dsl,
-            path_analysis_type=analysis_type,
-            whole_graph_analysis_type=None,
+            query_dsl=query_dsl,
+            mece_dimensions=mece_dimensions,
             log_prefix='[daily_conv]',
         )
-        if not subjects:
+        if preparation is None:
             per_scenario_results.append({
                 "scenario_id": scenario_id, "success": True,
                 "subjects": [], "rows_analysed": 0,
@@ -2035,48 +1951,24 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
             continue
 
         temporal_dsl = scenario.get('effective_query_dsl', '')
-        query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
         is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
         context_scope = extract_forecast_context_scope(
             temporal_dsl, mece_dimensions=mece_dimensions,
         )
         _as_at = parse_asat_from_dsl(temporal_dsl)
+        subjects = [pe['subject'] for pe in preparation.per_edge_results]
 
-        preparation = prepare_forecast_subject_group(
-            graph_data=graph_data,
-            subjects=subjects,
-            is_window=is_window,
-            log_prefix='[daily_conv]',
-            as_at=_as_at,
-            scenario_id=scenario_id,
-            context_scope=context_scope,
-        )
-
-        # Observed series: raw snapshot rows for the target edge, regime-
-        # selected as the snapshot path does, reduced by
-        # derive_daily_conversions. Owns the calendar `data` series,
+        # Observed series: the shared admitted rows for the target edge,
+        # reduced by derive_daily_conversions. These are the SAME rows the CF
+        # projection bundle is built from — observed and forecast can no longer
+        # diverge on admission frontier. Owns the calendar `data` series,
         # per-Cohort observed x/y/rate, cohort_y_at_age, totals, date_range.
-        target_subj = next(
-            (s for s in subjects
-             if (s.get('target') or {}).get('targetId') == preparation.last_edge_id),
-            subjects[-1],
-        )
-        # asat frontier from the query DSL — authoritative, and the same
-        # frontier the bundle is built against. resolve_forecast_subjects
-        # does not stamp as_at on the subject, so read it from the DSL
-        # rather than the subject, or the observed series is unbounded.
-        _ss_as_at = datetime.fromisoformat(_as_at) if _as_at else None
-        rows = query_snapshots(
-            param_id=target_subj['param_id'],
-            core_hash=target_subj['core_hash'],
-            slice_keys=target_subj.get('slice_keys', ['']),
-            anchor_from=date.fromisoformat(target_subj['anchor_from']),
-            anchor_to=date.fromisoformat(target_subj['anchor_to']),
-            as_at=_ss_as_at,
-            equivalent_hashes=target_subj.get('equivalent_hashes'),
-        )
-        rows = _apply_temporal_regime_selection(rows, target_subj, is_window)
-        observed = derive_daily_conversions(rows)
+        admitted_rows = admitted_rows_for_target(preparation)
+        observed = derive_daily_conversions(admitted_rows)
+        observed['date_range'] = {
+            'from': _format_retrieved_at_for_display(preparation.anchor_from),
+            'to': _format_retrieved_at_for_display(preparation.anchor_to),
+        }
 
         # Forecast enrichment: the date reducer over the shared bundle. No
         # edge resolved → no projection; the observed series stands alone.
@@ -2126,9 +2018,9 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
                 "subject_id": f"daily_conv:{preparation.query_from_node}:{preparation.query_to_node}",
                 "success": True,
                 "result": result,
-                "rows_analysed": len(rows),
+                "rows_analysed": len(admitted_rows),
             }],
-            "rows_analysed": len(rows),
+            "rows_analysed": len(admitted_rows),
         })
 
     # Flatten single-scenario / single-subject (matches the other handlers).
@@ -2280,16 +2172,39 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
 
         from runner.forecast_runtime import parse_asat_from_dsl as _parse_asat_for_cf_envelope
         _cf_envelope_as_at = _parse_asat_for_cf_envelope(temporal_dsl)
+        # 73q Phase 5e Step C.2: the CF endpoint owns its own draw count.
+        # The override has to cover BOTH the subject-group preparation
+        # (which builds the per-request envelope plan with arrival maps
+        # sized at the prevailing `current_mc_draws()` — see
+        # request_envelope.py:372 / 433 / 511) AND the bundle build that
+        # consumes the envelope plan's draws via `compose_primitive_span`.
+        # Without this outer wrapper the envelope plan ships at the full
+        # default draws while the bundle ships at the reduced count — the
+        # broadcast collapses at composition time.
+        # The CF endpoint's scalar reducer aggressively collapses dispersion
+        # (a Beta-like scalar over the saturation distribution), so the
+        # endpoint runs at default_mc_draws / 10. This tracks the
+        # prevailing forecast-settings default rather than hard-coding a
+        # constant: if the project default S changes, the CF endpoint
+        # scales with it.
+        import dataclasses as _dc
+        from runner.forecasting_settings import (
+            current_settings as _cs,
+            use_request_settings as _urs,
+        )
+        _cf_endpoint_mc_draws = max(64, int(_cs().mc_draws) // 10)
+        _cf_endpoint_settings = _dc.replace(_cs(), mc_draws=float(_cf_endpoint_mc_draws))
         for subj_group in subject_groups:
-            preparation = prepare_forecast_subject_group(
-                graph_data=graph_data,
-                subjects=subj_group,
-                is_window=is_window,
-                log_prefix='[forecast]',
-                as_at=_cf_envelope_as_at,
-                scenario_id=scenario_id,
-                context_scope=context_scope,
-            )
+            with _urs(_cf_endpoint_settings):
+                preparation = prepare_forecast_subject_group(
+                    graph_data=graph_data,
+                    subjects=subj_group,
+                    is_window=is_window,
+                    log_prefix='[forecast]',
+                    as_at=_cf_envelope_as_at,
+                    scenario_id=scenario_id,
+                    context_scope=context_scope,
+                )
             query_from_node = preparation.query_from_node or None
             query_to_node = preparation.query_to_node or None
             anchor_node = preparation.anchor_node
@@ -2328,9 +2243,9 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
             # data: the shared boundary seeds it and threads it through the
             # upstream fetcher and candidate builders.
             from runner.forecast_runtime import serialise_rate_evidence_provenance
-            from runner.cf_analysis import prepare_cf_projection_bundle, reducer_for
+            from runner.cf_analysis import prepare_cf_scalar_bundle
+            from runner.cohort_forecast_v3 import reduce_cf_scalars
 
-            maturity_rows = []
             if last_edge_id:
                 from runner.forecasting_settings import current_settings as _current_settings
                 # CF endpoint is the whole-graph enrichment surface; per
@@ -2352,28 +2267,33 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                     query_to_node=query_to_node,
                     anchor_node=anchor_node,
                 )
-                prepared = prepare_cf_projection_bundle(
-                    preparation,
-                    graph_data=graph_data,
-                    subjects=subj_group,
-                    is_window=is_window,
-                    context_scope=context_scope,
-                    scenario_id=scenario_id,
-                    as_at=_cf_envelope_as_at,
-                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
-                    per_edge_results_by_uuid=all_per_edge_results,
-                    compute_extent=cf_compute_extent,
-                    include_epistemic_overlay=False,
-                    use_prepared_resolved=False,
-                    show_model_curve=False,
-                    log_prefix='[forecast]',
-                )
-                maturity_rows = reducer_for('cohort_maturity')(
-                    prepared.bundle,
-                    band_level=0.90,
-                    sweep_to=prepared.sweep_to,
-                    emit_diagnostics=_emit_diagnostics,
-                )
+                # 73q Phase 5e Step B/C: scalar-only CF callsite. The CF
+                # endpoint builds its own bundle (not the cohort_maturity
+                # tau reducer's) and reads every per-edge scalar from the
+                # scalar reducer + bundle metadata fields. The bundle
+                # build is wrapped in the same ``_cf_endpoint_settings``
+                # the upstream ``prepare_forecast_subject_group`` ran
+                # under, so the envelope plan and the runtime see the
+                # SAME draw count (Step C.2 broadcast fix).
+                # ``mc_draws_override`` is therefore None — the outer
+                # ``use_request_settings`` block already supplies the
+                # CF-endpoint draw count.
+                with _urs(_cf_endpoint_settings):
+                    prepared = prepare_cf_scalar_bundle(
+                        preparation,
+                        graph_data=graph_data,
+                        subjects=subj_group,
+                        is_window=is_window,
+                        context_scope=context_scope,
+                        scenario_id=scenario_id,
+                        as_at=_cf_envelope_as_at,
+                        candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                        per_edge_results_by_uuid=all_per_edge_results,
+                        compute_extent=cf_compute_extent,
+                        log_prefix='[forecast]',
+                        mc_draws_override=None,
+                        include_epistemic_overlay=True,
+                    )
                 if _emit_diagnostics and prepared.runtime_bundle_diag is not None:
                     _diag.setdefault('rate_evidence_provenance_by_edge', []).append({
                         'scenario_id': scenario_id,
@@ -2383,102 +2303,56 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                         **serialise_rate_evidence_provenance(prepared.runtime_bundle_diag),
                     })
 
-                if maturity_rows:
-                    last_row = maturity_rows[-1]
-                    # p@∞: evaluated by the engine at saturation_tau
-                    # (2·t95 window / 2·path_t95 cohort) off the same
-                    # IS-conditioned rate_draws the chart uses. Falls
-                    # back to last_row.midpoint for pre-fix callers /
-                    # older snapshots that didn't surface p_infinity.
-                    p_mean = last_row.get('p_infinity_mean')
-                    p_sd = last_row.get('p_infinity_sd')
-                    # Doc 49: epistemic SD (rate-only) alongside the
-                    # default predictive SD (kappa-inflated). Funnel
-                    # runner combines them via completeness weighting
-                    # per doc 52 §3.5. Falls back to p_sd if absent.
-                    p_sd_epistemic = last_row.get('p_infinity_sd_epistemic')
-                    if p_mean is None:
-                        p_mean = last_row.get('midpoint')
-                        fan_upper = last_row.get('fan_upper')
-                        fan_lower = last_row.get('fan_lower')
-                        if p_sd is None and fan_upper is not None and fan_lower is not None and p_mean is not None:
-                            p_sd = (fan_upper - fan_lower) / (2 * 1.645)
-                    if p_sd_epistemic is None:
-                        p_sd_epistemic = p_sd
-
-                    # Primitive readout / composition substitution already
-                    # happened inside compute_cohort_maturity_rows_v3. The
-                    # row builder exposes one role-labelled runtime
-                    # provenance sentinel on the first row; API projection
-                    # moves it to the edge response below.
-
-                    # Doc 45 §Response contract: per-edge output MUST
-                    # include `completeness` and `completeness_sd`. The
-                    # engine (compute_forecast_trajectory) computes these
-                    # once and cohort_forecast_v3 threads them onto
-                    # every maturity row, so both the CF endpoint and
-                    # the cohort maturity chart read the same scalar
-                    # ("one computation, two reads").
-                    completeness = last_row.get('completeness')
-                    completeness_sd = last_row.get('completeness_sd')
-
-                    # Per-edge observed evidence totals (n, k) for the CF
-                    # response. Source: the maturity rows' `evidence_x` /
-                    # `evidence_y`, which `_project_runtime_rows` writes as
-                    # the τ-aggregated observed sums across `engine_cohorts`
-                    # (obs_x[τ] / obs_y[τ], falling back to x_frozen / y_frozen
-                    # past each cohort's obs window). At τ = saturation_tau
-                    # every cohort has either reached its frontier or rolled
-                    # to its frozen value, so the saturated row carries the
-                    # per-edge totals the IS conditioning saw. Active-carrier
-                    # rows can leave the saturated cell None (no
-                    # selected-bucket entry past the last obs τ); walk back
-                    # to the latest row that exposes them.
-                    evidence_n = last_row.get('evidence_x')
-                    evidence_k = last_row.get('evidence_y')
-                    if evidence_n is None or evidence_k is None:
-                        for _row in reversed(maturity_rows):
-                            if evidence_n is None and _row.get('evidence_x') is not None:
-                                evidence_n = _row.get('evidence_x')
-                            if evidence_k is None and _row.get('evidence_y') is not None:
-                                evidence_k = _row.get('evidence_y')
-                            if evidence_n is not None and evidence_k is not None:
-                                break
-                    if evidence_n is not None:
-                        evidence_n = int(round(float(evidence_n)))
-                    if evidence_k is not None:
-                        evidence_k = int(round(float(evidence_k)))
-
-                    from runner.forecast_state import _last_forensic
-                    # Doc 52 §14.6: subset-conditioning provenance,
-                    # stashed on the first row by v3 as a sentinel.
-                    # Extract into a dedicated response block and remove
-                    # from the row to keep the row schema clean.
-                    first_row = maturity_rows[0] if maturity_rows else {}
-                    _cond = first_row.pop('_conditioning', None) if isinstance(first_row, dict) else None
-                    _cf_mode = (
-                        first_row.pop('_cf_mode', 'sweep')
-                        if isinstance(first_row, dict) else 'sweep'
+                bundle = prepared.bundle
+                runtime = bundle.runtime
+                if runtime.public_moments is None:
+                    # Class D — no usable α/β (no Bayes fit, no
+                    # parameter-file evidence, no promoted source) AND
+                    # no query-scoped snapshot rows. The runtime built
+                    # nothing scalar-projectable. See doc 50 §2 Class D
+                    # + §3.2.
+                    skipped_edges.append({
+                        'edge_uuid': last_edge_id,
+                        'reason': 'no prior and no evidence',
+                    })
+                else:
+                    # All per-edge scalars come from the scalar reducer
+                    # plus bundle metadata; no row scraping. Boundary
+                    # mapping only: public response names stay stable
+                    # (`p_mean`, `p_sd`, etc.) while the reducer fields are
+                    # named for the represented projection quantities.
+                    cf_scalars = reduce_cf_scalars(bundle)
+                    p_mean = cf_scalars.fc_terminal_rate_mean
+                    p_sd = cf_scalars.fc_terminal_rate_sd_predictive
+                    p_sd_epistemic = (
+                        cf_scalars.conditioned_span_terminal_rate_sd_epistemic
+                        if cf_scalars.conditioned_span_terminal_rate_sd_epistemic is not None
+                        else p_sd
                     )
-                    _cf_reason = (
-                        first_row.pop('_cf_reason', None)
-                        if isinstance(first_row, dict) else None
-                    )
-                    # Whether observed evidence was actually applied to
-                    # this edge's result (True) or the result is the
-                    # untouched prior (False). Consumers that need to
-                    # distinguish real conditioned output from
-                    # prior-fallback output read this field directly;
-                    # they should NOT infer it from the latency flag
-                    # or from evidence_k/n.
-                    _conditioned = first_row.pop('_conditioned', False) if isinstance(first_row, dict) else False
-                    _forensic = _last_forensic
+                    completeness = cf_scalars.fc_frontier_to_terminal_rate_ratio_mean
+                    completeness_sd = cf_scalars.fc_frontier_to_terminal_rate_ratio_sd_predictive
+                    evidence_n = cf_scalars.strict_empirical_terminal_evidence_n
+                    evidence_k = cf_scalars.strict_empirical_terminal_evidence_k
 
+                    # The four request-level sentinels the row builder
+                    # used to attach to row[0] (_attach_cf_row_metadata):
+                    # cf_mode/cf_reason live on the bundle already;
+                    # `conditioned` is exactly the predicate the row
+                    # builder uses at cohort_forecast_v3.py:2397; the
+                    # subset-conditioning provenance owner is the same
+                    # constant `_attach_cf_row_metadata` writes; and the
+                    # role-labelled runtime provenance block comes
+                    # straight off the runtime.
+                    _conditioned = runtime.public_moments.p_mean is not None
+                    _cf_mode = bundle.cf_mode
+                    _cf_reason = bundle.cf_reason
+                    _cond = {'owner': 'primitive_conditioning'}
+                    _runtime_provenance = runtime.project_runtime_provenance()
                     _evidence_provenance = None
 
-                    _runtime_provenance = first_row.pop(
-                        '_runtime_provenance', None
-                    ) if isinstance(first_row, dict) else None
+                    from runner.forecast_state import _last_forensic
+                    _forensic = _last_forensic
+
                     edge_results.append({
                         'edge_uuid': last_edge_id,
                         'from_node': query_from_node,
@@ -2493,8 +2367,7 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                         'conditioned': bool(_conditioned),
                         'cf_mode': _cf_mode,
                         'cf_reason': _cf_reason,
-                        'tau_max': last_row.get('tau'),
-                        'n_rows': len(maturity_rows),
+                        'tau_max': int(bundle.max_tau),
                         'n_cohorts': preparation.cohorts_analysed,
                         '_forensic': _forensic,
                         **(
@@ -2510,21 +2383,11 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                         ),
                     })
                     print(f"[forecast] {scenario_id}: {query_from_node}→{query_to_node} "
-                          f"p={p_mean:.4f} conditioned={bool(_conditioned)} "
-                          f"tau_max={last_row.get('tau')} "
+                          f"p={p_mean if p_mean is None else f'{p_mean:.4f}'} "
+                          f"conditioned={bool(_conditioned)} "
+                          f"tau_max={int(bundle.max_tau)} "
                           f"cohorts={preparation.cohorts_analysed} "
                           f"rows={total_rows}")
-                else:
-                    # Class D — row builder returned []. This means the
-                    # resolver had no usable α/β (no Bayes fit, no
-                    # parameter-file evidence, no promoted source)
-                    # AND no query-scoped snapshot rows. CF has
-                    # literally nothing to report for this edge.
-                    # See doc 50 §2 Class D + §3.2.
-                    skipped_edges.append({
-                        'edge_uuid': last_edge_id,
-                        'reason': 'no prior and no evidence',
-                    })
             else:
                 # No last_edge_id resolvable from subject group —
                 # malformed subject. Treat as Class D.
@@ -3153,8 +3016,11 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             read_mode = subj.get('read_mode', 'raw_snapshots')
 
             if analysis_type == 'surprise_gauge':
-                # Surprise gauge: run the dedicated sweep-backed summary path
-                # for this subject, including its own snapshot query.
+                # Surprise gauge: scalar-reducer callsite over the shared
+                # CF projection bundle (73q Phase 5a). The handler now
+                # builds the same bundle the CF endpoint does, calls
+                # ``reduce_cf_scalars``, and frames the gauge's two-
+                # distribution z-score from the marginal pairs.
                 graph_data = scenario.get('graph') or {}
                 target_id = (subj.get('target') or {}).get('targetId')
                 print(f"[surprise_gauge] target_id={target_id}, graph_edges={len(graph_data.get('edges', []))}")
@@ -3163,6 +3029,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     target_id,
                     subj,
                     data,
+                    scenario,
                     effective_query_dsl=scenario.get('effective_query_dsl', ''),
                 )
                 print(f"[surprise_gauge] result vars: {[(v.get('name'), v.get('available'), v.get('reason','')) for v in result.get('variables',[])]}")

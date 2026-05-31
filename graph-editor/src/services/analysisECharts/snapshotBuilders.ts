@@ -14,6 +14,7 @@ import {
   darkenHex,
   type RateSmoothingMethod,
 } from './echartsCommon';
+import { formatDateUK, normalizeToUK, parseUKDate } from '../../lib/dateFormat';
 
 // ─── Builders ───────────────────────────────────────────────────────────────
 
@@ -147,15 +148,23 @@ export function buildDailyConversionsEChartsOption(
     forecastResidual: number;
     projectedX: number;
     projectedY: number;
+    modelProjectedX: number | null;
+    modelProjectedY: number | null;
     evidenceRate: number | null;
     forecastRate: number | null;
+    modelRate: number | null;
+    frontierAge: number | null;
+    completeness: number | null;
     forecastBands: Record<string, [number, number]> | null;
-    latencyBands: Record<string, { rate: number; source: string; bands?: Record<string, [number, number]> }> | null;
+    modelForecastBands: Record<string, [number, number]> | null;
+    latencyBands: Record<string, { rate: number | null; bands?: Record<string, [number, number]> }> | null;
+    evidenceLatencyBands: Record<string, { rate: number | null }> | null;
+    modelLatencyBands: Record<string, { rate: number | null; bands?: Record<string, [number, number]> }> | null;
   };
   const byKey = new Map<string, Point[]>();
   for (const r of filteredRows) {
     const key = String(r?.[seriesKey]);
-    const date = String(r?.date);
+    const date = normalizeToUK(String(r?.date || ''));
     if (!key || !date) continue;
 
     const scenarioId = String(r?.scenario_id ?? '');
@@ -168,6 +177,9 @@ export function buildDailyConversionsEChartsOption(
     const projectedX = r?.projected_x != null ? Number(r.projected_x) : null;
     const projectedY = r?.projected_y != null ? Number(r.projected_y) : null;
     const projectedRate = r?.projected_rate != null ? Number(r.projected_rate) : null;
+    const modelProjectedX = r?.model_projected_x != null ? Number(r.model_projected_x) : null;
+    const modelProjectedY = r?.model_projected_y != null ? Number(r.model_projected_y) : null;
+    const modelProjectedRate = r?.model_projected_rate != null ? Number(r.model_projected_rate) : null;
     const forecastY = r?.forecast_y != null ? Number(r.forecast_y) : null;
 
     // Skip rows with zero cohort size
@@ -181,15 +193,21 @@ export function buildDailyConversionsEChartsOption(
       pVal = eVal; // no forecast component in E-only mode
     } else if (mode === 'f') {
       eVal = 0; // no evidence component in F-only mode
-      pVal = projectedY != null ? projectedY : rawY;
+      pVal = modelProjectedY ?? projectedY ?? rawY;
     } else {
       // f+e: show both
       eVal = evidenceY != null ? evidenceY : rawY;
       pVal = projectedY != null ? projectedY : rawY;
     }
 
-    const forecastResidual = forecastY != null ? forecastY : Math.max(0, pVal - eVal);
-    const forecastDenominator = projectedX != null ? projectedX : rawX;
+    // 73q Phase 4R.6: when the backend FC residual (forecast_y) is undefined
+    // we render no forecast component rather than fabricating one from
+    // `max(0, projected − evidence)`. An absent backend residual stays absent;
+    // display must not claim a computed FC residual the backend did not emit.
+    const forecastResidual = forecastY != null ? forecastY : 0;
+    const forecastDenominator = mode === 'f'
+      ? (modelProjectedX ?? projectedX ?? rawX)
+      : (projectedX ?? rawX);
 
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key)!.push({
@@ -199,10 +217,20 @@ export function buildDailyConversionsEChartsOption(
       forecastResidual: Number.isFinite(forecastResidual) ? forecastResidual : 0,
       projectedX: Number.isFinite(forecastDenominator) ? forecastDenominator : 0,
       projectedY: Number.isFinite(pVal) ? pVal : 0,
+      modelProjectedX: Number.isFinite(modelProjectedX) ? modelProjectedX : null,
+      modelProjectedY: Number.isFinite(modelProjectedY) ? modelProjectedY : null,
       evidenceRate: rawX > 0 && eVal > 0 ? eVal / rawX : (mode === 'f' ? null : 0),
-      forecastRate: Number.isFinite(projectedRate) ? projectedRate : null,
+      forecastRate: mode === 'f'
+        ? (Number.isFinite(modelProjectedRate) ? modelProjectedRate : null)
+        : (Number.isFinite(projectedRate) ? projectedRate : null),
+      modelRate: Number.isFinite(modelProjectedRate) ? modelProjectedRate : null,
+      frontierAge: r?.frontier_age != null ? Number(r.frontier_age) : null,
+      completeness: r?.completeness != null ? Number(r.completeness) : null,
       forecastBands: r?.forecast_bands ?? null,
+      modelForecastBands: r?.model_forecast_bands ?? null,
       latencyBands: r?.latency_bands ?? null,
+      evidenceLatencyBands: r?.evidence_latency_bands ?? null,
+      modelLatencyBands: r?.model_latency_bands ?? null,
     });
   }
 
@@ -216,6 +244,8 @@ export function buildDailyConversionsEChartsOption(
   const showRates = showRatesRaw;
   const movingAvgMethod = (settings.moving_avg ?? 'off') as RateSmoothingMethod;
   const aggregateMode = String(settings.aggregate ?? 'daily');
+  const toChartDate = (date: string) => date;
+  const compareDates = (a: string, b: string) => parseUKDate(a).getTime() - parseUKDate(b).getTime();
 
   // Re-bin data for weekly/monthly aggregation.
   // Replaces per-day points with per-period points (Σx, Σy, aggregate rate).
@@ -225,20 +255,20 @@ export function buildDailyConversionsEChartsOption(
     for (const [key, points] of byKey.entries()) {
       if (points.length === 0) continue;
       // Sort and bucket by period
-      const sorted = points.slice().sort((a, b) => a.date.localeCompare(b.date));
+      const sorted = points.slice().sort((a, b) => compareDates(a.date, b.date));
       const buckets = new Map<string, typeof points>();
       for (const p of sorted) {
         // Bucket key: start of period containing this date.
         // Weekly: ISO week start (Monday). Monthly: first of month.
-        const d = new Date(p.date + 'T00:00:00Z');
+        const d = parseUKDate(p.date);
         let bucketDate: string;
         if (aggregateMode === 'weekly') {
           const day = d.getUTCDay();
           const monday = new Date(d);
           monday.setUTCDate(d.getUTCDate() - ((day + 6) % 7));
-          bucketDate = monday.toISOString().slice(0, 10);
+          bucketDate = formatDateUK(monday);
         } else {
-          bucketDate = `${p.date.slice(0, 7)}-01`;
+          bucketDate = formatDateUK(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)));
         }
         if (!buckets.has(bucketDate)) buckets.set(bucketDate, []);
         buckets.get(bucketDate)!.push(p);
@@ -260,6 +290,15 @@ export function buildDailyConversionsEChartsOption(
           projectedY: sumPY,
           evidenceRate: sumX > 0 ? sumEY / sumX : null,
           forecastRate: sumPX > 0 ? sumPY / sumPX : null,
+          // The bin's frontier age is the least-mature constituent date, so a
+          // band counts as observed only where every constituent observed it
+          // (73q Phase 4R.6 — replaces the old per-band `source` aggregation).
+          frontierAge: bPoints.some(p => p.frontierAge == null)
+            ? null
+            : Math.min(...bPoints.map(p => p.frontierAge as number)),
+          completeness: bPoints.some(p => p.completeness == null)
+            ? null
+            : Math.min(...bPoints.map(p => p.completeness as number)),
           // Merge forecast bands: weighted average by forecast denominator
           forecastBands: (() => {
             const levels = ['80', '90', '95', '99'];
@@ -288,16 +327,100 @@ export function buildDailyConversionsEChartsOption(
             const merged: Record<string, any> = {};
             for (const bk of allBandKeys) {
               let wRate = 0, wTotal = 0;
-              let source = 'evidence';
               for (const p of bPoints) {
                 const lb = p.latencyBands?.[bk];
-                if (lb && p.x > 0) {
+                if (lb && lb.rate != null && p.x > 0) {
                   wRate += lb.rate * p.x;
                   wTotal += p.x;
-                  if (lb.source === 'forecast') source = 'forecast';
                 }
               }
-              if (wTotal > 0) merged[bk] = { rate: wRate / wTotal, source };
+              if (wTotal > 0) merged[bk] = { rate: wRate / wTotal };
+            }
+            return Object.keys(merged).length > 0 ? merged : null;
+          })(),
+          modelForecastBands: (() => {
+            const levels = ['80', '90', '95', '99'];
+            const merged: Record<string, [number, number]> = {};
+            for (const lv of levels) {
+              let wLo = 0, wHi = 0, wTotal = 0;
+              for (const p of bPoints) {
+                const b = p.modelForecastBands?.[lv];
+                const w = p.modelProjectedX ?? p.projectedX;
+                if (b && w > 0) {
+                  wLo += b[0] * w;
+                  wHi += b[1] * w;
+                  wTotal += w;
+                }
+              }
+              if (wTotal > 0) merged[lv] = [wLo / wTotal, wHi / wTotal];
+            }
+            return Object.keys(merged).length > 0 ? merged : null;
+          })(),
+          modelProjectedX: (() => {
+            let total = 0;
+            let seen = false;
+            for (const p of bPoints) {
+              if (p.modelProjectedX != null) {
+                total += p.modelProjectedX;
+                seen = true;
+              }
+            }
+            return seen ? total : null;
+          })(),
+          modelProjectedY: (() => {
+            let total = 0;
+            let seen = false;
+            for (const p of bPoints) {
+              if (p.modelProjectedY != null) {
+                total += p.modelProjectedY;
+                seen = true;
+              }
+            }
+            return seen ? total : null;
+          })(),
+          modelRate: (() => {
+            const mx = bPoints.reduce((s, p) => s + (p.modelProjectedX ?? 0), 0);
+            const my = bPoints.reduce((s, p) => s + (p.modelProjectedY ?? 0), 0);
+            return mx > 0 ? my / mx : null;
+          })(),
+          evidenceLatencyBands: (() => {
+            const allBandKeys = new Set<string>();
+            for (const p of bPoints) {
+              if (p.evidenceLatencyBands) for (const k of Object.keys(p.evidenceLatencyBands)) allBandKeys.add(k);
+            }
+            if (allBandKeys.size === 0) return null;
+            const merged: Record<string, any> = {};
+            for (const bk of allBandKeys) {
+              let wRate = 0, wTotal = 0;
+              for (const p of bPoints) {
+                const lb = p.evidenceLatencyBands?.[bk];
+                if (lb && lb.rate != null && p.x > 0) {
+                  wRate += lb.rate * p.x;
+                  wTotal += p.x;
+                }
+              }
+              if (wTotal > 0) merged[bk] = { rate: wRate / wTotal };
+            }
+            return Object.keys(merged).length > 0 ? merged : null;
+          })(),
+          modelLatencyBands: (() => {
+            const allBandKeys = new Set<string>();
+            for (const p of bPoints) {
+              if (p.modelLatencyBands) for (const k of Object.keys(p.modelLatencyBands)) allBandKeys.add(k);
+            }
+            if (allBandKeys.size === 0) return null;
+            const merged: Record<string, any> = {};
+            for (const bk of allBandKeys) {
+              let wRate = 0, wTotal = 0;
+              for (const p of bPoints) {
+                const lb = p.modelLatencyBands?.[bk];
+                const w = p.modelProjectedX ?? p.projectedX;
+                if (lb && lb.rate != null && w > 0) {
+                  wRate += lb.rate * w;
+                  wTotal += w;
+                }
+              }
+              if (wTotal > 0) merged[bk] = { rate: wRate / wTotal };
             }
             return Object.keys(merged).length > 0 ? merged : null;
           })(),
@@ -312,7 +435,7 @@ export function buildDailyConversionsEChartsOption(
   for (const points of byKey.values()) {
     for (const p of points) allDates.add(p.date);
   }
-  const sortedDates = Array.from(allDates).sort();
+  const sortedDates = Array.from(allDates).sort(compareDates);
 
   // Single visible scenario → grey; multi → scenario colour.
   // Drive this from tab-level visibility (visibleScenarioIds), NOT from
@@ -329,7 +452,7 @@ export function buildDailyConversionsEChartsOption(
 
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
-    const points = (byKey.get(key) || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+    const points = (byKey.get(key) || []).slice().sort((a, b) => compareDates(a.date, b.date));
     const pointsByDate = new Map(points.map(p => [p.date, p]));
     const name = meta?.[key]?.name || key;
     const scenarioColour = isSingleScenario
@@ -346,19 +469,19 @@ export function buildDailyConversionsEChartsOption(
     const showF = mode !== 'e';
 
     // Align to common date set — fill missing dates with 0 for correct stacking
-    const alignedE = sortedDates.map(d => [d, pointsByDate.get(d)?.evidenceY ?? 0]);
-    const alignedF = sortedDates.map(d => [d, pointsByDate.get(d)?.forecastResidual ?? 0]);
+    const alignedE = sortedDates.map(d => [toChartDate(d), pointsByDate.get(d)?.evidenceY ?? 0]);
+    const alignedF = sortedDates.map(d => [toChartDate(d), pointsByDate.get(d)?.forecastResidual ?? 0]);
     const alignedNRemainder = sortedDates.map(d => {
       const p = pointsByDate.get(d);
-      if (!p) return [d, 0];
-      return [d, Math.max(0, p.projectedX - p.projectedY)];
+      if (!p) return [toChartDate(d), 0];
+      return [toChartDate(d), Math.max(0, p.projectedX - p.projectedY)];
     });
     const alignedERate = smoothRates(
-      sortedDates.map(d => [d, pointsByDate.get(d)?.evidenceRate ?? null] as [string, number | null]),
+      sortedDates.map(d => [toChartDate(d), pointsByDate.get(d)?.evidenceRate ?? null] as [string, number | null]),
       movingAvgMethod,
     );
     const alignedFRate = smoothRates(
-      sortedDates.map(d => [d, pointsByDate.get(d)?.forecastRate ?? null] as [string, number | null]),
+      sortedDates.map(d => [toChartDate(d), pointsByDate.get(d)?.forecastRate ?? null] as [string, number | null]),
       movingAvgMethod,
     );
     smoothedFRateByKey.set(key, alignedFRate);
@@ -422,6 +545,7 @@ export function buildDailyConversionsEChartsOption(
         // Split evidence into epoch A (solid) and epoch B (dashed)
         const epochARate: Array<[string, number | null]> = [];
         const epochBRate: Array<[string, number | null]> = [];
+        let evidenceEpochBroken = false;
         for (let di = 0; di < sortedDates.length; di++) {
           const d = sortedDates[di];
           const p = pointsByDate.get(d);
@@ -430,20 +554,19 @@ export function buildDailyConversionsEChartsOption(
           // for this date (i.e. date is outside the scenario's data range),
           // drop the point from both epochs so smoothing tails don't leak
           // past the scenario's scope as phantom Epoch A markers.
-          const rawRow = filteredRows.find((r: any) =>
-            String(r?.date) === d && String(r?.[seriesKey]) === key);
-          if (!rawRow) {
-            epochARate.push([d, null]);
-            epochBRate.push([d, null]);
+          if (!p) {
+            epochARate.push([toChartDate(d), null]);
+            epochBRate.push([toChartDate(d), null]);
             continue;
           }
-          const c = rawRow.completeness ?? 1;
-          if (c >= 0.95) {
-            epochARate.push([d, rate]);
-            epochBRate.push([d, null]);
+          const c = p.completeness ?? 1;
+          if (!evidenceEpochBroken && c >= 0.95) {
+            epochARate.push([toChartDate(d), rate]);
+            epochBRate.push([toChartDate(d), null]);
           } else {
-            epochARate.push([d, null]);
-            epochBRate.push([d, rate]);
+            evidenceEpochBroken = true;
+            epochARate.push([toChartDate(d), null]);
+            epochBRate.push([toChartDate(d), rate]);
           }
         }
         // Overlap point for line continuity at the epoch boundary
@@ -524,18 +647,20 @@ export function buildDailyConversionsEChartsOption(
         ?? extra?.scenarioVisibilityModes?.[_bandScId]
         ?? 'f+e';
       if (scMode === 'e') continue; // no forecast bands in evidence-only mode
-      const points = (byKey.get(key) || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+      const points = (byKey.get(key) || []).slice().sort((a, b) => compareDates(a.date, b.date));
       const pointsByDate = new Map(points.map(p => [p.date, p]));
       const scenarioColour = isSingleScenario
         ? NEUTRAL
         : (meta?.[key]?.colour || NEUTRAL);
 
       for (const level of bandLevels) {
-        const rawPoly: Array<{ date: string; upper: number; lower: number }> = [];
+        const rawPoly: Array<{ date: string; sourceDate: string; upper: number; lower: number }> = [];
         for (const p of points) {
-          const band = p.forecastBands?.[level];
+          const band = scMode === 'f'
+            ? p.modelForecastBands?.[level]
+            : p.forecastBands?.[level];
           if (band && Number.isFinite(band[0]) && Number.isFinite(band[1]) && band[1] > band[0] + 0.001) {
-            rawPoly.push({ date: p.date, upper: band[1], lower: band[0] });
+            rawPoly.push({ date: toChartDate(p.date), sourceDate: p.date, upper: band[1], lower: band[0] });
           }
         }
         if (rawPoly.length < 2) continue;
@@ -548,11 +673,11 @@ export function buildDailyConversionsEChartsOption(
         const _storedFRate = smoothedFRateByKey.get(key) || [];
         const fRateByDate = new Map(_storedFRate.map(d => [d[0], d[1]]));
         const upperOffsets = rawPoly.map(p => {
-          const rawFR = pointsByDate.get(p.date)?.forecastRate;
+          const rawFR = pointsByDate.get(p.sourceDate)?.forecastRate;
           return [p.date, rawFR != null ? p.upper - rawFR : null] as [string, number | null];
         });
         const lowerOffsets = rawPoly.map(p => {
-          const rawFR = pointsByDate.get(p.date)?.forecastRate;
+          const rawFR = pointsByDate.get(p.sourceDate)?.forecastRate;
           return [p.date, rawFR != null ? rawFR - p.lower : null] as [string, number | null];
         });
         const smoothedUpper = smoothRates(upperOffsets, movingAvgMethod);
@@ -563,8 +688,11 @@ export function buildDailyConversionsEChartsOption(
             const uo = smoothedUpper[j]?.[1];
             const lo = smoothedLower[j]?.[1];
             if (rate == null || uo == null || lo == null) return null;
-            const evRate = pointsByDate.get(p.date)?.evidenceRate ?? 0;
-            return { date: p.date, upper: rate + uo, lower: Math.max(evRate, rate - lo) };
+            // 73q Phase 4R.6: the forecast band's lower edge is no longer
+            // clamped up to the evidence rate. A forecast band that sits below
+            // the observed evidence rate is a valid rendered state, not a shape
+            // to repair — the band reflects the resolved FC dispersion as-is.
+            return { date: p.date, upper: rate + uo, lower: rate - lo };
           })
           .filter((p): p is { date: string; upper: number; lower: number } => p !== null);
 
@@ -655,16 +783,23 @@ export function buildDailyConversionsEChartsOption(
       ?? 'f+e';
     const lbShowE = lbMode !== 'f';
     const lbShowF = lbMode !== 'e';
-    const points = (byKey.get(key) || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+    const points = (byKey.get(key) || []).slice().sort((a, b) => compareDates(a.date, b.date));
     const scenarioColour = isSingleScenario
       ? NEUTRAL
       : (meta?.[key]?.colour || NEUTRAL);
 
+    const contourSource = lbMode === 'e' ? 'evidence' : (lbMode === 'f' ? 'model' : 'fc');
+
     // Collect all latency band keys across points
     const bandKeys = new Set<string>();
     for (const p of points) {
-      if (p.latencyBands) {
-        for (const k of Object.keys(p.latencyBands)) bandKeys.add(k);
+      const sourceBands = contourSource === 'evidence'
+        ? p.evidenceLatencyBands
+        : contourSource === 'model'
+          ? p.modelLatencyBands
+          : p.latencyBands;
+      if (sourceBands) {
+        for (const k of Object.keys(sourceBands)) bandKeys.add(k);
       }
     }
     const sortedBandKeys = Array.from(bandKeys).sort((a, b) => {
@@ -677,67 +812,26 @@ export function buildDailyConversionsEChartsOption(
       const dashPattern = LATENCY_DASH_PATTERNS[Math.min(bi, LATENCY_DASH_PATTERNS.length - 1)];
       const bandName = isSingleScenario ? bk : `${meta?.[key]?.name || key} · ${bk}`;
 
-      // Skip bands where evidence is too sparse to be meaningful.
-      // If fewer than 30% of evidence points are non-zero, the band
-      // is mostly noise (e.g. too-young τ for this edge's latency).
-      {
-        let _evTotal = 0, _evNonZero = 0;
-        for (const p of points) {
-          const lb = p.latencyBands?.[bk];
-          if (lb && lb.source === 'evidence') {
-            _evTotal++;
-            if (lb.rate > 0.001) _evNonZero++;
-          }
-        }
-        if (_evTotal > 0 && _evNonZero / _evTotal < 0.3) continue;
-      }
-
-      // Smooth the combined data first (one EWMA pass), then split
-      // into evidence/forecast for rendering with different opacities.
-      // This avoids EWMA discontinuity at the evidence→forecast boundary.
-      const combinedRaw: Array<[string, number | null]> = [];
-      const sourceMap: Array<'evidence' | 'forecast' | null> = [];
+      // Latency bands are contour lines over the same FC date-axis surface,
+      // sampled at fixed tau values. They are not evidence/forecast layers,
+      // so frontier_age must not split or suppress them.
+      const contourRaw: Array<[string, number | null]> = [];
       for (const p of points) {
-        const lb = p.latencyBands?.[bk];
-        if (!lb) {
-          combinedRaw.push([p.date, null]);
-          sourceMap.push(null);
-        } else if (lb.source === 'evidence') {
-          combinedRaw.push([p.date, lbShowE ? lb.rate : null]);
-          sourceMap.push('evidence');
+        const lb = contourSource === 'evidence'
+          ? p.evidenceLatencyBands?.[bk]
+          : contourSource === 'model'
+            ? p.modelLatencyBands?.[bk]
+            : p.latencyBands?.[bk];
+        const contourRate = lb?.rate;
+        if (!lb || contourRate == null) {
+          contourRaw.push([toChartDate(p.date), null]);
         } else {
-          combinedRaw.push([p.date, lbShowF ? lb.rate : null]);
-          sourceMap.push('forecast');
+          contourRaw.push([toChartDate(p.date), (lbShowE || lbShowF) ? contourRate : null]);
         }
       }
-      const smoothedCombined = smoothRates(combinedRaw, movingAvgMethod);
+      const contourData = smoothRates(contourRaw, movingAvgMethod);
 
-      // Split into evidence (75% opacity) and forecast (30% opacity).
-      // Duplicate the last evidence point as the first forecast point
-      // so the two segments connect without a gap.
-      let lastEvidenceIdx = -1;
-      for (let j = smoothedCombined.length - 1; j >= 0; j--) {
-        if (sourceMap[j] === 'evidence' && smoothedCombined[j][1] != null) {
-          lastEvidenceIdx = j;
-          break;
-        }
-      }
-
-      const evidenceData = smoothedCombined.map((d, j) =>
-        [d[0], sourceMap[j] === 'evidence' ? d[1] : null] as [string, number | null]);
-      const forecastData = smoothedCombined.map((d, j) =>
-        [d[0], sourceMap[j] === 'forecast' ? d[1] : null] as [string, number | null]);
-
-      // Bridge: copy last evidence point into forecast array
-      if (lastEvidenceIdx >= 0 && smoothedCombined[lastEvidenceIdx][1] != null) {
-        forecastData[lastEvidenceIdx] = [
-          smoothedCombined[lastEvidenceIdx][0],
-          smoothedCombined[lastEvidenceIdx][1],
-        ];
-      }
-
-      // Evidence segment — 75% opacity
-      if (evidenceData.some(d => d[1] !== null)) {
+      if (contourData.some(d => d[1] !== null)) {
         allSeries.push({
           name: bandName,
           type: 'line',
@@ -745,25 +839,10 @@ export function buildDailyConversionsEChartsOption(
           showSymbol: false,
           smooth: lineSmooth,
           connectNulls: false,
-          lineStyle: { width: 1.5, color: scenarioColour, type: dashPattern, opacity: 0.75 },
-          itemStyle: { color: scenarioColour, opacity: 0.75 },
+          lineStyle: { width: 1.5, color: scenarioColour, type: dashPattern, opacity: LATENCY_BAND_OPACITY },
+          itemStyle: { color: scenarioColour, opacity: LATENCY_BAND_OPACITY },
           emphasis: { focus: 'series' },
-          data: evidenceData,
-        });
-      }
-
-      // Forecast segment — 30% opacity, same dash pattern
-      if (forecastData.some(d => d[1] !== null)) {
-        allSeries.push({
-          type: 'line',
-          yAxisIndex: rateAxisIndex,
-          showSymbol: false,
-          smooth: lineSmooth,
-          connectNulls: false,
-          lineStyle: { width: 1.5, color: scenarioColour, type: dashPattern, opacity: 0.30 },
-          itemStyle: { color: scenarioColour, opacity: 0.30 },
-          emphasis: { focus: 'series' },
-          data: forecastData,
+          data: contourData,
         });
       }
 
@@ -814,11 +893,7 @@ export function buildDailyConversionsEChartsOption(
         const items = Array.isArray(params) ? params : [params];
         const first = items[0];
         const dateRaw = first?.value?.[0];
-        const dateStr = typeof dateRaw === 'number'
-          ? new Date(dateRaw).toISOString().slice(0, 10)
-          : String(dateRaw || '');
-        const d = new Date(dateStr);
-        const title = Number.isNaN(d.getTime()) ? dateStr : `${d.getDate()}-${d.toLocaleDateString('en-GB', { month: 'short' })}-${d.toLocaleDateString('en-GB', { year: '2-digit' })}`;
+        const title = normalizeToUK(String(dateRaw || '').split('T')[0]);
         const lines = items.map((it: any) => {
           const val = it?.value?.[1];
           const isRate = it?.seriesIndex !== undefined && allSeries[it.seriesIndex]?.type === 'line';
@@ -832,21 +907,17 @@ export function buildDailyConversionsEChartsOption(
     },
     grid: { left: 52, right: 52, bottom: 60, top: 40, containLabel: false },
     xAxis: {
-      type: 'time',
+      type: 'category',
+      data: sortedDates,
       name: 'Cohort date',
       nameLocation: 'middle',
       nameGap: 30,
       nameTextStyle: { fontSize: 8, color: c.text },
-      minInterval: 86400000, // 1 day — prevent sub-day ticks
       axisLabel: {
         fontSize: 9,
         rotate: 30,
         color: c.text,
-        formatter: (value: number) => {
-          const d = new Date(value);
-          if (Number.isNaN(d.getTime())) return '';
-          return `${d.getUTCDate()}-${d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}`;
-        },
+        formatter: (value: string) => String(value || '').replace(/-\d{2}$/, ''),
       },
     },
     yAxis: showBars && showRates

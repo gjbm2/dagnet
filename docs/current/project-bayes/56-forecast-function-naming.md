@@ -52,8 +52,8 @@ signatures are incompatible — but a reader looking at just the name
 can't tell which shape is expected.
 
 **Importance-sampling strategy.** `compute_conditioned_forecast` uses
-aggregate tempered IS: it sums log-likelihoods across all cohorts in
-one pass, applies tempering to maintain a target ESS, and reindexes
+aggregate IS: it sums log-likelihoods across all cohorts in one pass,
+uses the full likelihood, records ESS as a diagnostic, and reindexes
 the draws exactly once. `compute_forecast_sweep` uses sequential
 per-cohort IS inside its cohort loop: each cohort's likelihood
 resamples the draws, the next cohort inherits the resampled draws,

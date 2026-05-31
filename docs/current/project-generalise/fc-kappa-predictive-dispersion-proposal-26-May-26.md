@@ -2,7 +2,7 @@
 
 **Date:** 26-May-26  
 **Status:** proposal  
-**Scope:** Frontier-conditioned forecast bands in `cohort_maturity_v3`, specifically probability overdispersion on the FC `ef_*` surface. This proposal replaces the FC use of collapsed `alpha_pred` / `beta_pred` with direct use of Bayes-fitted `kappa`.
+**Scope:** Frontier-conditioned predictive dispersion on the FC `ef_*` surface, including chart forecast bands and scalar consumers such as the CF scalar reducer / `surprise_gauge`. This proposal replaces the FC use of collapsed `alpha_pred` / `beta_pred` with direct use of Bayes-fitted `kappa`.
 
 ## 1. Purpose
 
@@ -13,6 +13,7 @@ The target contract is:
 - `alpha` / `beta` represent epistemic uncertainty about the underlying primitive transition rate;
 - `kappa` represents Bayes-fitted realised-rate overdispersion around that transition rate;
 - FC generates realised predictive transition rates from `alpha` / `beta` plus `kappa` once per selected Cohort per primitive edge, then reuses that realised rate wherever that Cohort's mass crosses the edge;
+- every downstream consumer that asks for FC predictive dispersion reads this same kappa-realised FC surface, whether it renders a chart fan, emits scalar reducer output, or computes a surprise-gauge z-score;
 - `alpha_pred` / `beta_pred` remain serialised for compatibility but stop being the authoritative FC predictive mechanism.
 
 ## 2. Code Facts
@@ -54,6 +55,8 @@ The current collapsed path does this instead:
 That path loses the independence structure. A query containing one selected Cohort and a query containing many independent selected Cohorts can receive predictive variation from the same primitive draw family. The forecast band therefore cannot correctly narrow as selected Cohort count or selected mass increases.
 
 This is not a denominator/numerator semantic change. The displayed rate remains `Y / X` per `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`. This proposal changes only how FC supplies predictive realised transition rates for unresolved future mass.
+
+This is also not chart-only. Chart bands are one consumer of FC predictive dispersion, but the same surface is the predictive-distribution authority for scalar reducers. A scalar consumer must not keep using collapsed `alpha_pred` / `beta_pred` after FC has switched to kappa-realised prediction merely because it does not render a fan.
 
 ## 4. Target Field Contract
 
@@ -239,7 +242,20 @@ This keeps reruns stable and ensures source buckets for the same selected Cohort
 
 Add a new named RNG derivation in `primitives._DERIVATIONS` for the kappa-realised FC probability draw. Do not call `np.random.default_rng` directly and do not reuse `primitive_p_draws`; the realised-rate layer is a distinct random object derived from, but not identical to, the conditioned epistemic primitive draw.
 
-## 12. Transition Plan
+## 12. Scalar Reducer And Surprise Gauge Consumption
+
+The kappa-realised FC surface is the predictive-distribution authority for scalar consumers as well as chart fans.
+
+For the surprise gauge, the intended comparison is between two distributions over the same selected-Cohort scalar:
+
+- the unconditioned model surface on the epistemic basis;
+- the FC surface on the kappa-realised predictive basis.
+
+For `p`, the scalar is the selected-Cohort rate at saturation. For `completeness`, the scalar is the selected-Cohort frontier/saturation rate ratio on the corresponding surface. The surprise-gauge reducer should compute the FC-side dispersion from the kappa-realised FC draw surface; it must not use collapsed `alpha_pred` / `beta_pred` as the FC predictive dispersion except under an explicitly named compatibility fallback.
+
+If the z-score combines uncertainty from both sides, the FC contribution to that denominator is the kappa-realised predictive dispersion of the derived scalar. The unconditioned contribution remains the model-overlay epistemic dispersion. When per-draw difference surfaces are not coherently paired, the conservative scalar approximation is the root-sum-square of the two side-specific SDs.
+
+## 13. Transition Plan
 
 Stage 1: surface `kappa`
 
@@ -276,7 +292,7 @@ Stage 4: clean docs and compatibility
 - Mark `alpha_pred` / `beta_pred` as compatibility / non-FC surfaces.
 - Document the cohort compatibility wrinkle: existing `cohort_alpha_pred` / `cohort_beta_pred` may have been derived from empirical cohort kappa, while `kappa` is the edge-level MCMC runtime field for factorised primitives.
 
-## 13. Acceptance Tests
+## 14. Acceptance Tests
 
 Add a unit-level FC test for aggregation narrowing:
 
@@ -329,7 +345,7 @@ Add central-line and limiting tests:
 
 Keep existing deterministic truth-curve tests deterministic by setting kappa-equivalent dispersion out of the test, as already done for exact curve assertions.
 
-## 14. Non-Goals
+## 15. Non-Goals
 
 Do not remove `alpha_pred` / `beta_pred`.
 

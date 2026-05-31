@@ -1,3 +1,17 @@
+"""CF query-scoped degradation suite.
+
+73q Phase 5a — the ``test_surprise_gauge_*`` functions in this file
+have been renamed to ``_retired_surprise_gauge_*`` so pytest stops
+collecting them. They tested the trajectory-engine-based gauge whose
+implementation no longer exists (the gauge now consumes the scalar
+reducer over the shared CF projection bundle). Replacement coverage
+for each retired test's semantic intent lives in
+``test_surprise_gauge_scalar_reducer.py``. The bodies are preserved
+here purely as historical anchors visible in git diff during the
+review of this migration; a follow-up commit can delete them once
+the lineage is no longer load-bearing.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -22,7 +36,11 @@ from evidence_merge import (
     SourceKind,
     TemporalBasis,
 )
-from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
+from runner.cohort_forecast_v3 import (
+    build_cf_projection_bundle,
+    compute_cohort_maturity_rows_v3,
+    reduce_cf_scalars,
+)
 from runner.forecast_application import compute_completeness
 from runner.model_resolver import ResolvedLatency, ResolvedModelParams
 
@@ -217,9 +235,35 @@ def test_latency_rows_use_shared_sweep_contract():
     assert first['_conditioning'] == {'owner': 'primitive_conditioning'}
     assert first['_conditioned'] is True
 
-    assert last['p_infinity_mean'] is not None
-    assert last['p_infinity_mean'] > 0.20
-    assert last['p_infinity_sd'] == pytest.approx(last['p_infinity_sd_epistemic'])
+    for field in ('p_infinity_mean', 'p_infinity_sd', 'p_infinity_sd_epistemic'):
+        assert field not in last
+
+    bundle = build_cf_projection_bundle(
+        frames=_frames(),
+        graph=_latency_graph(),
+        target_edge_id='edge-1',
+        query_from_node='node-a',
+        query_to_node='node-b',
+        anchor_from='2026-03-25',
+        anchor_to='2026-03-25',
+        sweep_to='2026-04-05',
+        compute_extent=40,
+        is_window=True,
+        resolved_override=_query_scoped_latency_resolved(),
+        per_edge_subject_candidates={
+            'edge-1': _window_candidates_from_frames(_frames()),
+        },
+        scenario_id='cf-query-scoped-test',
+        include_epistemic_overlay=True,
+    )
+    scalars = reduce_cf_scalars(bundle)
+    assert scalars.fc_terminal_rate_mean is not None
+    assert scalars.fc_terminal_rate_mean > 0.20
+    assert scalars.fc_terminal_rate_sd_predictive is not None
+    assert scalars.fc_terminal_rate_sd_predictive > 0.0
+    assert scalars.conditioned_span_terminal_rate_sd_epistemic == pytest.approx(
+        bundle.runtime.public_moments.p_sd_epistemic
+    )
 
 
 @pytest.mark.xfail(
@@ -234,7 +278,7 @@ def test_latency_rows_use_shared_sweep_contract():
     ),
     strict=True,
 )
-def test_surprise_gauge_prefers_temporal_candidate_regime(monkeypatch: pytest.MonkeyPatch):
+def _retired_surprise_gauge_prefers_temporal_candidate_regime(monkeypatch: pytest.MonkeyPatch):
     # NOTE:
     # This is not expected to fail because of the deleted degraded branch.
     # If it goes red, the likely bug is that surprise-gauge regime selection
@@ -372,7 +416,7 @@ def test_surprise_gauge_prefers_temporal_candidate_regime(monkeypatch: pytest.Mo
     assert cohort_p['observed'] != window_p['observed']
 
 
-def test_surprise_gauge_uses_effective_query_dsl_for_temporal_mode(
+def _retired_surprise_gauge_uses_effective_query_dsl_for_temporal_mode(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from runner import model_resolver
@@ -423,7 +467,7 @@ def test_surprise_gauge_uses_effective_query_dsl_for_temporal_mode(
     assert captured == [('edge', 'cohort'), ('path', 'cohort'), ('edge', 'window')]
 
 
-def test_surprise_gauge_preparation_honours_sweep_bounds(
+def _retired_surprise_gauge_preparation_honours_sweep_bounds(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from runner import cohort_maturity_derivation
@@ -525,7 +569,7 @@ def test_surprise_gauge_preparation_honours_sweep_bounds(
     assert p_var['evidence_k'] == 20
 
 
-def test_surprise_gauge_cohort_carrier_uses_cache_keys(
+def _retired_surprise_gauge_cohort_carrier_uses_cache_keys(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from runner import forecast_preparation
@@ -663,7 +707,7 @@ def test_surprise_gauge_cohort_carrier_uses_cache_keys(
     assert captured['p_conditioning_source'] == 'aggregate_evidence'
 
 
-def test_surprise_gauge_mixed_ids_match_same_semantic_graph(
+def _retired_surprise_gauge_mixed_ids_match_same_semantic_graph(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Mixed id/uuid graphs must behave like the same graph with ids==uuids.
@@ -845,85 +889,120 @@ def test_surprise_gauge_mixed_ids_match_same_semantic_graph(
 
 
 def test_cohort_maturity_rows_v3_identity_drift():
-    """UUID metadata must not perturb an ID-keyed BE request graph.
+    """The v3 cohort_maturity reducer must produce identical rows across
+    identity-shape variants that describe the same semantic graph.
 
-    The FE/BE boundary is ID-keyed: node refs in `edge.from` / `edge.to`
-    and in the request DSL are human IDs, while UUID fields may ride along
-    as inert metadata. This test therefore compares an ID-only graph with
-    an equivalent graph carrying UUID metadata, rather than mixing a
-    human-ID query with UUID-keyed edge endpoints.
+    Three variants exercise the id/uuid resolution surface:
+
+      A. id_only             — nodes carry only `id`; edges reference
+                               nodes by their human `id`.
+      B. uuid_metadata       — nodes carry both `id` and `uuid`; edges
+                               still reference by `id`. The canonical
+                               FE/BE shape where uuid is inert metadata
+                               riding on the wire.
+      C. uuid_edge_endpoints — nodes carry both `id` and `uuid`; edges
+                               reference nodes by `uuid` while the
+                               request DSL still queries by `id`. The
+                               reducer must resolve the human-id query
+                               against uuid-keyed edge endpoints via
+                               the node table.
+
+    All three variants run with real candidates so the FC continuation
+    has draws to project — without candidates, `p_infinity_mean` and
+    `completeness` would be undefined by algebra and the comparison
+    would be vacuous. Drift on any compared field means a cache key,
+    lookup, or routing decision somewhere in the reducer pipeline is
+    leaking the wire-level identity choice into the answer.
     """
     frames = _frames()
     resolved = _query_scoped_latency_resolved()
 
-    common_edge = {
-        'uuid': 'edge-1',
-        'from': 'human-a',
-        'to': 'human-b',
-        'p': {
-            'forecast': {'mean': 0.2},
-            'latency': {
-                'latency_parameter': True,
-                'mu': 2.3,
-                'sigma': 0.5,
-                'onset_delta_days': 0.0,
-                't95': 23.0,
-            },
+    # Inline candidate builder so the evidence identity aligns with this
+    # test's human-id naming. The shared `_window_candidates_from_frames`
+    # helper hard-codes 'node-a' / 'node-b' for the sweep-contract test
+    # next door; reusing it here would leave the evidence unbound.
+    identity = EvidenceIdentity(
+        role=EvidenceRole.WINDOW_SUBJECT_HELPER,
+        subject_from='human-a',
+        subject_to='human-b',
+        anchor=None,
+        slice_family=SliceFamily.WINDOW,
+        context_key=None,
+        regime_key=None,
+        population_identity=None,
+    )
+    candidates: list[EvidenceCandidate] = []
+    for frame in frames:
+        snapshot_date = str(frame.get('snapshot_date', ''))[:10]
+        for point in frame.get('data_points') or []:
+            candidates.append(EvidenceCandidate(
+                source=SourceKind.SNAPSHOT,
+                identity=identity,
+                coordinate=ObservationCoordinate(
+                    observed_date=str(point.get('anchor_day', ''))[:10],
+                    retrieved_at=snapshot_date,
+                    temporal_basis=TemporalBasis.WINDOW_DAY,
+                ),
+                n=int(point['x']),
+                k=int(point['y']),
+                provenance={'source': 'test_frame_candidate'},
+            ))
+
+    p_block = {
+        'forecast': {'mean': 0.2},
+        'latency': {
+            'latency_parameter': True,
+            'mu': 2.3,
+            'sigma': 0.5,
+            'onset_delta_days': 0.0,
+            't95': 23.0,
         },
     }
 
-    graph_id_only = {
-        'nodes': [
-            {'id': 'human-a', 'entry': {'is_start': True}},
-            {'id': 'human-b'},
-        ],
-        'edges': [dict(common_edge)],
+    def _build(*, with_uuid: bool, edges_keyed_by_uuid: bool) -> dict:
+        node_a = {'id': 'human-a', 'entry': {'is_start': True}}
+        node_b = {'id': 'human-b'}
+        if with_uuid:
+            node_a['uuid'] = 'uuid-a'
+            node_b['uuid'] = 'uuid-b'
+        edge_from = 'uuid-a' if edges_keyed_by_uuid else 'human-a'
+        edge_to = 'uuid-b' if edges_keyed_by_uuid else 'human-b'
+        return {
+            'nodes': [node_a, node_b],
+            'edges': [{
+                'uuid': 'edge-1',
+                'from': edge_from,
+                'to': edge_to,
+                'p': p_block,
+            }],
+        }
+
+    variants = {
+        'id_only': _build(with_uuid=False, edges_keyed_by_uuid=False),
+        'uuid_metadata': _build(with_uuid=True, edges_keyed_by_uuid=False),
+        'uuid_edge_endpoints': _build(with_uuid=True, edges_keyed_by_uuid=True),
     }
 
-    graph_with_uuid_metadata = {
-        'nodes': [
-            {'id': 'human-a', 'uuid': 'uuid-a', 'entry': {'is_start': True}},
-            {'id': 'human-b', 'uuid': 'uuid-b'},
-        ],
-        'edges': [dict(common_edge)],
-    }
+    def _rows(graph: dict) -> list[dict]:
+        return compute_cohort_maturity_rows_v3(
+            frames=frames,
+            graph=graph,
+            target_edge_id='edge-1',
+            query_from_node='human-a',
+            query_to_node='human-b',
+            anchor_from='2026-03-25',
+            anchor_to='2026-03-25',
+            sweep_to='2026-04-05',
+            compute_extent=40,
+            is_window=True,
+            resolved_override=resolved,
+            per_edge_subject_candidates={'edge-1': candidates},
+            scenario_id='cf-query-scoped-test',
+        )
 
-    rows_id_only = compute_cohort_maturity_rows_v3(
-        frames=frames,
-        graph=graph_id_only,
-        target_edge_id='edge-1',
-        query_from_node='human-a',
-        query_to_node='human-b',
-        anchor_from='2026-03-25',
-        anchor_to='2026-03-25',
-        sweep_to='2026-04-05',
-        compute_extent=40,
-        is_window=True,
-        resolved_override=resolved,
-        scenario_id='cf-query-scoped-test',
-    )
-
-    rows_with_uuid_metadata = compute_cohort_maturity_rows_v3(
-        frames=frames,
-        graph=graph_with_uuid_metadata,
-        target_edge_id='edge-1',
-        query_from_node='human-a',
-        query_to_node='human-b',
-        anchor_from='2026-03-25',
-        anchor_to='2026-03-25',
-        sweep_to='2026-04-05',
-        compute_extent=40,
-        is_window=True,
-        resolved_override=resolved,
-        scenario_id='cf-query-scoped-test',
-    )
-
-    assert len(rows_id_only) == len(rows_with_uuid_metadata), (
-        f"Row count differs between identifier variants: "
-        f"id_only={len(rows_id_only)} "
-        f"with_uuid_metadata={len(rows_with_uuid_metadata)}"
-    )
-    assert rows_id_only, "v3 returned no rows for ID-only variant"
+    results = {name: _rows(graph) for name, graph in variants.items()}
+    baseline = results['id_only']
+    assert baseline, "v3 returned no rows for the baseline (id_only) variant"
 
     compared_fields = (
         'tau_days',
@@ -934,17 +1013,25 @@ def test_cohort_maturity_rows_v3_identity_drift():
         'p_infinity_mean',
         'completeness',
     )
-    for idx, (rs, rm) in enumerate(zip(rows_id_only, rows_with_uuid_metadata)):
-        for key in compared_fields:
-            vs = rs.get(key)
-            vm = rm.get(key)
-            if vs is None and vm is None:
-                continue
-            assert vs == pytest.approx(vm), (
-                f"Identity drift at row {idx} "
-                f"(tau={rs.get('tau_days')}), field '{key}': "
-                f"id-only={vs} with-uuid-metadata={vm}"
-            )
+
+    for name, rows in results.items():
+        if name == 'id_only':
+            continue
+        assert len(rows) == len(baseline), (
+            f"Row count differs between id_only baseline and "
+            f"variant {name!r}: id_only={len(baseline)} {name}={len(rows)}"
+        )
+        for idx, (rb, rv) in enumerate(zip(baseline, rows)):
+            for key in compared_fields:
+                vb = rb.get(key)
+                vv = rv.get(key)
+                if vb is None and vv is None:
+                    continue
+                assert vb == pytest.approx(vv), (
+                    f"Identity drift at row {idx} "
+                    f"(tau={rb.get('tau_days')}), field '{key}': "
+                    f"id_only={vb} {name}={vv}"
+                )
 
 
 def test_daily_conversions_uses_shared_sweep_surface(
@@ -1022,7 +1109,10 @@ def test_daily_conversions_uses_shared_sweep_surface(
 
     assert cohort_row['latency_bands']
     for tau_label, payload in cohort_row['latency_bands'].items():
-        assert payload['source'] == 'forecast'
+        # 73q 4R: backend latency bands are a uniform FC-plane readout.
+        # Evidence/forecast display classification is derived FE-side from
+        # band tau versus the row's frontier_age, not emitted as `source`.
+        assert 'source' not in payload
         assert payload['rate'] >= 0
         assert payload['bands']
 
@@ -1116,7 +1206,7 @@ def _assert_no_data_gauge_render(result: dict) -> None:
     assert p['evidence_k'] == 0
 
 
-def test_surprise_gauge_renders_when_preparation_has_no_rows(
+def _retired_surprise_gauge_renders_when_preparation_has_no_rows(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """`total_rows == 0` must NOT early-return _unavailable."""
@@ -1152,7 +1242,7 @@ def test_surprise_gauge_renders_when_preparation_has_no_rows(
     _assert_no_data_gauge_render(result)
 
 
-def test_surprise_gauge_renders_when_no_frames(
+def _retired_surprise_gauge_renders_when_no_frames(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Derivation returning `{'frames': []}` must NOT early-return."""
@@ -1191,7 +1281,7 @@ def test_surprise_gauge_renders_when_no_frames(
     _assert_no_data_gauge_render(result)
 
 
-def test_surprise_gauge_renders_when_last_frame_has_no_data_points(
+def _retired_surprise_gauge_renders_when_last_frame_has_no_data_points(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Last frame with empty `data_points` must NOT early-return."""
@@ -1233,7 +1323,7 @@ def test_surprise_gauge_renders_when_last_frame_has_no_data_points(
     _assert_no_data_gauge_render(result)
 
 
-def test_surprise_gauge_renders_when_no_cohorts_match_anchor_window(
+def _retired_surprise_gauge_renders_when_no_cohorts_match_anchor_window(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """data_points exist but anchor_from/to filter drops them all — this

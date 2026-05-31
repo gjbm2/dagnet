@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
 ANCHOR_DAY = "2026-01-01"
+ANCHOR_DAY_UK = "1-Jan-26"
 AS_AT_DAY = "2026-01-11"
 EVAL_TAU = 10
 SLICE_KEY = "window(1-Jan-26:1-Jan-26)"
@@ -156,7 +157,7 @@ def test_single_cohort_date_row_aligns_with_tau_row_when_latency_saturates_at_ev
     daily_rows = daily.get("rate_by_cohort") or []
     assert len(daily_rows) == 1
     daily_row = daily_rows[0]
-    assert daily_row["date"] == ANCHOR_DAY
+    assert daily_row["date"] == ANCHOR_DAY_UK
     assert daily_row["x"] == 100
     assert daily_row["y"] == 50
 
@@ -169,10 +170,22 @@ def test_single_cohort_date_row_aligns_with_tau_row_when_latency_saturates_at_ev
     assert EVAL_TAU in by_tau
     tau_row = by_tau[EVAL_TAU]
 
-    assert tau_row["completeness"] is not None
-    assert tau_row["completeness"] > 0.999
-    assert daily_row["completeness"] == pytest.approx(
-        tau_row["completeness"], abs=1e-12,
+    # 73q Phase 5e Step C: cohort_maturity rows no longer carry a
+    # query-level `completeness` scalar (the scalar reducer is the
+    # source of truth — see plan §5e). Daily-conversions rows still
+    # carry per-Cohort completeness from `bundle.completeness_by_cohort`.
+    # For this single-Cohort, saturating fixture the per-Cohort value
+    # and the tau-row's N-weighted scalar were strictly equal by
+    # construction; the architectural unification of the bundle
+    # preserves that — the cross-reducer parity is now structural
+    # rather than a runtime cross-check, so the saturating assertion
+    # lives on the daily side only.
+    assert daily_row["completeness"] is not None
+    assert daily_row["completeness"] > 0.999
+    assert "completeness" not in tau_row, (
+        "cohort_maturity rows no longer expose `completeness` post-Phase-5e;"
+        " param-pack and CF endpoint consume the scalar reducer's output"
+        " (`p.latency.completeness`) directly."
     )
     assert daily_row["forecast_bands"] == tau_row["fan_bands"]
     assert daily_row["forecast_y"] == pytest.approx(

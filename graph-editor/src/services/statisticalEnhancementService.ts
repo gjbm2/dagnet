@@ -56,6 +56,7 @@ import {
   MC_DRAWS,
   SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
   SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+  SATURATION_PERCENTILE,
 } from '../constants/latency';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
@@ -2105,6 +2106,7 @@ export function enhanceGraphLatencies(
     MC_DRAWS: forecasting?.MC_DRAWS ?? MC_DRAWS,
     SNAPSHOT_OBSERVATION_T95_MULTIPLIER: forecasting?.SNAPSHOT_OBSERVATION_T95_MULTIPLIER ?? SNAPSHOT_OBSERVATION_T95_MULTIPLIER,
     SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER: forecasting?.SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER ?? SNAPSHOT_OBSERVATION_PATH_T95_MULTIPLIER,
+    SATURATION_PERCENTILE: forecasting?.SATURATION_PERCENTILE ?? SATURATION_PERCENTILE,
   };
 
   const weightedQuantile = (

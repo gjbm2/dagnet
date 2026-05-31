@@ -139,9 +139,7 @@ Observed evidence fields are separate from projection fields:
 
 Epoch gating is output-layer policy, not data scarcity: the spine generates `ef_*` across the full tau sweep with strict-evidence prefix-pinning. The FE chart layer suppresses the E+F forecast layer in epoch A (where it would coincide with the solid E line and double-draw) and the E mode evidence layer in epoch C (where there are no observations). See [CF_ROW_PIPELINE.md §6.1](CF_ROW_PIPELINE.md#61-display-mode-epoch-mapping) for the full table.
 
-Completeness is projected by `_runtime_completeness` from the same request-rooted composed CDF used by the runtime. Cohort weights come from `cohort_weights` (active: from `a_pop`; identity-carrier: from `evidence_n`/`x_frozen`). Selected A-clock frontier ages drive the eval point when exact selected prefixes exist.
-
-Public scalar row fields `p_infinity_mean`, `p_infinity_sd`, and `p_infinity_sd_epistemic` come from `ResolvedCFRuntime.public_moments`. They are scalar subject-span moments, not a promise that the selected-Cohort group trajectory converges numerically to the final row midpoint.
+Scalar completeness is not a row field. The scalar reducer computes completeness from the same request-rooted runtime surfaces with its own frontier/saturation calculation scope. Cohort-maturity rows remain chart projections; scalar saturation/frontier outputs such as `p@∞` and `completeness@frontier` are emitted by scalar consumers (`conditioned_forecast`, `param-pack`, direct scalar reducer tests), not by `_project_runtime_rows`.
 
 ## 8. Public Scalars and Provenance
 

@@ -35,10 +35,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from runner.cohort_forecast_v3 import reduce_daily_conversions_rows
-from runner.cf_projection_bundle import (
-    COMPLETENESS_EPSILON,
-    MATURITY_THRESHOLD,
-)
 
 _S = 256  # draws
 
@@ -63,7 +59,8 @@ class _Cohort:
                  eval_age, obs_y, x_frozen,
                  ef_x=None, ef_y=None, ef_forecast_x=None,
                  ef_forecast_y=None, ef_rate=None,
-                 completeness=None, observed_x=None, observed_y=None):
+                 completeness=None, observed_x=None, observed_y=None,
+                 strict_x=None, strict_y=None):
         self.anchor = anchor
         self.reason = reason
         self.projection_index = projection_index
@@ -76,6 +73,8 @@ class _Cohort:
         self.ef_forecast_y = ef_forecast_y
         self.ef_rate = ef_rate
         self.completeness = completeness
+        self.strict_x = strict_x
+        self.strict_y = strict_y
         # Observed snapshot row values (owned by derive_daily_conversions).
         self.observed_x = x_frozen if observed_x is None else observed_x
         self.observed_y = obs_y[eval_age] if observed_y is None else observed_y
@@ -94,12 +93,44 @@ def _build(cohorts, *, band_taus, max_tau, completeness_present=True,
     ef_fx = np.zeros((C_proj, _S, T))
     ef_fy = np.zeros((C_proj, _S, T))
     ef_rate = np.full((C_proj, _S, T), np.nan)
+    strict_x = np.zeros((C_proj, T))
+    strict_y = np.zeros((C_proj, T))
+    date_ef_x = np.full((len(cohorts), _S, T), np.nan)
+    date_ef_y = np.full((len(cohorts), _S, T), np.nan)
+    date_ef_fx = np.full((len(cohorts), _S, T), np.nan)
+    date_ef_fy = np.full((len(cohorts), _S, T), np.nan)
+    date_ef_rate = np.full((len(cohorts), _S, T), np.nan)
+    date_f_x = np.full((len(cohorts), _S, T), np.nan)
+    date_f_y = np.full((len(cohorts), _S, T), np.nan)
+    date_f_rate = np.full((len(cohorts), _S, T), np.nan)
+    date_strict_x = np.full((len(cohorts), T), np.nan)
+    date_strict_y = np.full((len(cohorts), T), np.nan)
+    cohort_position = {id(c): idx for idx, c in enumerate(cohorts)}
     for c in admitted:
         ef_x[c.projection_index] = c.ef_x
         ef_y[c.projection_index] = c.ef_y
         ef_fx[c.projection_index] = c.ef_forecast_x
         ef_fy[c.projection_index] = c.ef_forecast_y
         ef_rate[c.projection_index] = c.ef_rate
+        strict_x[c.projection_index] = (
+            c.strict_x if c.strict_x is not None
+            else np.full(T, float(c.observed_x), dtype=np.float64)
+        )
+        strict_y[c.projection_index] = (
+            c.strict_y if c.strict_y is not None
+            else np.full(T, float(c.observed_y), dtype=np.float64)
+        )
+        pos = cohort_position[id(c)]
+        date_ef_x[pos] = c.ef_x
+        date_ef_y[pos] = c.ef_y
+        date_ef_fx[pos] = c.ef_forecast_x
+        date_ef_fy[pos] = c.ef_forecast_y
+        date_ef_rate[pos] = c.ef_rate
+        date_f_x[pos] = c.ef_x * 1.2
+        date_f_y[pos] = c.ef_y * 0.8
+        date_f_rate[pos] = date_f_y[pos] / date_f_x[pos]
+        date_strict_x[pos] = strict_x[c.projection_index]
+        date_strict_y[pos] = strict_y[c.projection_index]
 
     selected_projection = SimpleNamespace(
         ef_x_draws_by_cohort=ef_x,
@@ -122,11 +153,27 @@ def _build(cohorts, *, band_taus, max_tau, completeness_present=True,
     ]
     bundle = SimpleNamespace(
         selected_projection=selected_projection,
+        date_axis_projection=SimpleNamespace(
+            anchor_days=[c.anchor for c in cohorts],
+            f_x_draws=date_f_x,
+            f_y_draws=date_f_y,
+            f_rate_draws=date_f_rate,
+            ef_x_draws=date_ef_x,
+            ef_y_draws=date_ef_y,
+            ef_rate_draws=date_ef_rate,
+            ef_forecast_x=date_ef_fx,
+            ef_forecast_y=date_ef_fy,
+            evidence_x_strict=date_strict_x,
+            evidence_y_strict=date_strict_y,
+            reason=[c.reason for c in cohorts],
+        ),
         completeness_by_cohort=completeness_by_cohort,
         cohort_projection_status=cohort_projection_status,
         cohort_eval_ages=[c.eval_age for c in cohorts],
         frame_evidence=SimpleNamespace(engine_cohorts=engine_cohorts),
         latency_band_taus=list(band_taus),
+        evidence_latency_band_taus=list(band_taus),
+        model_latency_band_taus=list(band_taus),
         max_tau=max_tau,
         cf_mode=cf_mode,
         cf_reason=cf_reason,
@@ -178,33 +225,45 @@ _T = _MAX_TAU + 1
 
 
 def _immature(anchor, proj_idx, reason='root_window_carrier_n',
-              completeness=0.5):
+              completeness=0.5, **overrides):
     """An admitted, immature Cohort: projected_y (≈30) > observed y (18),
     finite forecast residual and rate draws."""
+    observed_y = overrides.pop('observed_y', 18.0)
     return _Cohort(
         anchor, reason=reason, projection_index=proj_idx,
         eval_age=6, obs_y=_obs_y_ramp(18.0, 6), x_frozen=100.0,
-        observed_y=18.0,
+        observed_y=observed_y,
         ef_x=_const_draws(100.0, _T),
         ef_y=_spread_draws(28.0, 32.0, _T),
         ef_forecast_x=_const_draws(0.0, _T),
         ef_forecast_y=_spread_draws(10.0, 14.0, _T),
         ef_rate=_spread_draws(0.28, 0.32, _T),
         completeness=completeness,
+        **overrides,
     )
 
 
 class TestObservedAndScalarFields:
 
-    def test_observed_fields_passthrough_and_evidence_y_equals_y(self):
+    def test_observed_fields_read_reclocked_strict_evidence_surface(self):
+        strict_x = np.full(_T, 92.0, dtype=np.float64)
+        strict_y = np.full(_T, 37.0, dtype=np.float64)
+        c = _immature(
+            '2026-03-10',
+            0,
+            observed_x=100.0,
+            observed_y=18.0,
+            strict_x=strict_x,
+            strict_y=strict_y,
+        )
         bundle, observed = _build(
-            [_immature('2026-03-10', 0)], band_taus=[], max_tau=_MAX_TAU,
+            [c], band_taus=[], max_tau=_MAX_TAU,
         )
         result = reduce_daily_conversions_rows(bundle, observed)
         row = _row_by_date(result, '2026-03-10')
-        assert row['x'] == 100.0
-        assert row['y'] == 18.0
-        assert row['rate'] == pytest.approx(0.18)
+        assert row['x'] == 92.0
+        assert row['y'] == 37.0
+        assert row['rate'] == pytest.approx(37.0 / 92.0)
         assert row['evidence_y'] == row['y']
 
     def test_response_level_fields_preserved_and_scalar_metadata_added(self):
@@ -315,62 +374,58 @@ class TestForecastBands:
 
 class TestCompletenessAndLayer:
 
-    def test_completeness_read_from_bundle_per_cohort(self):
+    def test_completeness_reads_bundle_aligned_scalar(self):
         c = _immature('2026-03-10', 0, completeness=0.42)
+        c.ef_rate[:, c.eval_age] = np.linspace(0.20, 0.40, _S)
+        c.ef_rate[:, _MAX_TAU] = np.linspace(0.50, 0.80, _S)
         bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
         result = reduce_daily_conversions_rows(bundle, observed)
+        # The date reducer is a projection-boundary readout. It consumes
+        # the bundle's cohort_list-aligned completeness scalar; the bundle
+        # builder / scalar reducer own the frontier-terminal ratio maths.
         assert _row_by_date(result, '2026-03-10')['completeness'] == pytest.approx(0.42)
 
-    def test_layer_transitions_from_shared_helper(self):
-        # Three admitted Cohorts spanning the three layer bands; thresholds
-        # come from the shared helper's constants, not hardcoded here.
-        below = COMPLETENESS_EPSILON / 2.0
-        between = (COMPLETENESS_EPSILON + MATURITY_THRESHOLD) / 2.0
-        at_mature = MATURITY_THRESHOLD
+    def test_backend_does_not_emit_display_layer(self):
         cohorts = [
-            _immature('2026-03-10', 0, completeness=below),
-            _immature('2026-03-08', 1, completeness=between),
-            _immature('2026-03-06', 2, completeness=at_mature),
+            _immature('2026-03-10', 0, completeness=0.0),
+            _immature('2026-03-08', 1, completeness=0.5),
+            _immature('2026-03-06', 2, completeness=1.0),
         ]
         bundle, observed = _build(cohorts, band_taus=[], max_tau=_MAX_TAU)
         result = reduce_daily_conversions_rows(bundle, observed)
-        assert _row_by_date(result, '2026-03-10')['layer'] == 'evidence'
-        assert _row_by_date(result, '2026-03-08')['layer'] == 'forecast'
-        assert _row_by_date(result, '2026-03-06')['layer'] == 'mature'
+        for row in result['rate_by_cohort']:
+            assert 'layer' not in row
 
-    def test_layer_is_evidence_when_completeness_unavailable(self):
-        # Admitted Cohort but the runtime produced no CDF readout
-        # (completeness_by_cohort is None): completeness null, layer
-        # degenerates to 'evidence' (the c<=eps branch at c=0).
-        c = _immature('2026-03-10', 0)
-        bundle, observed = _build(
-            [c], band_taus=[], max_tau=_MAX_TAU, completeness_present=False,
-        )
+    def test_completeness_null_when_bundle_value_is_nan(self):
+        c = _immature('2026-03-10', 0, completeness=np.nan)
+        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
         result = reduce_daily_conversions_rows(bundle, observed)
         row = _row_by_date(result, '2026-03-10')
         assert row['completeness'] is None
-        assert row['layer'] == 'evidence'
+        assert 'layer' not in row
 
 
 class TestLatencyBands:
 
-    def test_evidence_side_when_eval_age_at_or_past_band_tau(self):
-        # Cohort matured past band_tau=4: evidence side reads obs_y[4] /
-        # x_frozen as a single rate value.
+    def test_latency_band_is_uniform_fc_plane_readout_past_frontier(self):
         c = _immature('2026-03-10', 0, completeness=0.97)
         c.eval_age = 10
+        c.ef_rate[:, 4] = 0.35
+        c.strict_x = np.full(_T, 100.0, dtype=np.float64)
+        c.strict_y = np.full(_T, 20.0, dtype=np.float64)
+        c.strict_y[4] = 28.0
         bundle, observed = _build(
             [c], band_taus=[(4, '4d')], max_tau=_MAX_TAU,
         )
         result = reduce_daily_conversions_rows(bundle, observed)
         band = _row_by_date(result, '2026-03-10')['latency_bands']['4d']
-        assert band['source'] == 'evidence'
-        assert band['rate'] == pytest.approx(c.obs_y[4] / c.x_frozen)
-        assert 'bands' not in band
+        evidence_band = _row_by_date(result, '2026-03-10')['evidence_latency_bands']['4d']
+        assert 'source' not in band
+        assert band['rate'] == pytest.approx(0.35)
+        assert set(band['bands'].keys()) == {'80', '90'}
+        assert evidence_band['rate'] == pytest.approx(0.28)
 
-    def test_forecast_side_when_eval_age_before_band_tau(self):
-        # band_tau=12 > eval_age=6: forecast side reads per-Cohort FC rate
-        # draws at band_tau, with a median + nested bands.
+    def test_latency_band_is_uniform_fc_plane_readout_before_frontier(self):
         c = _immature('2026-03-10', 0)
         c.eval_age = 6
         bundle, observed = _build(
@@ -378,11 +433,27 @@ class TestLatencyBands:
         )
         result = reduce_daily_conversions_rows(bundle, observed)
         band = _row_by_date(result, '2026-03-10')['latency_bands']['12d']
-        assert band['source'] == 'forecast'
+        assert 'source' not in band
         expected_median = float(np.nanmedian(c.ef_rate[:, 12]))
         assert band['rate'] == pytest.approx(expected_median)
         assert set(band['bands'].keys()) == {'80', '90'}
         assert band['bands']['90'][0] <= band['bands']['80'][0]
+
+    def test_latency_band_carries_fc_and_strict_evidence_contour_values(self):
+        c = _immature('2026-03-10', 0)
+        c.ef_rate[:, 8] = 0.35
+        c.strict_x = np.full(_T, 100.0, dtype=np.float64)
+        c.strict_y = np.full(_T, 20.0, dtype=np.float64)
+        c.strict_y[8] = 28.0
+        bundle, observed = _build(
+            [c], band_taus=[(8, '8d')], max_tau=_MAX_TAU,
+        )
+        result = reduce_daily_conversions_rows(bundle, observed)
+        fc_band = _row_by_date(result, '2026-03-10')['latency_bands']['8d']
+        evidence_band = _row_by_date(result, '2026-03-10')['evidence_latency_bands']['8d']
+
+        assert fc_band['rate'] == pytest.approx(0.35)
+        assert evidence_band['rate'] == pytest.approx(0.28)
 
     def test_band_tau_above_array_horizon_is_null_with_provenance(self):
         # band_tau beyond bundle.max_tau (the FC array horizon): the band
@@ -425,8 +496,11 @@ class TestSkippedCohort:
         assert row['evidence_y'] == 5.0
         # Projection fields all null.
         for f in ('projected_y', 'forecast_y', 'forecast_bands',
-                  'projected_x', 'forecast_x', 'completeness', 'layer', 'latency_bands'):
+                  'projected_x', 'forecast_x'):
             assert row[f] is None, f
+        assert row['latency_bands'] == {'4d': {'rate': None, 'bands': None}}
+        assert row['completeness'] == pytest.approx(0.3)
+        assert 'layer' not in row
         assert row['_projection_provenance']['reason'] == 'no_root_window_evidence'
 
     def test_admitted_cohort_carries_its_provenance_reason(self):

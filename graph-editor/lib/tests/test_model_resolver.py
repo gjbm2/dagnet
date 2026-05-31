@@ -287,7 +287,7 @@ class TestResolverCanonicalContractOverRealGraphs:
         edge = {
             'p': {
                 'forecast': {'mean': 0.5},
-                'latency': {'mu': 2.0, 'sigma': 0.5},
+                'latency': {'latency_parameter': True, 'mu': 2.0, 'sigma': 0.5},
                 'model_vars': [{
                     'source': 'manual',
                     'source_at': '1-Apr-26',
@@ -319,6 +319,7 @@ class TestResolverCanonicalContractOverRealGraphs:
             'p': {
                 'forecast': {'mean': 0.6},
                 'latency': {
+                    'latency_parameter': True,
                     'mu': 3.5,
                     'sigma': 0.8,
                     'onset_delta_days': 2.0,
@@ -354,7 +355,7 @@ class TestResolverCanonicalContractOverRealGraphs:
         edge = {
             'p': {
                 'forecast': {'mean': 0.5},
-                'latency': {'mu': 2.0, 'sigma': 0.5},
+                'latency': {'latency_parameter': True, 'mu': 2.0, 'sigma': 0.5},
                 'model_source_preference': 'analytic',
                 'model_vars': [
                     {
@@ -405,7 +406,7 @@ class TestResolverNonBayes:
         edge = {
             'p': {
                 'forecast': {'mean': 0.4},
-                'latency': {'mu': 3.0, 'sigma': 0.6},
+                'latency': {'latency_parameter': True, 'mu': 3.0, 'sigma': 0.6},
                 'model_vars': [{
                     'source': 'analytic',
                     'latency': {'mu': 3.0, 'sigma': 0.6, 'onset_delta_days': 0.0},
@@ -447,6 +448,7 @@ class TestResolverNonBayes:
             'p': {
                 'forecast': {'mean': 0.3},
                 'latency': {
+                    'latency_parameter': True,
                     'mu': 2.5, 'sigma': 0.5,
                     'path_mu': 3.2, 'path_sigma': 0.7,
                     'path_onset_delta_days': 1.0,
@@ -489,6 +491,7 @@ class TestResolverNonBayes:
             'p': {
                 'forecast': {'mean': 0.5},
                 'latency': {
+                    'latency_parameter': True,
                     'mu': 1.0, 'sigma': 0.3,  # stale flat fields
                     'posterior': {
                         'mu_mean': 2.2, 'sigma_mean': 0.45,
@@ -530,7 +533,7 @@ class TestResolverNonBayes:
         edge = {
             'p': {
                 'forecast': {'mean': 0.25},
-                'latency': {'mu': 4.0, 'sigma': 1.0},
+                'latency': {'latency_parameter': True, 'mu': 4.0, 'sigma': 1.0},
                 # No posterior, no model_vars, no evidence
             }
         }
@@ -555,7 +558,7 @@ class TestResolverNonBayes:
         edge = {
             'p': {
                 'forecast': {'mean': 0.25},
-                'latency': {'mu': 4.0, 'sigma': 1.0},
+                'latency': {'latency_parameter': True, 'mu': 4.0, 'sigma': 1.0},
                 'evidence': {'n': 1000, 'k': 250, 'mean': 0.25},
                 # No posterior, no model_vars — upstream binding
                 # did not populate the aggregate Beta shape.
@@ -995,6 +998,7 @@ class TestBayesVarsSidecarSourceMass:
                     'n_loo_obs': window_slice['n_loo_obs'],
                 },
                 'latency': {
+                    'latency_parameter': True,
                     'mu': window_slice['mu_mean'],
                     'sigma': window_slice['sigma_mean'],
                     'onset_delta_days': window_slice['onset_mean'],

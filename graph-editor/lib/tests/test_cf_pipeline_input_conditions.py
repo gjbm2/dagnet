@@ -82,6 +82,7 @@ def _single_edge_graph(
                 'id': 'p-test',
                 'forecast': {'mean': p_mean},
                 'latency': {
+                    'latency_parameter': True,
                     'mu': mu,
                     'sigma': sigma,
                     'onset_delta_days': onset,
@@ -124,6 +125,7 @@ def _two_edge_graph(
             'id': f'p-{p}-{mu}',
             'forecast': {'mean': p},
             'latency': {
+                'latency_parameter': True,
                 'mu': mu, 'sigma': sigma, 'onset_delta_days': onset,
                 't95': 30.0, 'promoted_t95': 30.0,
                 'mu_sd': 0.10, 'sigma_sd': 0.05, 'onset_sd': 0.5,

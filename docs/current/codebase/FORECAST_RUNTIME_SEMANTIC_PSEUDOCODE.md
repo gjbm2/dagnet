@@ -252,9 +252,8 @@ for each primitive U -> V:
         residual_prob_s = 1 - p_s * CDF_s(last_observed_tau)
         add residual * log(residual_prob_s)
 
-      importance-sample joint (p_s, CDF_s) particles with ESS control
-      if IS cannot reach target ESS:
-        return prior-only(reason = is_failed)
+      importance-sample joint (p_s, CDF_s) particles with full likelihood
+      record ESS as a diagnostic of particle quality
 
   materialise primitive:
     if outcome is prior-only:
@@ -275,7 +274,7 @@ Invariants:
 - Conditioning happens once, at primitive construction.
 - No row projection, scalar projection, chart display, carrier composition, or subject composition reconditions the primitive.
 - Raw under-matured evidence is evidence for the primitive's maturity-aware likelihood, not mature evidence for `p_infinity`.
-- Draw-family coherence is load-bearing: when timing is latent, the same resampled particle index selects both `p_s` and `CDF_s`.
+- Draw-family coherence is load-bearing: when timing is latent, the same full-likelihood resampled particle index selects both `p_s` and `CDF_s`.
 - Non-latent timing is the `F == 1` degeneration of the same plan/evaluate/materialise shape. It uses cohort-distinct latest rows, not the row-level sum of every repeated retrieval.
 - No usable latent likelihood means the unconditioned prior is the answer. The latent path must not fall back to a conjugate update that implicitly treats `F` as 1.
 - Same-retrieval non-identical conflicts skip the whole observed-date group; identical collisions coalesce.
@@ -597,15 +596,15 @@ for each row tau:
     row.rate = absent
 
   row.model_midpoint, row.model_fan_* = model-only overlay at tau
-  row.completeness = runtime completeness at tau
-  row.p_infinity_* = runtime public moments
+  # scalar p@infinity / completeness@frontier are emitted by the scalar reducer,
+  # not by cohort_maturity rows
 ```
 
 Invariants:
 
-- `_project_runtime_rows` is a projection. It does not re-decide carrier, subject span, admission, `p_infinity`, or evidence binding.
+- `_project_runtime_rows` is a chart-row projection. It does not re-decide carrier, subject span, admission, scalar `p@infinity`, or evidence binding.
 - Active evidence-named fields read only from selected A-clock evidence; if that machinery is absent, the fields are absent.
-- Public scalar moments come from `ResolvedCFRuntime.public_moments`, not from the final row's midpoint by convention.
+- Public scalar moments come from the scalar reducer over resolved runtime/bundle surfaces, not from the final row's midpoint by convention.
 
 **Implementation note:** window and `cohort(A = X)` evidence display still reads frame-derived `engine_cohorts` observed prefixes. The later Atom 2 design in [`cohort-maturity-evidence-coverage-design.md`](../cohort-maturity-evidence-coverage-design.md) intends to unify identity-carrier evidence onto the selected-evidence substrate, but that is not the current code path.
 

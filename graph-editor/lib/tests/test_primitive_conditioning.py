@@ -59,6 +59,7 @@ from evidence_merge import (
 )
 from runner.model_resolver import ResolvedLatency, ResolvedModelParams
 from runner.prefix_arrival import PrefixArrivalIdentity, build_prefix_arrival_map
+import runner.primitive_conditioning as primitive_conditioning
 from runner.primitive_conditioning import (
     ConditioningPolicyOptions,
     condition_primitive,
@@ -811,6 +812,120 @@ def test_doc52_blend_uses_keyed_rng_not_fixed_seed():
         'all RNG construction must go through make_rng(key, derivation) '
         'from runner.primitives.'
     )
+
+
+def test_latent_is_uses_full_likelihood_without_ess_tempering():
+    """Maturity-aware IS reports ESS but does not weaken the likelihood.
+
+    The posterior is defined by the full likelihood. ESS is a diagnostic of
+    particle quality, not a control target that changes the answer.
+    """
+    draw_count = 50
+    res = _build_resolution(
+        candidates=[_candidate(
+            observed_date='2026-03-15', n=50, k=20,
+            retrieved_at='2026-03-25',
+        )],
+        draw_count=draw_count,
+    )
+    rm = _resolved_model(
+        alpha=2.0, beta=3.0,
+        alpha_pred=2.0, beta_pred=3.0,
+        mu=2.0, sigma=0.5, mu_sd=1.0,
+        n_effective=None,
+    )
+    prim = condition_primitive(
+        resolution=res,
+        resolved_model=rm,
+        scenario_seed=12345,
+        options=ConditioningPolicyOptions(
+            draw_count=draw_count, timing_cdf_max_tau=30,
+        ),
+    )
+
+    assert prim.status == ConditioningStatus.CONDITIONED
+    assert any(
+        'maturity_aware_mode=maturity_aware_is_joint' in note
+        and 'tempering_lambda=1.0000' in note
+        and 'ess_threshold_enabled=0' in note
+        for note in prim.notes
+    ), f"expected full-likelihood IS provenance; notes={list(prim.notes)}"
+
+
+def test_latent_is_ess_target_is_legacy_flag_only():
+    """The old ESS floor exists only as an opt-in compatibility path."""
+    src_path = Path(__file__).resolve().parent.parent / 'runner' / \
+        'primitive_conditioning.py'
+    src = src_path.read_text(encoding='utf-8')
+    assert 'is_target_ess' not in src
+    assert 'ESS-feasible' not in src
+    assert 'LEGACY_IS_TARGET_ESS' in src
+
+
+def test_latent_is_ess_threshold_flag_restores_tempering(monkeypatch):
+    """The request flag restores λ-search without changing the default."""
+    draw_count = 50
+    res = _build_resolution(
+        candidates=[_candidate(
+            observed_date='2026-03-15', n=50, k=20,
+            retrieved_at='2026-03-25',
+        )],
+        draw_count=draw_count,
+    )
+    rm = _resolved_model(
+        alpha=2.0, beta=3.0,
+        alpha_pred=2.0, beta_pred=3.0,
+        mu=2.0, sigma=0.5, mu_sd=1.0,
+        n_effective=None,
+    )
+
+    def fake_weights_and_ess(log_likelihood, tempering_lambda):
+        weights = np.full(
+            log_likelihood.shape[0],
+            1.0 / float(log_likelihood.shape[0]),
+            dtype=np.float64,
+        )
+        if tempering_lambda <= 0.5:
+            return weights, 25.0
+        return weights, 5.0
+
+    monkeypatch.setattr(
+        primitive_conditioning,
+        '_weights_and_ess',
+        fake_weights_and_ess,
+    )
+
+    prim_default = condition_primitive(
+        resolution=res,
+        resolved_model=rm,
+        scenario_seed=12345,
+        options=ConditioningPolicyOptions(
+            draw_count=draw_count, timing_cdf_max_tau=30,
+            is_ess_threshold_enabled=False,
+        ),
+    )
+    assert any(
+        'tempering_lambda=1.0000' in note
+        and 'ess_threshold_enabled=0' in note
+        for note in prim_default.notes
+    )
+
+    prim_flagged = condition_primitive(
+        resolution=res,
+        resolved_model=rm,
+        scenario_seed=12345,
+        options=ConditioningPolicyOptions(
+            draw_count=draw_count, timing_cdf_max_tau=30,
+            is_ess_threshold_enabled=True,
+        ),
+    )
+    flagged_note = next(
+        note for note in prim_flagged.notes
+        if note.startswith('maturity_aware_mode=')
+    )
+    assert 'ess_threshold_enabled=1' in flagged_note
+    assert 'ess=25.00' in flagged_note
+    assert 'tempering_lambda=1.0000' not in flagged_note
 
 
 # ─── Health diagnostic exposed (ESS-equivalent) ────────────────────────
