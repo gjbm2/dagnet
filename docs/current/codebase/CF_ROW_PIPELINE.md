@@ -5,7 +5,7 @@
 
 > New to the CF cluster? Read [CF_MAP.md](CF_MAP.md) first for orientation and the canonical reading order.
 
-This is the chart-evidence engine for `cohort_maturity_v3` and the row surface the conditioned-forecast endpoint returns. The pipeline is concentrated in `cohort_forecast_v3.py` (lines 4112 onward).
+This is the chart-evidence engine for `cohort_maturity_v3` and the row surface the conditioned-forecast endpoint returns. The pipeline is concentrated in `cohort_forecast_v3.py` (the row builder `_project_runtime_rows`, the bundle builder `build_cf_projection_bundle`, and the tau reducer `reduce_cohort_maturity_rows`).
 
 ---
 
@@ -66,7 +66,7 @@ The selected-cohort cutover (26-May-26) replaced the legacy per-prefix machinery
 
 ### 1a. Data flow vs call order
 
-The 6-step listing above describes the **data flow** — what each layer reads and produces. The **call order** inside the public entry `compute_cohort_maturity_rows_v3` is **interleaved** with the primitive substrate (CF_PRIMITIVE_SUBSTRATE.md Stage A):
+The 6-step listing above describes the **data flow** — what each layer reads and produces. The public entry `compute_cohort_maturity_rows_v3` is now a thin two-call wrapper (73q Phase 2): it calls `build_cf_projection_bundle` (which owns the prep/projection sequence) then `reduce_cohort_maturity_rows`. The **call order** inside `build_cf_projection_bundle` is **interleaved** with the primitive substrate (CF_PRIMITIVE_SUBSTRATE.md Stage A):
 
 ```
 compute_cohort_maturity_rows_v3:
@@ -170,7 +170,7 @@ Observed-evidence fields are separate from projection:
 | `cohorts_covered_base`, `cohorts_covered_projected` | `n_cohorts` reporting observation at-or-before τ | Same |
 | `forecast_y`, `forecast_x` | None (residual semantics only meaningful for active) | `ef_forecast_y` / `ef_forecast_x` (future-only residual emitted directly by the FC continuation DP — no post-hoc subtraction from full model means) |
 
-**Source-of-truth note (post-spine cutover).** Production row evidence/rate fields (`rate`, `rate_pure`, `evidence_x`, `evidence_y`) are emitted by `model_span_spine.project_selected_cohort_rows` — the empirical spine `selected_projection` — **not** by `SelectedAClockEvidence.aggregate_by_tau`. The row builder reads them unconditionally for both identity and active carrier (`cohort_forecast_v3.py:5349-5352`; see the `_row_evidence_source` diagnostic note alongside). `aggregate_by_tau` survives only as a shadow-plan diagnostic surface (`_build_generalised_evidence_shadow_plans`). `rate_strict` / `evidence_*_strict` are per-Cohort forward-filled through each Cohort's `tau_max`, so they are **non-null across the full horizon including epoch C** — epoch-C evidence suppression is an FE display choice (§6), not a `None` in the payload.
+**Source-of-truth note (post-spine cutover).** Production row evidence/rate fields (`rate`, `rate_pure`, `evidence_x`, `evidence_y`) are emitted by `model_span_spine.project_selected_cohort_rows` — the empirical spine `selected_projection` — **not** by `SelectedAClockEvidence.aggregate_by_tau`. The row builder reads them unconditionally for both identity and active carrier (`cohort_forecast_v3.py:1557-1559`; see the `_row_evidence_source` diagnostic note alongside). `aggregate_by_tau` survives only as a shadow-plan diagnostic surface (`_build_generalised_evidence_shadow_plans`). `rate_strict` / `evidence_*_strict` are per-Cohort forward-filled through each Cohort's `tau_max`, so they are **non-null across the full horizon including epoch C** — epoch-C evidence suppression is an FE display choice (§6), not a `None` in the payload.
 
 The old `rate_blended`, terminal-coverage fields, and row-level `p_infinity_*` scalar fields have been removed. E mode reads strict evidence; E+F reads the strict evidence layer plus the FC forecast layer (`ef_*`) per the display-mode mapping in §6. Scalar saturation/frontier outputs (`p@∞`, `completeness@frontier`) are owned by the scalar reducer, not by cohort-maturity rows.
 
@@ -234,7 +234,7 @@ Provenance is recorded per anchor: `'root_window_carrier_n'` / `'empty_frames_pr
 - **Does not re-decide semantics.** I-46. Row schema reads already-resolved runtime objects. If a projection needs information the runtime doesn't expose, fix the runtime — never synthesise the missing piece in the projection.
 - **Does not invent or mutate the operators.** The conditioned and empirical operators are runtime-resolved (`model_span_spine.resolve_request_spans`). The projection reads them through `project_selected_cohort_rows`; it does not rebuild span mass or re-resolve evidence.
 - **Does not patch active rows from local subject evidence.** X-clocked target frames are zeroed by `build_cohort_evidence_from_frames` in active mode. Selected A-clock observations only. Frame-bundle `a` is not an admissible fallback.
-- **Does not run the legacy trajectory engine.** `forecast_state.compute_forecast_trajectory` is post-73n legacy with two surviving callers; the v3 row builder does not reach it. See [CF_HOLD_OUT_ENGINES.md](CF_HOLD_OUT_ENGINES.md).
+- **Does not run the legacy trajectory engine.** The `compute_forecast_trajectory` engine has been deleted — there is no definition and no caller anywhere; only stale comments/docstrings still mention the name. The v3 row builder never reached it. See [CF_HOLD_OUT_ENGINES.md](CF_HOLD_OUT_ENGINES.md).
 
 ---
 

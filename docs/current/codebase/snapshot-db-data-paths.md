@@ -73,7 +73,7 @@ The Bayes evidence binder builds trajectories from these rows. More rows per tra
 - `len(deduped) == 1` → CohortDailyObs (single observation, fallback)
 
 Window obs: denominator = max(x) (fixed for anchor_day), y = cumulative conversions
-Cohort obs: denominator = max(a) (fixed for anchor_day), y = cumulative conversions,
+Cohort obs: denominator = max(x) (the from-node count; the same edge-level denominator used for window obs — the anchor count a is retained only for the display path-rate y/a, not for modelling), y = cumulative conversions,
   cumulative_x = per-age from-node arrivals (growing — upstream latency)
 
 ### Window vs Cohort semantics in trajectories

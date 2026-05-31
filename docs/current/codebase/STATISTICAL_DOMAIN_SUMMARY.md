@@ -359,9 +359,9 @@ sharp/degenerate distribution.
 
 The frontend currently owns fitting:
 
-- **Pure maths layer**: `lagDistributionUtils.ts` (~350 lines) — erf, CDF,
+- **Pure maths layer**: `lagDistributionUtils.ts` (~850 lines) — erf, CDF,
   inverse CDF, fitLagDistribution, toModelSpace
-- **Orchestration layer**: `statisticalEnhancementService.ts` (~3200 lines) —
+- **Orchestration layer**: `statisticalEnhancementService.ts` (~4300 lines) —
   the full LAG pipeline: per-cohort completeness, evidence-forecast blending,
   recency weighting
 - **Onset derivation**: `onsetDerivationService.ts` — derives onset from

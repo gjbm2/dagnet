@@ -2710,7 +2710,6 @@ def reduce_cf_scalars(bundle: 'CFProjectionBundle') -> CFScalarReduction:
 
 def reduce_daily_conversions_rows(
     bundle: 'CFProjectionBundle',
-    observed: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Date reducer (73q Phase 4R): one row per scoped Cohort date, read
     straight off the bundle's cohort_list-aligned ``date_axis_projection``.
@@ -2719,8 +2718,7 @@ def reduce_daily_conversions_rows(
     reducer iterates ``date_axis_projection`` — one entry per
     ``frame_evidence.cohort_list`` date — and emits the strict empirical
     and FC surfaces at saturation (``bundle.max_tau``) for **every** scoped
-    date, not just the observed ones. Response-level calendar totals remain
-    owned by ``derive_daily_conversions``; per-Cohort row evidence fields
+    date, not just the observed ones. Per-Cohort row evidence fields
     (``x`` / ``y`` / ``rate`` / ``evidence_y``) read the re-clocked strict
     empirical surface that shares the selected-Cohort spine with FC.
     Skipped Cohorts are all-NaN slices and read out as ``None`` through the
@@ -2729,9 +2727,8 @@ def reduce_daily_conversions_rows(
     No projection-status branch, no ``min(eval_age, saturation)`` clip, no
     backend ``layer``, no latency-band ``source``: display classification is
     the FE's job, which reads the emitted ``frontier_age`` against each
-    ``band_tau``. Response-level ``data`` / ``cohort_y_at_age`` /
-    ``total_conversions`` / ``date_range`` stay owned by
-    ``derive_daily_conversions`` (``observed``).
+    ``band_tau``. There is no secondary observed-response input: the bundle
+    is the sole authority for canonical daily-conversions output.
     """
     proj = bundle.date_axis_projection
     sat = int(bundle.max_tau)
@@ -2740,23 +2737,12 @@ def reduce_daily_conversions_rows(
     band_taus = bundle.latency_band_taus
     evidence_band_taus = bundle.evidence_latency_band_taus
     model_band_taus = bundle.model_latency_band_taus
-    obs_by_date = {
-        _date_key(row.get('date')): row
-        for row in observed['rate_by_cohort']
-    }
 
     enriched: List[Dict[str, Any]] = []
     for i, anchor_day in enumerate(proj.anchor_days):
-        observed_row = obs_by_date.get(_date_key(anchor_day), {})
         c = completeness[i]
-        strict_x = _finite_number_or_none(proj.evidence_x_strict[i, sat])
-        strict_y = _finite_number_or_none(proj.evidence_y_strict[i, sat])
-        row_x = strict_x
-        row_y = strict_y
-        if row_x is None:
-            row_x = observed_row.get('x')
-        if row_y is None:
-            row_y = observed_row.get('y')
+        row_x = _finite_number_or_none(proj.evidence_x_strict[i, sat])
+        row_y = _finite_number_or_none(proj.evidence_y_strict[i, sat])
         row_rate = (
             row_y / row_x
             if (
@@ -2764,7 +2750,7 @@ def reduce_daily_conversions_rows(
                 and isinstance(row_y, (int, float))
                 and row_x > 0
             )
-            else observed_row.get('rate')
+            else None
         )
         model_x = _nan_mean_or_none(proj.f_x_draws[i, :, sat])
         model_y = _nan_mean_or_none(proj.f_y_draws[i, :, sat])
@@ -2815,8 +2801,7 @@ def reduce_daily_conversions_rows(
                 ),
             }
         enriched.append({
-            **observed_row,
-            'date': observed_row.get('date') or _public_uk_date(anchor_day),
+            'date': _public_uk_date(anchor_day),
             'x': row_x,
             'y': row_y,
             'rate': row_rate,
@@ -2849,8 +2834,13 @@ def reduce_daily_conversions_rows(
             },
         })
 
+    public_dates = [_public_uk_date(anchor_day) for anchor_day in proj.anchor_days]
     return {
-        **observed,
+        'analysis_type': 'daily_conversions',
+        'date_range': {
+            'from': public_dates[0] if public_dates else None,
+            'to': public_dates[-1] if public_dates else None,
+        },
         'rate_by_cohort': enriched,
         'cf_mode': bundle.cf_mode,
         'cf_reason': bundle.cf_reason,

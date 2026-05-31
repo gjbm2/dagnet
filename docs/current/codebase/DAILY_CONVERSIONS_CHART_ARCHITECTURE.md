@@ -10,21 +10,19 @@ How the daily conversions chart renders evidence, forecasts, and uncertainty fro
 
 ### Backend (G.1b engine integration)
 
-The daily conversions handler in `api_handlers.py` (lines ~3198-3450) wires through the generalised forecast engine rather than the legacy `annotate_rows` path:
+The daily conversions handler `_handle_daily_conversions` in `api_handlers.py` (line ~1258) runs entirely on the shared CF projection bundle (73q Phase 4) — there is no longer a bespoke per-edge forecast sweep or `annotate_rows` fallback:
 
-1. Parses `asat()` from DSL via `_resolve_date`
-2. Builds one `CohortEvidence` per `rate_by_cohort` row with `anchor_day`, `eval_date`, `eval_age = maturity_tau`, `frontier_age = real_age`
-3. Calls `compute_forecast_trajectory` once per edge
-4. Reads `cohort_evals` for `projected_y` (mean of `y_draws`), completeness from CDF
-5. Computes per-cohort `forecast_bands` from `y_draws / x` percentiles (80/90/95/99)
-6. For latency edges: computes tau values from inverse CDF at 25/50/75 percentile, runs sweep per tau for latency band data
-7. Falls back to legacy `annotate_rows` if engine fails
+1. Parses `asat()` from the temporal DSL via `parse_asat_from_dsl` (`runner/forecast_runtime.py`)
+2. Admits the shared forecast evidence via `admit_forecast_evidence` (`runner/forecast_admission.py`) and derives the context scope via `extract_forecast_context_scope`
+3. Builds the single shared `CFProjectionBundle` via `prepare_cf_projection_bundle` (`runner/cf_analysis.py`)
+4. Reduces the bundle with the registry-selected date reducer — `reducer_for('daily_conversions')`, which dispatches to `reduce_daily_conversions_rows` in `runner/cohort_forecast_v3.py`
+5. The reducer emits `forecast_bands`, `latency_bands`, `evidence_latency_bands`, and `model_latency_bands` per row, read straight off the bundle's `date_axis_projection` at saturation (`bundle.max_tau`)
 
-Key field: `eval_age` must be set to `maturity_tau` (t95), not the cohort's actual age — otherwise the engine reads at current maturity rather than eventual maturity. `frontier_age` must be `real_age` (not 0) for IS conditioning to fire, since `E_i = N_i * CDF(frontier)`.
+There is no manual `CohortEvidence` construction, no `compute_forecast_trajectory` call (the legacy trajectory engine has been deleted), and no `annotate_rows` fallback path.
 
-### Derivation
+### Derivation (v2 snapshot-analyze path only)
 
-`daily_conversions_derivation.py` produces `cohort_y_at_age` — per-cohort Y values at specific maturity ages. Uses carry-forward aggregation: per-slice Y is carried forward at each age to ensure monotonicity across ages when different slice subsets appear at different ages.
+Note: `daily_conversions_derivation.py` is NOT on the v3 daily-conversions chart path described above. It is still used by the v2 snapshot-analyze path (`_handle_snapshot_analyze_subjects` in `api_handlers.py`), where `derive_daily_conversions` is wired to the `branch_comparison` analysis type. There it produces `cohort_y_at_age` — per-cohort Y values at specific maturity ages, using carry-forward aggregation so per-slice Y is carried forward at each age to ensure monotonicity across ages when different slice subsets appear at different ages.
 
 ### Frontend passthrough
 
@@ -130,4 +128,4 @@ Multi-scenario: uses `buildScenarioLegend` utility from `echartsCommon.ts`. Conc
 | `lib/api_handlers.py` | BE handler with G.1b engine integration (~lines 3198-3450) |
 | `lib/runner/daily_conversions_derivation.py` | `cohort_y_at_age`, carry-forward aggregation |
 | `src/services/__tests__/analysisEChartsService.dispatch.test.ts` | Chart builder tests |
-| `lib/tests/test_daily_conversions.py` | BE engine annotation tests |
+| `lib/tests/test_daily_conversions.py` | `derive_daily_conversions` derivation tests (v2 snapshot path; DR-003/DR-004) |

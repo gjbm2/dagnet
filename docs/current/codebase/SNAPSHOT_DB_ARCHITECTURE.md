@@ -55,11 +55,12 @@ CREATE TABLE snapshots (
     anchor_median_lag_days  REAL,
     anchor_mean_lag_days    REAL,
     onset_delta_days        REAL,
+    write_inputs_json       JSONB,   -- raw write inputs captured at append time
     PRIMARY KEY (param_id, core_hash, slice_key, anchor_day, retrieved_at)
 );
 ```
 
-**14 columns**: 5 PK + 1 audit + 3 counts + 5 latency.
+**15 columns**: 5 PK + 1 audit (`retrieved_at`) + 1 context (`context_def_hashes`) + 3 counts (A/X/Y) + 5 latency + 1 write-inputs (`write_inputs_json`).
 
 ### Timestamp Semantics
 

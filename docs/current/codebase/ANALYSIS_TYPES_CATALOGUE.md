@@ -220,8 +220,11 @@ These compute entirely from in-memory graph data.
 
 ## Snapshot-Based Types (Require Snapshot Database)
 
-These require snapshot data and route to the Python backend via
-`_handle_snapshot_analyze_subjects` in `api_handlers.py`.
+These require snapshot data and route to the Python backend. The dispatcher
+in `api_handlers.py` sends `cohort_maturity` (and the `cohort_maturity_v3`
+alias) to `_handle_cohort_maturity_v3` and `daily_conversions` to
+`_handle_daily_conversions`; the remaining snapshot types (lag_histogram,
+lag_fit, conversion_rate, etc.) route to `_handle_snapshot_analyze_subjects`.
 
 ### lag_histogram
 
@@ -245,7 +248,7 @@ These require snapshot data and route to the Python backend via
 | **Metrics** | conversions, cumulative_conversions, evidence_y, forecast_y, projected_y, completeness |
 | **Chart kinds** | daily_conversions, table, time_series |
 | **Snapshot** | readMode: raw_snapshots |
-| **Engine** | Per-cohort coordinate B via `compute_forecast_trajectory` with `CohortEvidence.eval_age` set to maturity τ. Reads `cohort_evals` from `ForecastTrajectory`. Fallback to legacy `annotate_rows` if engine fails. |
+| **Engine** | Bundle-only (v3). `_handle_daily_conversions` in `api_handlers.py` builds the shared CF projection bundle via `prepare_cf_projection_bundle` (`lib/runner/cf_analysis.py`) and reduces it over the calendar-date axis with `reduce_daily_conversions_rows` (`lib/runner/cohort_forecast_v3.py`). The bundle is built by `build_cf_projection_bundle` on a `ResolvedCFRuntime`. (The legacy `derive_daily_conversions` in `lib/runner/daily_conversions_derivation.py` is off the v3 chart path but still used by the v2 `_handle_snapshot_analyze_subjects` snapshot-analyze path.) |
 | **Display settings** | `show_bars`, `show_rates`, `smooth_lines`, `moving_avg`, `aggregate`, `bayes_band_level`, `show_latency_bands` |
 | **Chart features** | 3-layer stacked bars (E/F/N), dual rate lines with epoch A/B/forecast styling, forecast dispersion bands (MC draws), optional latency bands at 25/50/75 percentile maturity ages. Latency bands only for latency edges. |
 
@@ -336,7 +339,7 @@ from the request and CF falls back to the unconditioned prior
 (`conditioned: false`, no evidence applied).
 
 **Why the BE side must omit it**: the dispatcher in
-`lib/api_handlers.py:521` checks `analysis_type in
+`lib/api_handlers.py:555` checks `analysis_type in
 ANALYSIS_TYPE_SCOPE_RULES`. If present, the request is routed to
 `_handle_snapshot_analyze_subjects`, which validates
 `snapshot_subjects[].core_hash`. The funnel's request payload is

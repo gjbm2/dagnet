@@ -1,6 +1,6 @@
 # BE Runner Cluster (`graph-editor/lib/runner/`)
 
-The Python backend's analysis and forecasting layer. **18,481 LOC across 30+ files** — larger than the entire `bayes/compiler/` tree. This doc is the missing umbrella; before this, the cluster was only addressed indirectly through STATS_SUBSYSTEMS, ANALYSIS_TYPES_CATALOGUE, and FE_BE_STATS_PARALLELISM.
+The Python backend's analysis and forecasting layer (tens of thousands of LOC across 50+ files; the per-file counts below are point-in-time and drift — re-measure before relying on a total) — larger than the entire `bayes/compiler/` tree. This doc is the missing umbrella; before this, the cluster was only addressed indirectly through STATS_SUBSYSTEMS, ANALYSIS_TYPES_CATALOGUE, and FE_BE_STATS_PARALLELISM.
 
 **See also**: [stats-pipeline-schematic.md](stats-pipeline-schematic.md) (single-canvas field-flow schematic), [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) (the canonical four-subsystem disambiguation map and "which Python entry point do I call" table — read that first if you don't know which function you should be calling), [ANALYSIS_TYPES_CATALOGUE.md](ANALYSIS_TYPES_CATALOGUE.md) (per-runner inventory), [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) (FE topo + CF orchestration), [adding-analysis-types.md](adding-analysis-types.md) (developer guide).
 
@@ -20,9 +20,9 @@ graph-editor/lib/runner/
 ├── path_runner.py                    # 836 — path enumeration, pruning, conditional state expansion
 ├── path_runner / state-space         # state = (node, visited_set); exponential in tracked nodes
 │
-├── forecast_state.py                 # 1,819 — compute_forecast_trajectory, compute_forecast_summary, IS conditioning
+├── forecast_state.py                 #   133 — residual support cast only: _warn_legacy_pmean_carrier, _resolve_edge_p, CohortEvidence (the legacy trajectory engine has been deleted)
 ├── forecast_runtime.py               # 1,944 — PreparedForecastRuntimeBundle, rate-conditioning seam
-├── forecast_application.py           #   228 — annotate_rows, annotate_data_point (legacy blend)
+├── forecast_application.py           #    32 — compute_completeness only
 ├── forecast_preparation.py           #   573 — resolve_forecast_subjects, regime selection plumbing
 ├── forecasting_settings.py           #   161 — per-repo forecasting-knob configuration
 │
@@ -35,22 +35,20 @@ graph-editor/lib/runner/
 ├── primitive_readout.py              # 2,609 — four flag-gated readouts: single-hop / multi-hop subject / multi-hop window / active-cohort carrier (73n Stages 5a, 5b, 5c, 6)
 │   (../result_cache.py)              #   279 — generic TTL result-cache utility, registry, clear_all (73n Stage 7; lives one level up at lib/result_cache.py)
 │
-├── cohort_forecast.py                # 1,638 — v1 cohort maturity (legacy, dev-only)
-├── cohort_forecast_v2.py             # 1,210 — v2 cohort maturity (legacy, dev-only)
-├── cohort_forecast_v3.py             # 1,708 — v3 row builder: closed-form non-latency + MC sweep dispatch
+├── cohort_forecast_v3.py             # 2,848 — current CF spine: build_resolved_cf_runtime (ResolvedCFRuntime), build_cf_projection_bundle (CFProjectionBundle), and the three reducers (reduce_cohort_maturity_rows, reduce_daily_conversions_rows, reduce_cf_scalars)
 ├── cohort_maturity_derivation.py     #   299 — virtual frame derivation per (anchor_day, slice_key)
 │
 ├── span_kernel.py                    #   418 — multi-hop span composition via DP convolution
 ├── span_evidence.py                  #   197 — span-level evidence composition (doc 29c)
 ├── span_upstream.py                  #   124 — upstream carrier construction (cohort mode)
-├── span_adapter.py                   #   170 — span ↔ runtime bundle adapter
+├── span_adapter.py                   #   170 — DEAD: span_kernel_to_edge_params was inlined into forecast_runtime.py; no production importers
 │
 ├── model_resolver.py                 #   494 — resolve_model_params: bayesian/analytic/manual promotion
 ├── lag_model_fitter.py               #   549 — /api/lag/recompute-models handler
 ├── lag_distribution_utils.py         #   350 — log-normal CDF/PDF, quantile, moment matching
 ├── lag_fit_derivation.py             #   212 — fit observed-vs-model overlay rows
 │
-├── confidence_bands.py               #   138 — heuristic-σ → MC band reconstruction (FE topo fallback)
+├── confidence_bands.py               #   127 — DEAD: no production importers; the live band system is epistemic_bands.RateBand
 ├── epistemic_bands.py                #   285 — α/β → epistemic confidence band
 ├── mece_aggregation.py               #   116 — MECE-aware sum across slices
 ├── conversion_rate_derivation.py     #   162 — per-bin rate + epistemic block (analysis type)
@@ -73,7 +71,7 @@ analyzer.analyze(request)
    │  ─ parse DSL via query_dsl.parse_query
    │  ─ graph_builder.build_networkx_graph
    │  ─ graph_builder.translate_uuids_to_ids
-   │  ─ predicates.compute_predicates_from_dsl
+   │  ─ analyzer.compute_predicates_from_dsl
    ▼
 adaptor.match_analysis_type(predicates)
    │  ─ matches analysis_types.yaml entry by `when` clause
@@ -92,8 +90,10 @@ runners.run_<analysis_type>(graph, params, ...)
    │     completeness-weighted variance mixture for hi/lo bands
    │
    └─ In-band forecast consumer (cohort_maturity, surprise_gauge)
-         invokes compute_forecast_trajectory or compute_forecast_summary
-         for the requested subject; produces per-tau or scalar output
+         goes through the shared prepare boundary in cf_analysis.py
+         (prepare_cf_projection_bundle / prepare_cf_scalar_bundle) and one
+         of the cohort_forecast_v3 reducers (reduce_cohort_maturity_rows /
+         reduce_cf_scalars); produces per-tau or scalar output
 ```
 
 ## 3. The forecast-engine sub-cluster
@@ -106,8 +106,8 @@ runners.run_<analysis_type>(graph, params, ...)
 |---|---|---|
 | `forecast_preparation.py` | Request → subjects | `resolve_forecast_subjects`: turns an analysis request into a list of `(edge, anchor_from, anchor_to, slice_keys, candidate_regimes)` tuples. Applies regime selection per doc 30, anchor-node resolution, asat handling. |
 | `forecast_runtime.py` | Subjects → runtime bundle | `build_prepared_runtime_bundle`: assembles `PreparedForecastRuntimeBundle` — the immutable plan describing carrier-to-X, subject-span, conditioning evidence, and admission policy for a single subject. **This is the "what to forecast" object.** Read this if you're touching the rate-conditioning seam or planning the direct-`cohort()`-for-`p` path (WP8 / doc 60 — planned, not yet landed; production builders do not enable any WP8 dispatch flag). |
-| `forecast_state.py` | Runtime bundle → output | `compute_forecast_trajectory` (cohort_maturity rows) and `compute_forecast_summary` (surprise gauge). Applies IS conditioning, evaluates per-cohort, returns trajectory or scalar. **This is the "do the forecast" object.** |
-| `forecast_application.py` | Legacy blend | `annotate_rows`, `compute_blended_mean`: the analytic-blend fallback path. Used only when the engine fails or when the caller explicitly opts into the legacy path. |
+| `forecast_state.py` | residual support | Now only `_warn_legacy_pmean_carrier`, `_resolve_edge_p`, and `CohortEvidence` (133 LOC). The trajectory/summary engine it once held has been deleted; the row/scalar output is now produced by the cohort_forecast_v3 reducers over a `CFProjectionBundle`. |
+| `forecast_application.py` | Completeness helper | `compute_completeness` only (32 LOC). The legacy analytic-blend functions (`annotate_rows`, `compute_blended_mean`) have been deleted. |
 
 ### Key dataclasses (in `forecast_runtime.py`)
 
@@ -122,10 +122,11 @@ runners.run_<analysis_type>(graph, params, ...)
 
 | Function | Output | Used by |
 |---|---|---|
-| `compute_forecast_trajectory` | per-tau rows (`p_mean`, `p_sd`, `completeness`, `cohort_evals`, fan draws) | cohort_maturity_v3 row builder, conditioned-forecast handler, daily_conversions chart engine |
-| `compute_forecast_summary` | scalar `(p_mean, p_sd, p_sd_epistemic, completeness, completeness_sd, conditioned, n_cohorts_conditioned, …)` | `handle_conditioned_forecast` whole-graph pass, surprise_gauge handler |
+| `reduce_cohort_maturity_rows` | per-tau rows | cohort_maturity v3 chart path (`compute_cohort_maturity_rows_v3`) |
+| `reduce_cf_scalars` | scalar bundle (p_mean, p_sd, completeness, conditioned, …) | conditioned_forecast handler and the surprise_gauge handler (`_compute_surprise_gauge`) |
+(Both reduce a `CFProjectionBundle`/scalar bundle built by `cf_analysis.prepare_cf_*` and `cohort_forecast_v3.build_cf_projection_bundle`.)
 
-Both are inner kernels. **Analysis runners must not import them directly** — use the public `handle_conditioned_forecast` surface instead. See STATS_SUBSYSTEMS §7 entry-point disambiguation table.
+Both are inner kernels reached through the `cf_analysis` prepare boundary. **Analysis runners must not call the prepare/reduce functions directly** — use the public `handle_conditioned_forecast` surface instead. See STATS_SUBSYSTEMS §7 entry-point disambiguation table.
 
 ## 3a. The conditioned-primitive substrate (73n, default OFF)
 
@@ -203,11 +204,9 @@ For the post-73n CF substrate end-to-end picture see
 
 | File | Status | Notes |
 |---|---|---|
-| `cohort_forecast.py` (1,638) | dev-only | Original cohort maturity row builder. Retained for back-comparison. |
-| `cohort_forecast_v2.py` (1,210) | dev-only | Intermediate. Closer to v3 but predates the closed-form non-latency path. |
-| `cohort_forecast_v3.py` (1,708) | **current** | Production row builder. Post-73m Stage 5 (1-May-26) all cohort_maturity v3 rows flow through the trajectory engine via `compute_cohort_maturity_rows_v3` → `compute_forecast_trajectory` per cohort. Structurally non-latency edges are natural degeneracies of the same span-kernel objects (σ=0 → Dirac-at-zero timing object), not a separate row path. |
+| `cohort_forecast_v3.py` (2,848) | **current** | Production CF spine. cohort_maturity v3 rows flow via `compute_cohort_maturity_rows_v3` → `build_cf_projection_bundle` (CFProjectionBundle) → `reduce_cohort_maturity_rows`. Structurally non-latency edges are natural degeneracies of the same span-kernel objects (σ=0 → Dirac-at-zero timing object), not a separate row path. |
 
-The `cohort_maturity` analysis type now routes to v3. v1/v2 are gated `devOnly: true` in `analysis_types.yaml`.
+The `cohort_maturity` analysis type routes to v3. The v1/v2 cohort-forecast modules have been deleted; `cohort_maturity_v3` remains accepted only as an alias of canonical `cohort_maturity` in the dispatch.
 
 **Unified row path inside v3** (post-73m Stage 5):
 
@@ -260,9 +259,9 @@ These are pure transforms — no DB queries, no MCMC. Their inputs come from the
 When working in this cluster:
 
 - **New analysis runner** → start in `analysis_types.yaml`, then `runners.py`, then update FE registry per [adding-analysis-types.md](adding-analysis-types.md). Do not invent a new forecast path — use `handle_conditioned_forecast` for forecast-backed analyses.
-- **New forecast-engine field** → add to `ForecastSummary` / `CohortForecastAtEval` / `ForecastTrajectory` in `forecast_state.py`, then through `compute_forecast_summary`/`_trajectory`, then expose via `handle_conditioned_forecast` in `api_handlers.py`. See anti-pattern 14 for how to avoid silent drops in `_build_unified_slices`. Post-73m Stage 6, `ForecastTrajectory` carries diagnostic fields naming the source of each load-bearing object: `subject_span_source`, `subject_probability_source`, `is_completeness_source`, `evidence_denominator` (Stage 4); `carrier_reach`, `carrier_cdf_source`, `path_completeness_source`, `legacy_non_latency_router_bypassed` (Stage 6); plus `runtime_bundle_diag` carrying the full carrier provenance (`cdf_source`, `horizon_ratio`, `transition_source`, …). 73n is expected to expand the existing enums for active cohort(A!=X) — `is_completeness_source` to `'prepared_cdf_arr' | 'path_completeness'`, `path_completeness_source` to `'subject_span_only' | 'composed_path_completeness'`, `evidence_denominator` to `'x_at_x' | 'a_at_anchor'`.
+- **New forecast-engine field** → add it to `CFProjectionBundle` (`cf_projection_bundle.py`), populate it in `build_cf_projection_bundle`/`prepare_cf_*` (cf_analysis.py), emit it from the relevant reducer in `cohort_forecast_v3.py`, then expose via `handle_conditioned_forecast` in `api_handlers.py`. See anti-pattern 14 for how to avoid silent drops in `_build_unified_slices`. Post-73m Stage 6, `ForecastTrajectory` carries diagnostic fields naming the source of each load-bearing object: `subject_span_source`, `subject_probability_source`, `is_completeness_source`, `evidence_denominator` (Stage 4); `carrier_reach`, `carrier_cdf_source`, `path_completeness_source`, `legacy_non_latency_router_bypassed` (Stage 6); plus `runtime_bundle_diag` carrying the full carrier provenance (`cdf_source`, `horizon_ratio`, `transition_source`, …). 73n is expected to expand the existing enums for active cohort(A!=X) — `is_completeness_source` to `'prepared_cdf_arr' | 'path_completeness'`, `path_completeness_source` to `'subject_span_only' | 'composed_path_completeness'`, `evidence_denominator` to `'x_at_x' | 'a_at_anchor'`.
 - **Touching the rate-conditioning seam** → read STATS_SUBSYSTEMS §3.3 first. The seam lives in `forecast_runtime.py:build_prepared_runtime_bundle`. WP8 (doc 60 — direct-`cohort()`-for-`p` rate conditioning, intentionally narrow design: would enable `direct_cohort_enabled` for exact single-hop `cohort(A,X-Y)` only) is **planned, not yet landed**; production builders enable no WP8 dispatch flag, and every live request still goes through the pre-WP8 seam. Post-73n Stage 8, `PreparedConditioningEvidence` is **compatibility metadata only** — read per-primitive provenance (§3a) to determine which evidence family conditioned a primitive, not `p_conditioning_evidence`.
-- **Touching v3 row construction** → there is no router fork to choose; all cohort_maturity v3 rows flow through `compute_forecast_trajectory` post-73m Stage 5. If a future stage adds a route, surface the bypass on `runtime_bundle_diag.legacy_non_latency_router_bypassed` (currently always `True`) so forensic traces can detect it without code inspection.
+- **Touching v3 row construction** → there is no router fork to choose; all cohort_maturity v3 rows flow through `build_cf_projection_bundle` → `reduce_cohort_maturity_rows`. If a future stage adds a route, surface the bypass on `runtime_bundle_diag.legacy_non_latency_router_bypassed` (currently always `True`) so forensic traces can detect it without code inspection.
 - **Touching `build_cohort_evidence_from_frames`** → known AP58 instance on the count axis (the `is_window`-gated fallback at `:750-769` vs the carrier-projection rebuild at `:775-803`). 73n stages 1–8 added the primitive substrate (§3a) that owns the fix; the four strict-xfailed tests in `test_cohort_factorised_outside_in.py` are the regression net. Production flag-ON of the readouts is gated on the maturity-aware likelihood migration follow-up (see §3a). See KNOWN_ANTI_PATTERNS AP58.
 - **Touching the primitive substrate (§3a)** → all four readout flags default OFF; SHADOW mode is the highest recommended in production until the maturity-aware likelihood migration follow-up lands. The single conditioning locus is `primitive_conditioning.py` — never apply subset / effective-evidence / conjugate-update logic in carrier, subject, window, or projection consumers; that's the failure mode the substrate exists to prevent. Cache invalidation is coarse-grained — `result_cache.clear_all()` flushes every registered cache; per-key invalidation is a documented follow-up.
 - **Adding a derivation** → keep it pure; consume engine output, don't fetch directly. Snapshot DB queries belong in `api_handlers.py` (which then calls the derivation).

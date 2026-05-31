@@ -89,9 +89,9 @@ Because `query_dsl.py` does not parse `cohort()`, three auxiliary helpers extrac
 
 | Helper | Location | Extracts |
 |---|---|---|
-| `_extract_temporal_mode(query_dsl)` | [`analysis_subject_resolution.py:398`](../../graph-editor/lib/analysis_subject_resolution.py#L398) | Returns `'cohort'` / `'window'` / `None` by string presence |
-| `_extract_time_bounds(query_dsl)` | [`analysis_subject_resolution.py:474`](../../graph-editor/lib/analysis_subject_resolution.py#L474) | Returns `(anchor_from, anchor_to)` as ISO date strings. Regex handles both `window(start:end)` and `cohort([anchor,]start:end)` — the optional anchor prefix is the AP31 defect site (see Pitfalls below). |
-| `_extract_cohort_anchor_node(query_dsl)` | [`forecast_preparation.py:245`](../../graph-editor/lib/runner/forecast_preparation.py#L245) | Returns the anchor node id from `cohort(anchor,start:end)`, or `None`. Separate concern from `_extract_time_bounds` (anchor vs dates). |
+| `_extract_temporal_mode(query_dsl)` | [`analysis_subject_resolution.py:394`](../../graph-editor/lib/analysis_subject_resolution.py#L394) | Returns `'cohort'` / `'window'` / `None` by string presence |
+| `_extract_time_bounds(query_dsl)` | [`analysis_subject_resolution.py:470`](../../graph-editor/lib/analysis_subject_resolution.py#L470) | Returns `(anchor_from, anchor_to)` as ISO date strings. Regex handles both `window(start:end)` and `cohort([anchor,]start:end)` — the optional anchor prefix is the AP31 defect site (see Pitfalls below). |
+| `_extract_cohort_anchor_node(query_dsl)` | [`forecast_preparation.py:283`](../../graph-editor/lib/runner/forecast_preparation.py#L283) | Returns the anchor node id from `cohort(anchor,start:end)`, or `None`. Separate concern from `_extract_time_bounds` (anchor vs dates). |
 
 These are **not duplicates of each other** — they have distinct outputs. They are duplicate **with the formal parser's responsibility**: each one would disappear if `query_dsl.py` parsed `cohort()`. Until then, add new cohort extractors here (not elsewhere) and keep them adjacent so the redundancy stays visible.
 
@@ -159,7 +159,7 @@ When adding new constraint types:
 
 **Fix**: make the anchor prefix optional in the regex: `cohort\((?:[^,)]*,)?([^:,]*):([^)]*)\)`. Test with both `cohort(start:end)` and `cohort(anchor,start:end)` forms. Check the grammar in `DSL_SYNTAX_REFERENCE.md` before writing DSL regexes.
 
-**Current state**: `_extract_time_bounds` ([`analysis_subject_resolution.py:474`](../../graph-editor/lib/analysis_subject_resolution.py#L474)) implements the fixed regex. AP31 is closed there, but the broader anti-pattern (writing a regex for a DSL clause that the formal parser doesn't own) is the recurring failure mode — the auxiliary helpers in §5 are all candidates for the same defect when their regexes are widened. Promotion of `cohort()` into `query_dsl.py` retires the whole class.
+**Current state**: `_extract_time_bounds` ([`analysis_subject_resolution.py:470`](../../graph-editor/lib/analysis_subject_resolution.py#L470)) implements the fixed regex. AP31 is closed there, but the broader anti-pattern (writing a regex for a DSL clause that the formal parser doesn't own) is the recurring failure mode — the auxiliary helpers in §5 are all candidates for the same defect when their regexes are widened. Promotion of `cohort()` into `query_dsl.py` retires the whole class.
 
 ## Related Docs
 

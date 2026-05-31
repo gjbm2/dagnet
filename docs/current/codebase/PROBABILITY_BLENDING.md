@@ -149,7 +149,7 @@ Changes to join weighting will change which cohorts are considered mature and th
 - **One blend path for all edges** — non-latency edges flow through the unified blend as the `δ(0)` lag degenerate. No skip-no-latency branch. See `statisticalEnhancementService.test.ts` ("processes edges without latency_parameter as the degenerate δ(0) lag case").
 - **Join-aware path horizons** use topological arriving mass (product from start), NOT local edge probability — `pathT95JoinWeightedConstraint.test.ts`.
 - **Completeness must not be polluted by default-injected horizons** — `pathT95CompletenessConstraint.test.ts`.
-- **Graph/file authority for cohort bounding** — `pathT95GraphIsAuthoritative.cohortBounding.test.ts`.
+- **Graph/file authority for cohort bounding** — covered by `cohortRetrievalHorizon.test.ts` (cohort bounding / classification suites). (The former `pathT95GraphIsAuthoritative.cohortBounding.test.ts` was removed; if no test still locks this invariant under the graph-authoritative framing, drop this bullet or re-add a dedicated test.)
 
 ---
 

@@ -21,7 +21,7 @@ The 21-finding defensive-code audit ([source](../project-generalise/cf-defensive
 
 ### `cohort-1apr-falling-k-problem-statement.md`
 
-The dual-prefix object design (§A.1, §A.3, §A.4, §A.6). Cited extensively from `cohort_forecast_v3.py` (`_SelectedSourceDayMass`, `_CarrierOnlyDenominatorPrefix`, `_RateAttributedSubjectPrefix`).
+The dual-prefix object design (§A.1, §A.3, §A.4, §A.6). These were the `_SelectedSourceDayMass` / `_CarrierOnlyDenominatorPrefix` / `_RateAttributedSubjectPrefix` classes in `cohort_forecast_v3.py`; that quadrature-prefix family was deleted at Stage 4 Atom 4.2 and bucket-K placement is now owned by the empirical operator (`runner/bucket_transition.py`). The §A invariants the tracker decided still hold; the classes that once carried them are gone.
 
 | Decides | Open |
 |---|---|
@@ -29,7 +29,7 @@ The dual-prefix object design (§A.1, §A.3, §A.4, §A.6). Cited extensively fr
 
 ### `selected-a-clock-retrieval-frontier-provenance-proposal.md`
 
-Strict observation-support frontiers per anchor. Used by `SelectedAClockEvidence.strict_support_by_anchor` and `_observation_frontier`.
+Strict observation-support frontiers per anchor. The live surface is now `SelectedRetrievalFrontier` / `_build_selected_retrieval_frontier` in `cohort_forecast_v3.py`, with the query-wide datum from `_analysis_observation_frontier_date`. (The earlier `SelectedAClockEvidence.strict_support_by_anchor` / `_observation_frontier` surface was deleted as legacy authority.)
 
 | Decides | Open |
 |---|---|
@@ -49,11 +49,11 @@ Post-73n regression triangulation around the half-bin / midpoint-shift / curvatu
 
 | Decides | Open |
 |---|---|
-| Midpoint shift `0.5` ONLY at the first subject layer ONLY when M_select places mass at multiple source days (`_build_rate_attributed_subject_prefix:3816`). Three-point central curvature correction in `_interpolated_rate_at` (`:3232-3251`). Production source-clock rule chosen against the dual-eval side-channel (`production`/`midpoint`/`integer`/`ff_integer` conventions). | Dual-eval `diagnostic_dual_eval_by_edge` is preserved in `_RateAttributedSubjectPrefix` for future triangulation. AP60 (cumulative-MC drift mistaken for structural bug) is documented; further fixture engineering for `SIMPLE-flat` is the standing follow-up. |
+| Midpoint-shift `0.5`-only-at-the-first-subject-layer and the three-point central curvature correction were decided here; the `_build_rate_attributed_subject_prefix` / `_interpolated_rate_at` helpers and the `_RateAttributedSubjectPrefix` dual-eval channel that once carried them were deleted at Stage 4 Atom 4.2. The production source-clock conventions (`production`/`midpoint`/`integer`/`ff_integer`) are the surviving decision. | The `diagnostic_dual_eval_by_edge` side-channel was removed with the prefix family. AP60 (cumulative-MC drift mistaken for structural bug) is documented; further fixture engineering for `SIMPLE-flat` is the standing follow-up. |
 
 ### `cohort-maturity-selected-cohort-projection-pattern.md`
 
-The selected-cohort projection pattern — Phase 3 admission rule (`a_pop` from root-window carrier `n`, not frame-bundle `a`). Underlies `_root_window_carrier_n_by_anchor_day` and `_build_selected_cohort_projection_bases`.
+The selected-cohort projection pattern — Phase 3 admission rule (`a_pop` from root-window carrier `n`, not frame-bundle `a`). Underlies `_root_window_carrier_n_by_anchor_day`; the a_pop bases are applied over the `engine_cohorts` (`CohortEvidence`) sequence. (The earlier `_build_selected_cohort_projection_bases` helper was removed.)
 
 | Decides | Open |
 |---|---|
@@ -61,11 +61,11 @@ The selected-cohort projection pattern — Phase 3 admission rule (`a_pop` from 
 
 ### `cohort-maturity-selected-a-clock-evidence-clock-adapter-plan.md`
 
-The selected A-clock clock adapter — how subject rows in the X clock get placed onto selected A-days via `_join_conditioned_carrier_backmap`.
+The selected A-clock clock adapter — how subject rows in the X clock get placed onto selected A-days. The mass-attribution method `root_day_shares_on` now lives on `NodeArrivalWeights` (`prefix_arrival.py`); the earlier `_PriorCarrierBackmap` / `_join_conditioned_carrier_backmap` wrappers and the `coverage_root_day_shares_on` transpose were removed in the refactor.
 
 | Decides | Open |
 |---|---|
-| Subject row placement uses the **prior** carrier-only A→X composition (M_select(X)), not the joint-conditioned carrier — the join-conditioned object would re-smooth evidence with the posterior it's meant to inform. `_PriorCarrierBackmap.root_day_shares_on` is the mass-attribution path; `coverage_root_day_shares_on` is the transpose (per-anchor support fraction). | None major — the design landed. |
+| Subject row placement uses the **prior** carrier-only A→X composition (M_select(X)), not the joint-conditioned carrier — the join-conditioned object would re-smooth evidence with the posterior it's meant to inform. `NodeArrivalWeights.root_day_shares_on` (`prefix_arrival.py`) is the mass-attribution path. (The earlier `_PriorCarrierBackmap` wrapper and its `coverage_root_day_shares_on` transpose were removed.) | None major — the design landed. |
 
 ### `post-cf-rebuild-batch-pipeline.md` and `post-cf-rebuild-py-test-audit-7-may-26.md`
 

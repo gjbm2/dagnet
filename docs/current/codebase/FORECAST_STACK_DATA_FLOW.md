@@ -164,7 +164,7 @@ quality gate (§3.2).
 | **I2** | BE → FE | webhook callback OR pull from `/status` | **BayesResultPayload** — per-edge `posterior.slices[]` (each slice carries Beta shape `alpha`/`beta`, predictive `alpha_pred`/`beta_pred`, `n_effective`, `kappa`, latency `mu`/`sigma`/`t95`/`onset_*`, onset observations, provenance, HDI, `evidence_grade`); `posterior.fit_history[]` per `asat`; embedded `evidence`; diagnostics (R̂, ESS, LOO, PPC). Owner: Bayes result schema. |
 | **I3** | FE → file (workspace IDB / file system) | `fileOperationsService` write | **Parameter-file format** (YAML/JSON, per-edge) — `posterior.slices[]`, `posterior.fit_history[]`, `evidence{}` (aggregate counts plus cohort daily-row series), file metadata (hash signatures, fit timestamp, model version). Owner: parameter-file schema. |
 | **I4** | file → graph (in-FE) | `resolvePosteriorSlice(slices, effectiveDsl)` + `buildSliceKey` projection | **In-schema graph fields** (per-edge, single context) — `model_vars[bayesian]` entry with `probability` / `latency` / `onset` blocks; `p.posterior.*` (`alpha`, `beta`, `alpha_pred`, `beta_pred`, `n_effective`, ...); `p.latency.posterior.*` (`mu`, `sigma`, `t95`, `onset_*`, ...). **Conditional probabilities follow the same rule**: each entry under `conditional_p[X]` (using the §1.1 notation for "the entry whose condition string is X" — array form on the live graph, Record form in packs, per 73a §3 rule 7) has its own `p` block (posterior + latency posterior + forecast + evidence + locks) and is re-contexted on the same trigger as the unconditional `p`. Identity is by condition string in both storage forms; on the live graph form (array) access is by walking entries and matching `condition`. **Match-rule is uniform across both call sites**: both the live-edge re-context [Stage 4(e)] and the per-scenario request-graph build [Stage 4(a)] inherit today's `resolvePosteriorSlice` semantics unchanged — exact-match → bare-mode aggregate fallback → undefined (per 73b §3.2a Wiring and §3.8 register entry 4, which explicitly withdraws an earlier "exact-context only" framing). 73b does not relegislate slice-match semantics. Owner: graph schema. |
-| **I5** | file → request graph (in-FE) | `bayesEngorge.ts` per BE call | **Out-of-schema transient fields** on the request-graph copy — `_bayes_evidence` (file evidence + cohort daily-row time series); `_bayes_priors` (priors, `kappa`, latency, onset observations); `_posteriorSlices.fit_history`. Discarded after the BE call. **Owner**: Stage 4(a) request-graph engorgement contract (this plan, §3.2a (ii)). **Producer**: [`bayesEngorge.ts`](../../graph-editor/src/lib/bayesEngorge.ts) (FE). **BE consumers**: BE CF / forecast_runtime (reads `_bayes_evidence` and `_bayes_priors` for IS-conditioning); [`epistemic_bands.py:148-149`](../../graph-editor/lib/runner/epistemic_bands.py#L148-L149) (reads `_posteriorSlices.fit_history`); [`api_handlers.py:2099`](../../graph-editor/lib/api_handlers.py#L2099) (reads `_bayes_evidence` rows to supplement DB-snapshot rows). New consumers join this list explicitly. |
+| **I5** | file → request graph (in-FE) | `bayesEngorge.ts` per BE call | **Out-of-schema transient fields** on the request-graph copy — `_bayes_evidence` (file evidence + cohort daily-row time series); `_bayes_priors` (priors, `kappa`, latency, onset observations); `_posteriorSlices.fit_history`. Discarded after the BE call. **Owner**: Stage 4(a) request-graph engorgement contract (this plan, §3.2a (ii)). **Producer**: [`bayesEngorge.ts`](../../graph-editor/src/lib/bayesEngorge.ts) (FE). **BE consumers**: BE CF / forecast_runtime (reads `_bayes_evidence` and `_bayes_priors` for IS-conditioning); [`epistemic_bands.py:148-149`](../../graph-editor/lib/runner/epistemic_bands.py#L148-L149) (reads `_posteriorSlices.fit_history`); [`runner/evidence_adapters.py`](../../graph-editor/lib/runner/evidence_adapters.py) (parses `_bayes_evidence` rows; consumed via `runner/edge_binding_descriptor.py`) to supplement DB-snapshot rows). New consumers join this list explicitly. |
 | **I6** | FE → data layer | versioned cache OR HTTPS GET data API | **DataFetchRequest** — workspace, scenario DSL, anchor dates, fetchMode (`from-file` / `versioned`), no-snapshot-cache flag. Owner: data-layer API. |
 | **I7** | data layer → FE | response payload | **Typed observation rows** — per-cohort or per-window (`k`, `n`, `dates`, cohort id, ...). Owner: data-layer API. |
 | **I8** | in-FE write | direct property assignment via `UpdateManager` | **`model_vars[analytic]` entry** on the live edge or request graph — window-family + cohort-family Beta shape, latency, provenance per §3.9. Owner: graph schema. |
@@ -374,7 +374,7 @@ contracts** legend at the end of this section.
 
   Other BE consumers of the [I5]-engorged fields:
    • epistemic_bands.py:148-149     reads _posteriorSlices.fit_history
-   • api_handlers.py:2099           reads _bayes_evidence rows
+   • evidence_adapters.py            parses _bayes_evidence rows
                                        (supplements DB snapshot)
 ```
 
@@ -454,15 +454,10 @@ snapshot-style analyses (verified by grep: only
                                 │   no DB snapshot)      │
                                 └────────────────────────┘
                                 ┌─── snapshot router ────┐
-                                │  cohort_maturity →     │
+                                │  cohort_maturity OR    │
+                                │  cohort_maturity_v3 →  │
                                 │   _handle_cohort_      │
                                 │   maturity_v3 [I15]    │
-                                │  cohort_maturity_v2 →  │
-                                │   _handle_cohort_      │
-                                │   maturity_v2          │
-                                │  cohort_maturity_v1 →  │
-                                │   _handle_snapshot_    │
-                                │   analyze_subjects     │
                                 │  lag_histogram /       │
                                 │  lag_fit /             │
                                 │  daily_conversions /   │
@@ -497,7 +492,7 @@ snapshot-style analyses (verified by grep: only
 | Runner-analyze (graph-only types) | No | n/a — render-only AnalysisResponse. |
 | Snapshot-analyze (snapshot-DB types) | No | n/a — render-only result; per-subject series of histograms / counts / rows. |
 | `cohort_maturity_v3` | No | n/a — render-only per-tau row series. **Reads** CF-applied edge state from a prior CF dispatch when present, but does not write back. |
-| `surprise_gauge` | No | n/a — back-end projection of `compute_forecast_summary` per doc 55; reads CF state, does not write. |
+| `surprise_gauge` | No | n/a — scalar-reducer call site over the shared CF scalar bundle (`prepare_cf_scalar_bundle` + `reduce_cf_scalars`) per doc 55; reads CF state, does not write. |
 | Funnel runner (per doc 52) | No (direct) | The funnel runner makes its own whole-graph CF call internally; that CF call's [I12] response is applied to the graph by the standard CF apply path. The funnel response itself is render-only. |
 
 So the entire post-73b graph-write surface for analyse is exactly the
@@ -516,8 +511,8 @@ read-only consumers.
 |----|-----------|-----------|------------------------------|
 | **I13** | in-FE | function call | **`PreparedAnalysisComputeReady`** (from `analysisComputePreparationService.ts`) — shared base for all BE analyse dispatches. Shape: `{ analysisType, analyticsDsl, status, signature, scenarios: [{ scenario_id, name, colour, visibility_mode, graph (post-contexting + engorgement per B.1 [I4]/[I5]), effective_query_dsl, candidate_regimes_by_edge, snapshot_subjects?, analytics_dsl }], displaySettings?, meceDimensions? }`. Owner: `analysisComputePreparationService` (FE). |
 | **I14** | FE → BE → FE | HTTPS POST `/api/runner/analyze` | **AnalysisRequest** — `{ scenarios: [I13.scenarios], analytics_dsl, analysis_type, no_cache?, query_dsl? (deprecated) }`. **Internal dispatch** (BE-side): `analysis_subject_resolution.ANALYSIS_TYPE_SCOPE_RULES` decides whether the type needs a snapshot; if no, falls through to the standard runner registry (analysis_types.yaml). **Response — `AnalysisResponse`**: shape varies per runner (`graph_overview` returns outcome aggregates; `from_node_outcomes` returns per-outcome probabilities; `path_between` returns reach + cost; `conversion_funnel` returns per-stage rows; etc.). The TS-side type union is `AnalysisResponse` in `runAnalysisService.ts` / `graphComputeClient.ts`. **Persistence**: none — render-only. Owner: BE runner registry (`graph-editor/lib/runner/`) + `handle_runner_analyze` in `api_handlers.py`. |
-| **I15** | FE → BE → FE | same `/api/runner/analyze` (internal dispatch when `analysis_type ∈ {cohort_maturity, cohort_maturity_v2, cohort_maturity_v1, cohort_maturity_v3}`) | **`cohort_maturity_v3` request** — same I14 envelope; analysis_type triggers `_handle_cohort_maturity_v3` (api_handlers.py:1510). Reads contexted+engorged request graph (B.1 [I4]/[I5]) AND DB snapshot (BE-internal [I11] — snapshot subjects come from each scenario's `snapshot_subjects` list). **Response**: per-scenario per-tau row series — `{ rows: [{ tau, midpoint, model_midpoint, completeness, completeness_sd, ... }], display_meta?, ... }`. Cohort-maturity v3 also reads the CF-applied edge state on the graph when CF has previously run for the same scenario; it does not invoke CF itself. **Persistence**: none — render-only. Owner: `_handle_cohort_maturity_v3`. |
-| **I16** | FE → BE → FE | same `/api/runner/analyze` (internal dispatch when `analysis_type` is snapshot-aware and not a `cohort_maturity_v*` variant) | **Snapshot-analyse request** — same I14 envelope; analysis_type ∈ `{lag_histogram, lag_fit, daily_conversions, conversion_rate, branch_comparison, surprise_gauge, ...}` triggers `_handle_snapshot_analyze_subjects`. Per-subject DB queries via [I11]. **Response**: per-subject series — histograms / per-day counts / fitted lag distributions / rate bands. `surprise_gauge` is a back-end projection of `compute_forecast_summary` reading CF state (doc 55); does not invoke CF. **Persistence**: none — render-only. Owner: `_handle_snapshot_analyze_subjects` + the per-type sub-handlers in api_handlers.py. |
+| **I15** | FE → BE → FE | same `/api/runner/analyze` (internal dispatch when `analysis_type ∈ {cohort_maturity, cohort_maturity_v3}`) | **`cohort_maturity_v3` request** — same I14 envelope; analysis_type triggers `_handle_cohort_maturity_v3` (api_handlers.py:874). Reads contexted+engorged request graph (B.1 [I4]/[I5]) AND DB snapshot (BE-internal [I11] — snapshot subjects come from each scenario's `snapshot_subjects` list). **Response**: per-scenario per-tau row series — `{ rows: [{ tau, midpoint, model_midpoint, completeness, completeness_sd, ... }], display_meta?, ... }`. Cohort-maturity v3 also reads the CF-applied edge state on the graph when CF has previously run for the same scenario; it does not invoke CF itself. **Persistence**: none — render-only. Owner: `_handle_cohort_maturity_v3`. |
+| **I16** | FE → BE → FE | same `/api/runner/analyze` (internal dispatch when `analysis_type` is snapshot-aware and not a `cohort_maturity_v*` variant) | **Snapshot-analyse request** — same I14 envelope; analysis_type ∈ `{lag_histogram, lag_fit, conversion_rate, branch_comparison, surprise_gauge, ...}` triggers `_handle_snapshot_analyze_subjects` (`daily_conversions` is dispatched separately to `_handle_daily_conversions`, a date-reducer path over the shared CF projection bundle, not to `_handle_snapshot_analyze_subjects`). Per-subject DB queries via [I11]. **Response**: per-subject series — histograms / per-day counts / fitted lag distributions / rate bands. `surprise_gauge` is a scalar-reducer call site over the shared CF scalar bundle (`prepare_cf_scalar_bundle` + `reduce_cf_scalars`) reading CF state (doc 55); does not invoke CF. **Persistence**: none — render-only. Owner: `_handle_snapshot_analyze_subjects` + the per-type sub-handlers in api_handlers.py. |
 | **I17** | BE-internal | reuses [I10] inside its handler | **Funnel runner** (doc 52) — invoked through `/api/runner/analyze` as `conversion_funnel`, but internally fires a **whole-graph CF call** ([I10] / [I11] / [I12]) and applies the result to the graph via the standard CF apply path before extracting the subgraph for the funnel rendering. The funnel response itself is render-only; persistence happens through the embedded CF call's [I12] mapping. Owner: funnel runner (`graph-editor/lib/runner/funnel_engine.py`). |
 
 ## B.5 Post-73e supplement — materialisation contract, CLI parity, `--no-be`
@@ -680,15 +675,25 @@ The substrate is implemented in:
 | [`graph-editor/lib/runner/primitive_readout.py`](../../graph-editor/lib/runner/primitive_readout.py) | Four readouts at the shared row-builder seam (single-hop, multi-hop subject span, multi-hop window, active-cohort carrier) |
 
 These run **between** the existing `forecast_runtime` request-bundle
-preparation and the `forecast_state` trajectory / summary kernel — they
-do not replace those layers, they slot in front of the row builder's
-subject-side and carrier-side reads.
+preparation and the row-reducer seam in `cohort_forecast_v3` — they
+slot in front of the row builder's subject-side and carrier-side reads.
+(The `forecast_state` trajectory/summary kernel this originally fronted
+was retired in 73q Phase 7; `forecast_state.py` now holds only the
+carrier resolver, the legacy-`p.mean` fallback warning, and the
+`CohortEvidence` container.)
 
 ### B.6.2 Flag-gated rollout (default OFF)
 
-Every primitive readout is gated behind an environment variable. All
-four flags default to OFF; the live path remains the pre-73n
-`compute_forecast_trajectory` / `compute_forecast_summary` route.
+The primitive substrate landed on the live spine. The pre-73n
+`compute_forecast_trajectory` trajectory/summary engine that this
+substrate was originally written to shadow was subsequently deleted
+(73q Phase 7), and the four `DAGNET_*` rollout flags described in this
+section no longer exist. The readouts in B.6.1 are now imported
+directly into the live CF spine (`primitive_readout` is imported at
+module top in `cohort_forecast_v3.py`, and by `model_span_spine.py`
+and `request_envelope.py`). Treat the flag table and the
+OFF/SHADOW/ON semantics below as historical 73n rollout context, not
+as a description of the current dispatch.
 
 | Flag | Stage | Surface |
 |---|---|---|

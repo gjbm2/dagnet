@@ -49,7 +49,7 @@ There are currently three categories that matter operationally.
 
 - derived purely from the in-memory graph
 - no snapshot DB request
-- examples: `graph_overview`, `edge_info`
+- examples: `node_info`, `edge_info`
 
 **Snapshot-envelope**
 

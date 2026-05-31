@@ -420,7 +420,7 @@ Invariants:
 - Carry-forward happens per primitive source day before superaddition across source days.
 - Coverage is role-aware. Carrier coverage and subject coverage are computed separately; row coverage is the weaker side.
 
-**Implementation note:** `_row_selected_a_clock_placements` now preserves `(anchor_day, source_day, tau, share)`. `_build_observed_span_evidence_surface` still retains a legacy collapsed `observed_count` for diagnostics / coverage-style chain checks, but active selected-prefix amplitude reads `X_prefix` and the rate-attributed `Y_prefix`, not that raw-k surface.
+**Implementation note:** the live selected-prefix amplitude is built by `model_span_spine.project_selected_cohort_rows`, which materialises the strict cumulative evidence surfaces (`evidence_x_strict`, `evidence_y_strict`, `rate_strict`) on a `SelectedCohortRowProjection`. `_project_runtime_rows` reads those strict surfaces directly; there is no separate raw-`k` `observed_count` surface in the production path. (The earlier `_row_selected_a_clock_placements` / `_build_observed_span_evidence_surface` placement-and-collapse functions were removed in the empirical-spine cutover.)
 
 **Implementation note:** if the unified timing composer cannot populate `M_select` for a downstream subject source node, that node contributes zero and provenance records the missing mass surface. Projection must not reconstruct missing downstream mass from observed evidence.
 
@@ -462,7 +462,7 @@ Invariants:
 - The aggregate is a projection of the selected prefix. It must not repair upstream non-monotonicity by sorting, clipping, cumulative-max, or smoothing.
 - The same prefix object must feed A.9 frontier state; otherwise the epoch A/B seam can gap even if both sides use the same latency weights.
 
-**Implementation note:** `SelectedAClockEvidence.aggregate_by_tau` now receives cells built from `X_prefix` and `Y_prefix`, so the "cells are cumulative paired prefixes" assumption is satisfied for active selected evidence. The aggregate is intentionally not a monotonicity repair layer.
+**Implementation note:** the live per-τ selected aggregate is the cumulative `_cell_at_or_before(τ)` clamp inside `model_span_spine.project_selected_cohort_rows`, emitted as `evidence_x_strict` / `evidence_y_strict` (with `rate_strict`) on the `SelectedCohortRowProjection`. It preserves the "cells are cumulative paired prefixes" assumption for active selected evidence and is intentionally not a monotonicity repair layer. (This replaces the deleted `SelectedAClockEvidence.aggregate_by_tau` authority, whose semantics the strict surface reproduces.)
 
 ## A.9 Selected-Cohort E+F Reduction
 
@@ -536,7 +536,7 @@ Invariants:
 - Pop D and Pop C are valid additive future numerator terms only under the factorised representation.
 - `x_frozen` and `y_frozen` must come from the same selected prefix object that A.8 projects for the evidence line. The seam at `frontier` dovetails by identity only when A.8 and A.9 share that prefix.
 
-**Implementation note:** when `selected_a_clock_evidence` exists, `_selected_cohort_group_rate_draws` treats it as authoritative and does not fall through to legacy `engine_cohorts.obs_x/obs_y` for missing active anchors. The `engine_cohorts` path remains the identity-carrier / window evidence path.
+**Implementation note:** the live selected-Cohort E+F group rate is `SelectedCohortRowProjection.ef_rate_draws`, built by `_project_frontier_continuation_surfaces` and read by `_project_runtime_rows` for midpoint/fan; it is authoritative over the selected prefix and does not fall through to legacy per-anchor `engine_cohorts` observed prefixes for missing active anchors. The `engine_cohorts` (`CohortEvidence`) path remains the identity-carrier / window evidence path.
 
 ## A.10 Model-Only Overlays
 

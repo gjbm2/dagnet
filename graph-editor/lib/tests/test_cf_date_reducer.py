@@ -34,7 +34,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from runner.cohort_forecast_v3 import reduce_daily_conversions_rows
+from runner.cohort_forecast_v3 import reduce_daily_conversions_rows, _date_key
 
 _S = 256  # draws
 
@@ -75,15 +75,14 @@ class _Cohort:
         self.completeness = completeness
         self.strict_x = strict_x
         self.strict_y = strict_y
-        # Observed snapshot row values (owned by derive_daily_conversions).
+        # Legacy comparison values used only to seed default strict surfaces.
         self.observed_x = x_frozen if observed_x is None else observed_x
         self.observed_y = obs_y[eval_age] if observed_y is None else observed_y
 
 
 def _build(cohorts, *, band_taus, max_tau, completeness_present=True,
            cf_mode='sweep', cf_reason=None, promoted_source='analytic'):
-    """Assemble a mock CFProjectionBundle + the matching observed
-    daily-conversions dict (one rate_by_cohort row per cohort)."""
+    """Assemble a mock CFProjectionBundle for the bundle-only date reducer."""
     T = max_tau + 1
     admitted = [c for c in cohorts if c.projection_index is not None]
     admitted.sort(key=lambda c: c.projection_index)
@@ -179,28 +178,14 @@ def _build(cohorts, *, band_taus, max_tau, completeness_present=True,
         cf_reason=cf_reason,
         promoted_source=promoted_source,
     )
-    observed = {
-        'analysis_type': 'daily_conversions',
-        'data': [{'date': '2026-03-01', 'conversions': 7}],
-        'cohort_y_at_age': {},
-        'total_conversions': 7,
-        'date_range': {'from': '2026-03-01', 'to': '2026-03-20'},
-        'rate_by_cohort': [
-            {
-                'date': c.anchor,
-                'x': c.observed_x,
-                'y': c.observed_y,
-                'rate': (c.observed_y / c.observed_x
-                         if c.observed_x > 0 else None),
-            }
-            for c in cohorts
-        ],
-    }
-    return bundle, observed
+    return bundle
 
 
 def _row_by_date(result, date):
-    return next(r for r in result['rate_by_cohort'] if r['date'] == date)
+    return next(
+        r for r in result['rate_by_cohort']
+        if _date_key(r['date']) == _date_key(date)
+    )
 
 
 # ── Fixtures: a representative mixed bundle ──────────────────────────────
@@ -256,10 +241,10 @@ class TestObservedAndScalarFields:
             strict_x=strict_x,
             strict_y=strict_y,
         )
-        bundle, observed = _build(
+        bundle = _build(
             [c], band_taus=[], max_tau=_MAX_TAU,
         )
-        result = reduce_daily_conversions_rows(bundle, observed)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['x'] == 92.0
         assert row['y'] == 37.0
@@ -267,17 +252,13 @@ class TestObservedAndScalarFields:
         assert row['evidence_y'] == row['y']
 
     def test_response_level_fields_preserved_and_scalar_metadata_added(self):
-        bundle, observed = _build(
+        bundle = _build(
             [_immature('2026-03-10', 0)], band_taus=[], max_tau=_MAX_TAU,
             cf_mode='sweep', cf_reason=None, promoted_source='analytic',
         )
-        result = reduce_daily_conversions_rows(bundle, observed)
-        # derive_daily_conversions-owned fields survive untouched.
+        result = reduce_daily_conversions_rows(bundle)
         assert result['analysis_type'] == 'daily_conversions'
-        assert result['data'] == observed['data']
-        assert result['cohort_y_at_age'] == observed['cohort_y_at_age']
-        assert result['total_conversions'] == 7
-        assert result['date_range'] == observed['date_range']
+        assert result['date_range'] == {'from': '10-Mar-26', 'to': '10-Mar-26'}
         # Scalar metadata read straight from the bundle.
         assert result['cf_mode'] == 'sweep'
         assert result['cf_reason'] is None
@@ -285,8 +266,8 @@ class TestObservedAndScalarFields:
 
     def test_row_count_matches_observed_selected_set(self):
         cohorts = [_immature('2026-03-10', 0), _immature('2026-03-08', 1)]
-        bundle, observed = _build(cohorts, band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build(cohorts, band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         assert len(result['rate_by_cohort']) == 2
 
 
@@ -300,8 +281,8 @@ class TestProjectedAndForecast:
         c.ef_y[:, c.eval_age] = 999.0
         c.ef_x[:, _MAX_TAU] = 120.0
         c.ef_y[:, _MAX_TAU] = 44.0
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['projected_x'] == pytest.approx(float(np.mean(c.ef_x[:, _MAX_TAU])))
         assert row['projected_y'] == pytest.approx(float(np.mean(c.ef_y[:, _MAX_TAU])))
@@ -317,8 +298,8 @@ class TestProjectedAndForecast:
         c.ef_forecast_y[:, c.eval_age] = 99.0
         c.ef_forecast_x[:, _MAX_TAU] = 11.0
         c.ef_forecast_y[:, _MAX_TAU] = 9.0
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['forecast_x'] == pytest.approx(float(np.mean(c.ef_forecast_x[:, _MAX_TAU])))
         assert row['forecast_y'] == pytest.approx(float(np.mean(c.ef_forecast_y[:, _MAX_TAU])))
@@ -331,8 +312,8 @@ class TestProjectedAndForecast:
         c.ef_rate = _spread_draws(0.28, 0.32, _T)
         c.ef_rate[:, c.eval_age] = 0.99
         c.ef_rate[:, _MAX_TAU] = 0.33  # terminal column is unmistakable
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['projected_rate'] == pytest.approx(0.33)
         bands = row['forecast_bands']
@@ -346,8 +327,8 @@ class TestForecastBands:
         c.ef_rate = _spread_draws(0.28, 0.32, _T)
         c.ef_rate[:, c.eval_age] = np.linspace(0.80, 0.90, _S)
         c.ef_rate[:, _MAX_TAU] = np.linspace(0.20, 0.60, _S)
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         bands = _row_by_date(result, '2026-03-10')['forecast_bands']
         assert set(bands.keys()) == {'80', '90', '95', '99'}
         assert bands['80'][0] < 0.30
@@ -364,8 +345,8 @@ class TestForecastBands:
     def test_bands_null_when_rate_draws_all_nan(self):
         c = _immature('2026-03-10', 0)
         c.ef_rate = np.full((_S, _T), np.nan)  # moments-only / undefined rate
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['forecast_bands'] is None
         # Count surfaces are independent from rate-band availability.
@@ -378,8 +359,8 @@ class TestCompletenessAndLayer:
         c = _immature('2026-03-10', 0, completeness=0.42)
         c.ef_rate[:, c.eval_age] = np.linspace(0.20, 0.40, _S)
         c.ef_rate[:, _MAX_TAU] = np.linspace(0.50, 0.80, _S)
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         # The date reducer is a projection-boundary readout. It consumes
         # the bundle's cohort_list-aligned completeness scalar; the bundle
         # builder / scalar reducer own the frontier-terminal ratio maths.
@@ -391,15 +372,15 @@ class TestCompletenessAndLayer:
             _immature('2026-03-08', 1, completeness=0.5),
             _immature('2026-03-06', 2, completeness=1.0),
         ]
-        bundle, observed = _build(cohorts, band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build(cohorts, band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         for row in result['rate_by_cohort']:
             assert 'layer' not in row
 
     def test_completeness_null_when_bundle_value_is_nan(self):
         c = _immature('2026-03-10', 0, completeness=np.nan)
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['completeness'] is None
         assert 'layer' not in row
@@ -414,10 +395,10 @@ class TestLatencyBands:
         c.strict_x = np.full(_T, 100.0, dtype=np.float64)
         c.strict_y = np.full(_T, 20.0, dtype=np.float64)
         c.strict_y[4] = 28.0
-        bundle, observed = _build(
+        bundle = _build(
             [c], band_taus=[(4, '4d')], max_tau=_MAX_TAU,
         )
-        result = reduce_daily_conversions_rows(bundle, observed)
+        result = reduce_daily_conversions_rows(bundle)
         band = _row_by_date(result, '2026-03-10')['latency_bands']['4d']
         evidence_band = _row_by_date(result, '2026-03-10')['evidence_latency_bands']['4d']
         assert 'source' not in band
@@ -428,10 +409,10 @@ class TestLatencyBands:
     def test_latency_band_is_uniform_fc_plane_readout_before_frontier(self):
         c = _immature('2026-03-10', 0)
         c.eval_age = 6
-        bundle, observed = _build(
+        bundle = _build(
             [c], band_taus=[(12, '12d')], max_tau=_MAX_TAU,
         )
-        result = reduce_daily_conversions_rows(bundle, observed)
+        result = reduce_daily_conversions_rows(bundle)
         band = _row_by_date(result, '2026-03-10')['latency_bands']['12d']
         assert 'source' not in band
         expected_median = float(np.nanmedian(c.ef_rate[:, 12]))
@@ -445,10 +426,10 @@ class TestLatencyBands:
         c.strict_x = np.full(_T, 100.0, dtype=np.float64)
         c.strict_y = np.full(_T, 20.0, dtype=np.float64)
         c.strict_y[8] = 28.0
-        bundle, observed = _build(
+        bundle = _build(
             [c], band_taus=[(8, '8d')], max_tau=_MAX_TAU,
         )
-        result = reduce_daily_conversions_rows(bundle, observed)
+        result = reduce_daily_conversions_rows(bundle)
         fc_band = _row_by_date(result, '2026-03-10')['latency_bands']['8d']
         evidence_band = _row_by_date(result, '2026-03-10')['evidence_latency_bands']['8d']
 
@@ -462,10 +443,10 @@ class TestLatencyBands:
         c = _immature('2026-03-10', 0)
         c.eval_age = 0  # forces forecast side were it in range
         above = _MAX_TAU + 5
-        bundle, observed = _build(
+        bundle = _build(
             [c], band_taus=[(above, f'{above}d')], max_tau=_MAX_TAU,
         )
-        result = reduce_daily_conversions_rows(bundle, observed)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['latency_bands'][f'{above}d'] is None
         assert (row['_projection_provenance']['latency_bands'][f'{above}d']
@@ -476,37 +457,37 @@ class TestSkippedCohort:
 
     def test_skipped_active_cohort_emits_row_with_null_projection(self):
         # An active Cohort with no admissible root-window carrier evidence:
-        # observed fields populated from snapshot output, all projection
-        # fields null, provenance reason recorded. Not dropped.
+        # strict evidence and projection fields are all null, provenance
+        # reason recorded. Not dropped.
         skipped = _Cohort(
             '2026-03-04', reason='no_root_window_evidence',
             projection_index=None, eval_age=3,
             obs_y=_obs_y_ramp(5.0, 3), x_frozen=40.0,
-            observed_x=40.0, observed_y=5.0, completeness=0.3,
+            observed_x=40.0, observed_y=5.0, completeness=np.nan,
         )
         admitted = _immature('2026-03-10', 0)
-        bundle, observed = _build(
+        bundle = _build(
             [admitted, skipped], band_taus=[(4, '4d')], max_tau=_MAX_TAU,
         )
-        result = reduce_daily_conversions_rows(bundle, observed)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-04')
-        # Observed fields present.
-        assert row['x'] == 40.0
-        assert row['y'] == 5.0
-        assert row['evidence_y'] == 5.0
+        assert row['x'] is None
+        assert row['y'] is None
+        assert row['rate'] is None
+        assert row['evidence_y'] is None
         # Projection fields all null.
         for f in ('projected_y', 'forecast_y', 'forecast_bands',
                   'projected_x', 'forecast_x'):
             assert row[f] is None, f
         assert row['latency_bands'] == {'4d': {'rate': None, 'bands': None}}
-        assert row['completeness'] == pytest.approx(0.3)
+        assert row['completeness'] is None
         assert 'layer' not in row
         assert row['_projection_provenance']['reason'] == 'no_root_window_evidence'
 
     def test_admitted_cohort_carries_its_provenance_reason(self):
         c = _immature('2026-03-10', 0)
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['_projection_provenance']['reason'] == 'root_window_carrier_n'
 
@@ -519,10 +500,10 @@ class TestModeBlindReadout:
     def test_window_and_active_immature_identical_when_arrays_equal(self):
         window = _immature('2026-03-10', 0, reason='root_window_carrier_n')
         active = _immature('2026-03-10', 0, reason='root_window_carrier_n')
-        b1, o1 = _build([window], band_taus=[(12, '12d')], max_tau=_MAX_TAU)
-        b2, o2 = _build([active], band_taus=[(12, '12d')], max_tau=_MAX_TAU)
-        r1 = _row_by_date(reduce_daily_conversions_rows(b1, o1), '2026-03-10')
-        r2 = _row_by_date(reduce_daily_conversions_rows(b2, o2), '2026-03-10')
+        b1 = _build([window], band_taus=[(12, '12d')], max_tau=_MAX_TAU)
+        b2 = _build([active], band_taus=[(12, '12d')], max_tau=_MAX_TAU)
+        r1 = _row_by_date(reduce_daily_conversions_rows(b1), '2026-03-10')
+        r2 = _row_by_date(reduce_daily_conversions_rows(b2), '2026-03-10')
         assert r1['projected_y'] == pytest.approx(r2['projected_y'])
         assert r1['forecast_y'] == pytest.approx(r2['forecast_y'])
         assert r1['forecast_bands'] == r2['forecast_bands']
@@ -536,8 +517,8 @@ class TestModeBlindReadout:
         c.ef_x = _spread_draws(90.0, 94.0, _T)
         c.ef_y = _spread_draws(40.0, 44.0, _T)  # a distinct multi-hop value
         c.ef_rate = _spread_draws(0.40, 0.44, _T)
-        bundle, observed = _build([c], band_taus=[], max_tau=_MAX_TAU)
-        result = reduce_daily_conversions_rows(bundle, observed)
+        bundle = _build([c], band_taus=[], max_tau=_MAX_TAU)
+        result = reduce_daily_conversions_rows(bundle)
         row = _row_by_date(result, '2026-03-10')
         assert row['projected_x'] == pytest.approx(
             float(np.mean(c.ef_x[:, _MAX_TAU])))

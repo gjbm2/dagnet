@@ -230,16 +230,7 @@ class TestDailyConversionsDerivation:
             cf_reason=None,
             promoted_source='analytic',
         )
-        observed = {
-            'analysis_type': 'daily_conversions',
-            'data': [],
-            'cohort_y_at_age': {},
-            'total_conversions': 0,
-            'date_range': {'from': '1-Apr-26', 'to': '1-Apr-26'},
-            'rate_by_cohort': [],
-        }
-
-        result = reduce_daily_conversions_rows(bundle, observed)
+        result = reduce_daily_conversions_rows(bundle)
 
         assert result['rate_by_cohort'][0]['date'] == '1-Apr-26'
         assert result['rate_by_cohort'][0]['date'] != '2026-04-01'

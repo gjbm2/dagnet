@@ -25,7 +25,7 @@ Boundary rule:
 - If logic is Bayes-only (compiler, model construction, inference, worker orchestration), it belongs in **`bayes/`**
 - Entry points may do runtime-specific import wiring (`PYTHONPATH`, `sys.path`) but the shared modules themselves should stay runtime-agnostic
 
-This is why modules such as `snapshot_service.py`, `query_dsl.py`, `graph_types.py`, `snapshot_regime_selection.py`, and `file_evidence_supplement.py` live in `graph-editor/lib/`: they are shared between short-lived API deployments and the long-running Bayes worker.
+This is why modules such as `snapshot_service.py`, `query_dsl.py`, `graph_types.py`, `snapshot_regime_selection.py`, and `evidence_merge.py` live in `graph-editor/lib/`: they are shared between short-lived API deployments and the long-running Bayes worker.
 
 The Modal image copies `graph-editor/lib/` into the worker image and adds it to `PYTHONPATH`; Vercel and the dev server prepend the same directory before importing handlers. That packaging detail is an entry-point concern, not a reason to duplicate shared code under `bayes/` or `api/`.
 
@@ -110,7 +110,7 @@ Key client methods: `health()`, `parseQuery()`, `generateAllParameters()`, `enha
 
 ## Connection Pooling and Result Cache
 
-Added 7-Apr-26. Module-level infrastructure in `lib/snapshot_service.py` that survives across warm Vercel invocations.
+Added 7-Apr-26. Module-level infrastructure in `lib/snapshot_service.py` (connection pool) and the shared `lib/result_cache.py` registry (TTL result cache) that survives across warm Vercel invocations.
 
 ### Vercel function lifecycle
 
@@ -121,7 +121,7 @@ Added 7-Apr-26. Module-level infrastructure in `lib/snapshot_service.py` that su
 
 ### Connection pool
 
-`psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=2)` at module level. Avoids TCP+TLS handshake to Neon on every request.
+`psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=16)` at module level. Avoids TCP+TLS handshake to Neon on every request.
 
 - `_PooledConnection` context manager borrows from pool, returns on exit.
 - Stale connection detection: executes `SELECT 1` on borrow; if it fails, discards and gets a fresh connection.
@@ -130,12 +130,12 @@ Added 7-Apr-26. Module-level infrastructure in `lib/snapshot_service.py` that su
 
 ### TTL result cache
 
-Module-level dict: `_cache[key] → (expiry_timestamp, result)`.
+Named cache in the shared `lib/result_cache.py` registry (`result_cache.make_cache('snapshot', ...)`); each cache owns a store of `key → (expiry_timestamp, result)`.
 
 - **Default TTL**: 15 minutes (matches Vercel warm lifetime).
 - **Max entries**: 256, with LRU eviction (oldest expiry dropped).
 - **Cache key**: SHA256 prefix of `json.dumps({fn_name, args, kwargs}, sort_keys=True, default=str)`.
-- **Thread-safe** via `_cache_lock`.
+- **Thread-safe** via the per-cache `_lock` inside `result_cache.ResultCache`.
 
 **Cached functions** (all read paths): `query_snapshots`, `query_snapshots_for_sweep`, `query_virtual_snapshot`, `get_batch_inventory`, `get_batch_inventory_rich`, `get_batch_inventory_v2`, `batch_anchor_coverage`, `query_snapshot_retrievals`, `query_batch_retrieval_days`, `query_batch_retrievals`, `list_signatures`, `get_signature`.
 
@@ -143,7 +143,7 @@ Module-level dict: `_cache[key] → (expiry_timestamp, result)`.
 
 ### Cache invalidation
 
-- **Write-path**: `append_snapshots` and `delete_snapshots` call `cache_clear()` after successful commit. Full cache nuke — any write can change what any read returns.
+- **Write-path**: `append_snapshots` and `delete_snapshots` call `cache_clear()` after successful commit. This delegates to `result_cache.clear_all()`, which flushes every cache registered under the shared `result_cache` registry (snapshot, primitive-conditioning, and subject-span caches) — any write can change what any read returns.
 - **Explicit**: `cache_clear()` function exposed via `/api/cache/clear` endpoint. For dev/testing after manual DB edits.
 - **TTL expiry**: entries older than 15 min are misses.
 - **Cold start**: empty cache on new instance.
@@ -240,7 +240,7 @@ Key implemented features:
 
 | Component | File | Role |
 |-----------|------|------|
-| `BayesPosteriorCard` | `src/components/analytics/BayesPosteriorCard.tsx` | Renders probability + latency posteriors with quality tier, HDI, ESS, freshness |
+| `PromotedModelCard` | `src/components/analytics/PromotedModelCard.tsx` | Renders the currently-promoted model (Beta probability + lognormal latency) from the L1.5/L2 promoted surfaces; gates HDI/ESS/convergence rows when the promoted source is bayesian |
 | `PosteriorIndicator` | `src/components/shared/PosteriorIndicator.tsx` | Reusable badge + hover popover with convergence warnings |
 | `bayesQualityTier` | `src/utils/bayesQualityTier.ts` | Computes quality tier: failed/warning/good-0..3/no-data with colour palette |
 | `useBayesTrigger` | `src/hooks/useBayesTrigger.ts` | Full roundtrip orchestration: submit, poll, webhook, patch apply |
@@ -274,7 +274,7 @@ SlicePosteriorEntry: alpha, beta_param, p_hdi_lower/upper, mu/sigma mean/sd, ons
 ### Snapshot database schema
 
 - `signature_registry`: param_id, core_hash, canonical_signature, inputs_json, sig_algo
-- `snapshot_data`: param_id, core_hash, slice_key, anchor_day, retrieved_at, A, X, Y, median_lag_days, mean_lag_days, onset_delta_days
+- `snapshots`: param_id, core_hash, slice_key, anchor_day, retrieved_at, A, X, Y, median_lag_days, mean_lag_days, onset_delta_days
 
 ## Key Files
 

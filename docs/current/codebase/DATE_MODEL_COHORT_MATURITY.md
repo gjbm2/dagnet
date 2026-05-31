@@ -81,7 +81,7 @@ Adding `.asat(<date>)` to a DSL string activates six independent code paths. Eac
 3. **[analysis_subject_resolution.py:458-471](../../graph-editor/lib/analysis_subject_resolution.py#L458-L471)** — `_resolve_sweep_bounds` returns `sweep_to = _resolve_date(asat)`. With asat set, sweep is frozen at asat; without, sweep_to drifts to today.
 4. **[snapshot_service.py:707-709](../../graph-editor/lib/snapshot_service.py#L707-L709)** — SQL filter `retrieved_at <= asat` appended when as_at is provided. Same observable effect as #1 but at the DB query layer.
 5. **[snapshot_service.py:2369-2370](../../graph-editor/lib/snapshot_service.py#L2369-L2370)** — `as_at` is part of the `query_virtual_snapshot` cache key.
-6. **[api_handlers.py:3524-3560](../../graph-editor/lib/api_handlers.py#L3524-L3560)** — `_eval_date_str` (used to compute `eval_age` for conditioned_forecast trajectories) is `today` when asat omitted, `parse_asat_from_dsl(...)` when present.
+6. **[api_handlers.py](../../graph-editor/lib/api_handlers.py)** — the eval date used to compute `eval_age` for the conditioned_forecast path is `today` when asat is omitted and `parse_asat_from_dsl(...)` when present; `eval_age` is carried on the CF projection bundle (`cf_projection_bundle.py`), not a standalone `_eval_date_str` helper.
 
 Posterior selection is *not yet* asat-aware in the current BE — `resolve_model_params` always reads the latest available posterior. Doc 42 (`docs/current/project-bayes/42-asat-contract.md`) documents the design for asat-aware fit-history selection but it is not implemented.
 
@@ -132,7 +132,7 @@ The old computation (`tau_solid_max = sweep_to − anchor_to`) is a proxy that h
 
 ### 2.3 `tau_observed` per cohort
 
-Computed in `cohort_forecast.py` (lines 657–681):
+Computed in `runner/cohort_forecast_v3.py` (in the cohort_maturity reducer path, the `tau_observed per cohort` loop):
 
 ```
 tau_observed = min(
@@ -180,8 +180,8 @@ User DSL: window(17-Feb-26:23-Feb-26).asat(12-Mar-26)
       each frame has snapshot_date (currently as_at_date)
                     │
                     ▼
-    compute_cohort_maturity_rows() receives:
-      frames, anchor_from, anchor_to, sweep_to, evidence_retrieved_at
+    compute_cohort_maturity_rows_v3() receives:
+      frames, graph, target_edge_id, anchor_from, anchor_to, sweep_to, compute_extent, as_at (…)
                     │
                     ▼
     Per-cohort tau_observed computed from evidence_retrieved_at
@@ -194,4 +194,4 @@ User DSL: window(17-Feb-26:23-Feb-26).asat(12-Mar-26)
 ## 4. Change Log
 
 - [x] **Renamed `as_at_date` → `snapshot_date`** across frames, FE normalisation (`graphComputeClient.ts`), BE derivation (`cohort_maturity_derivation.py`), api_handlers.py, export service, test fixtures, and all test files. Backward-compatible fallbacks added in FE read paths for cached/old-format data.
-- [x] **Derived rendering zone boundaries from `tau_observed`** in `cohort_forecast.py`. `tau_solid_max = min(tau_observed)`, `tau_future_max = max(tau_observed)`. Chart extent uses separate `tau_chart_extent = sweep_to − anchor_from`. Fallback when no `evidence_retrieved_at`: `tau_observed = tau_max` (sweep_to − anchor).
+- [x] **Derived rendering zone boundaries from `tau_observed`** in `runner/cohort_forecast_v3.py`. `tau_solid_max = min(tau_observed)` across cohorts; `tau_future_max = max(0, sweep_to − anchor_from)` ratcheted up to `tau_solid_max`. Fallback when no `evidence_retrieved_at`: `tau_observed = tau_max`.

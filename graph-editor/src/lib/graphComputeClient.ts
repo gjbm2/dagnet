@@ -691,7 +691,6 @@ export class GraphComputeClient {
    * AnalysisResult with tabular `data` rows — one row per (scenario_id, subject_id, date).
    *
    * Each row contains { date, x, y, rate } from the backend's `rate_by_cohort` output.
-   * Falls back to the raw `data` (ΔY counts) if `rate_by_cohort` is not present.
    */
   private normaliseSnapshotDailyConversionsResponse(
     raw: any,
@@ -738,8 +737,7 @@ export class GraphComputeClient {
 
       const isDailyConversionsResult = (r: any): boolean => {
         if (!r || typeof r !== 'object') return false;
-        if (r.analysis_type === 'daily_conversions') return true;
-        return Array.isArray(r.rate_by_cohort) || (Array.isArray(r.data) && r.data[0]?.conversions !== undefined);
+        return r.analysis_type === 'daily_conversions' && Array.isArray(r.rate_by_cohort);
       };
 
       // Extract all scenario/subject blocks (same shapes as cohort maturity).
@@ -774,13 +772,11 @@ export class GraphComputeClient {
       const data: Array<Record<string, any>> = [];
       let globalDateFrom: string | null = null;
       let globalDateTo: string | null = null;
-      let globalTotalConversions = 0;
 
       for (const b of blocks) {
         const r = b.result;
         if (!isDailyConversionsResult(r)) continue;
 
-        globalTotalConversions += r.total_conversions || 0;
         const dateRange = r.date_range;
         if (dateRange?.from && (!globalDateFrom || normalizeToISO(dateRange.from) < normalizeToISO(globalDateFrom))) {
           globalDateFrom = dateRange.from;
@@ -789,49 +785,33 @@ export class GraphComputeClient {
           globalDateTo = dateRange.to;
         }
 
-        // Prefer rate_by_cohort (Y/X per anchor_day) for charting.
         const rateRows: any[] = Array.isArray(r.rate_by_cohort) ? r.rate_by_cohort : [];
-        if (rateRows.length > 0) {
-          for (const row of rateRows) {
-            data.push({
-              scenario_id: b.scenario_id,
-              subject_id: b.subject_id,
-              date: row.date,
-              x: Number(row.x ?? 0),
-              y: Number(row.y ?? 0),
-              rate: row.rate != null && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null,
-              completeness: row.completeness != null ? Number(row.completeness) : null,
-              frontier_age: row.frontier_age != null ? Number(row.frontier_age) : null,
-              layer: row.layer ?? null,
-              evidence_y: row.evidence_y != null ? Number(row.evidence_y) : null,
-              forecast_x: row.forecast_x != null ? Number(row.forecast_x) : null,
-              forecast_y: row.forecast_y != null ? Number(row.forecast_y) : null,
-              projected_x: row.projected_x != null ? Number(row.projected_x) : null,
-              projected_y: row.projected_y != null ? Number(row.projected_y) : null,
-              projected_rate: row.projected_rate != null ? Number(row.projected_rate) : null,
-              model_projected_x: row.model_projected_x != null ? Number(row.model_projected_x) : null,
-              model_projected_y: row.model_projected_y != null ? Number(row.model_projected_y) : null,
-              model_projected_rate: row.model_projected_rate != null ? Number(row.model_projected_rate) : null,
-              model_forecast_bands: row.model_forecast_bands ?? null,
-              forecast_bands: row.forecast_bands ?? null,
-              latency_bands: row.latency_bands ?? null,
-              evidence_latency_bands: row.evidence_latency_bands ?? null,
-              model_latency_bands: row.model_latency_bands ?? null,
-            });
-          }
-        } else {
-          // Fallback: use the ΔY count data (rate not available).
-          for (const row of (r.data || [])) {
-            data.push({
-              scenario_id: b.scenario_id,
-              subject_id: b.subject_id,
-              date: row.date,
-              conversions: Number(row.conversions ?? 0),
-              x: 0,
-              y: 0,
-              rate: null,
-            });
-          }
+        for (const row of rateRows) {
+          data.push({
+            scenario_id: b.scenario_id,
+            subject_id: b.subject_id,
+            date: row.date,
+            x: Number(row.x ?? 0),
+            y: Number(row.y ?? 0),
+            rate: row.rate != null && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null,
+            completeness: row.completeness != null ? Number(row.completeness) : null,
+            frontier_age: row.frontier_age != null ? Number(row.frontier_age) : null,
+            layer: row.layer ?? null,
+            evidence_y: row.evidence_y != null ? Number(row.evidence_y) : null,
+            forecast_x: row.forecast_x != null ? Number(row.forecast_x) : null,
+            forecast_y: row.forecast_y != null ? Number(row.forecast_y) : null,
+            projected_x: row.projected_x != null ? Number(row.projected_x) : null,
+            projected_y: row.projected_y != null ? Number(row.projected_y) : null,
+            projected_rate: row.projected_rate != null ? Number(row.projected_rate) : null,
+            model_projected_x: row.model_projected_x != null ? Number(row.model_projected_x) : null,
+            model_projected_y: row.model_projected_y != null ? Number(row.model_projected_y) : null,
+            model_projected_rate: row.model_projected_rate != null ? Number(row.model_projected_rate) : null,
+            model_forecast_bands: row.model_forecast_bands ?? null,
+            forecast_bands: row.forecast_bands ?? null,
+            latency_bands: row.latency_bands ?? null,
+            evidence_latency_bands: row.evidence_latency_bands ?? null,
+            model_latency_bands: row.model_latency_bands ?? null,
+          });
         }
       }
 
@@ -878,7 +858,6 @@ export class GraphComputeClient {
         metadata: {
           source: 'snapshot_db',
           date_range: { from: globalDateFrom, to: globalDateTo },
-          total_conversions: globalTotalConversions,
           promoted_source: dcPromotedSource,
         },
         semantics: {
@@ -2269,7 +2248,7 @@ export class GraphComputeClient {
   }
 
   /**
-   * Run snapshot-based analysis (lag histogram or daily conversions).
+   * Run legacy snapshot-query analysis.
    * 
    * Queries the snapshot database and derives analytics.
    * Requires snapshot data to exist for the parameter.
@@ -2489,7 +2468,7 @@ export interface SnapshotAnalysisRequest {
     anchor_to: string;    // ISO date
     slice_keys?: string[];
   };
-  analysis_type: 'lag_histogram' | 'daily_conversions' | 'conversion_rate';
+  analysis_type: 'lag_histogram' | 'conversion_rate';
 }
 
 export interface LagHistogramResult {
@@ -2501,8 +2480,7 @@ export interface LagHistogramResult {
 
 export interface DailyConversionsResult {
   analysis_type: 'daily_conversions';
-  data: Array<{ date: string; conversions: number }>;
-  rate_by_cohort?: Array<{
+  rate_by_cohort: Array<{
     date: string;
     x: number;
     y: number;
@@ -2513,14 +2491,13 @@ export interface DailyConversionsResult {
     forecast_x?: number | null;
     forecast_y?: number | null;
   }>;
-  total_conversions: number;
   date_range: { from: string | null; to: string | null };
 }
 
 export interface SnapshotAnalysisResponse {
   success: boolean;
   error?: string;
-  result?: LagHistogramResult | DailyConversionsResult;
+  result?: LagHistogramResult;
 }
 
 // ============================================================

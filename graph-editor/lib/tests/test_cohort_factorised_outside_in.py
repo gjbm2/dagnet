@@ -1667,12 +1667,10 @@ def test_daily_conversions_date_row_matches_single_cohort_maturity_evidence():
     """One daily-conversions date row must be the date-axis view of the
     same selected-Cohort cell that cohort_maturity exposes on the tau axis.
 
-    Daily's observed calendar ``data`` series remains owned by
-    ``derive_daily_conversions``. The per-Cohort row fields ``x`` / ``y`` /
-    ``rate`` / ``evidence_y`` are different: for a forecast-backed row they
-    must read the re-clocked strict empirical surface from the shared
-    projection bundle, so a mature single-date row matches the corresponding
-    single-Cohort maturity row.
+    Daily's per-Cohort row fields ``x`` / ``y`` / ``rate`` /
+    ``evidence_y`` must read the re-clocked strict empirical surface from
+    the shared projection bundle, so a mature single-date row matches the
+    corresponding single-Cohort maturity row.
     """
     graph_name = "bayes-test-gm-rebuild"
     subject = "from(switch-registered).to(switch-success)"

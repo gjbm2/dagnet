@@ -14,7 +14,7 @@ This doc covers the modules `analysis_subject_resolution.py` and `forecast_prepa
         │
         │  dispatch (analysis_type → handler)
         ▼
-   handler (_handle_cohort_maturity_v3, _handle_conditioned_forecast, …)
+   handler (_handle_cohort_maturity_v3, handle_conditioned_forecast, …)
         │
         │  per scenario:
         ▼
@@ -57,7 +57,7 @@ Takes the request's DSL string, the graph, and the FE-computed `candidate_regime
 
 ### 2.2 The three scope rules
 
-`ANALYSIS_TYPE_SCOPE_RULES` ([analysis_subject_resolution.py:71-84](graph-editor/lib/analysis_subject_resolution.py#L71-L84)) maps each analysis type to one of three scope rules:
+`ANALYSIS_TYPE_SCOPE_RULES` ([analysis_subject_resolution.py:71-82](graph-editor/lib/analysis_subject_resolution.py#L71-L82)) maps each analysis type to one of three scope rules:
 
 | Scope rule | Resolver | Returns |
 |---|---|---|
@@ -69,7 +69,7 @@ Takes the request's DSL string, the graph, and the FE-computed `candidate_regime
 
 ### 2.3 The two read modes
 
-`ANALYSIS_TYPE_READ_MODES` ([analysis_subject_resolution.py:86-99](graph-editor/lib/analysis_subject_resolution.py#L86-L99)) labels the temporal evidence shape each type expects:
+`ANALYSIS_TYPE_READ_MODES` ([analysis_subject_resolution.py:84-95](graph-editor/lib/analysis_subject_resolution.py#L84-L95)) labels the temporal evidence shape each type expects:
 
 | Read mode | Used by | Sweep semantics |
 |---|---|---|
@@ -77,17 +77,17 @@ Takes the request's DSL string, the graph, and the FE-computed `candidate_regime
 | `raw_snapshots` | `daily_conversions`, `lag_histogram`, `outcome_comparison`, `branch_comparison`, `conversion_rate` | No sweep bounds — raw rows only |
 | `sweep_simple` | `lag_fit`, `surprise_gauge`, `bayes_fit` | sweep_from = anchor_from; sweep_to capped at `asat` |
 
-`_resolve_sweep_bounds` ([analysis_subject_resolution.py:458](graph-editor/lib/analysis_subject_resolution.py#L458)) applies the asat cap honouring [DATE_MODEL_COHORT_MATURITY.md](DATE_MODEL_COHORT_MATURITY.md) — without this, sweep_to would default to today and silently include data the user pinned out via `asat()`.
+`_resolve_sweep_bounds` ([analysis_subject_resolution.py:454](graph-editor/lib/analysis_subject_resolution.py#L454)) applies the asat cap honouring [DATE_MODEL_COHORT_MATURITY.md](DATE_MODEL_COHORT_MATURITY.md) — without this, sweep_to would default to today and silently include data the user pinned out via `asat()`.
 
 ### 2.4 DSL parsing within this stage
 
 Subject resolution uses three DSL extraction surfaces. See [DSL_PARSING_ARCHITECTURE.md](DSL_PARSING_ARCHITECTURE.md) for the canonical reference (including the Python-side parsers).
 
 - `query_dsl.parse_query()` — the formal grammar parser. Handles `from()`, `to()`, `visited()`, `window()`, etc. **Does not parse `cohort()`** — that's the historical reason for the auxiliary regex extractors below.
-- `_extract_temporal_mode()` ([:398](graph-editor/lib/analysis_subject_resolution.py#L398)) — returns `'cohort'` / `'window'` / `None` by string match on the raw DSL.
-- `_extract_time_bounds()` ([:474](graph-editor/lib/analysis_subject_resolution.py#L474)) — regex-extracts `anchor_from` / `anchor_to` from `window(start:end)` or `cohort([anchor,]start:end)`. The optional `anchor,` prefix is the [AP31](DSL_PARSING_ARCHITECTURE.md#anti-pattern-31-regex-not-handling-optional-prefixes-in-dsl-clauses) defect site; the current regex (line 492) handles it correctly.
+- `_extract_temporal_mode()` ([:394](graph-editor/lib/analysis_subject_resolution.py#L394)) — returns `'cohort'` / `'window'` / `None` by string match on the raw DSL.
+- `_extract_time_bounds()` ([:470](graph-editor/lib/analysis_subject_resolution.py#L470)) — regex-extracts `anchor_from` / `anchor_to` from `window(start:end)` or `cohort([anchor,]start:end)`. The optional `anchor,` prefix is the [AP31](DSL_PARSING_ARCHITECTURE.md#anti-pattern-31-regex-not-handling-optional-prefixes-in-dsl-clauses) defect site; the current regex (line 488) handles it correctly.
 
-A second regex extractor, `_extract_cohort_anchor_node()` in `forecast_preparation.py:245`, pulls *just* the anchor node from `cohort(anchor,start:end)` for the subject-resolution callsite. Different concern from `_extract_time_bounds` (anchor vs dates); co-located by necessity since the formal parser doesn't own `cohort()` yet.
+A second regex extractor, `_extract_cohort_anchor_node()` in `forecast_preparation.py:283`, pulls *just* the anchor node from `cohort(anchor,start:end)` for the subject-resolution callsite. Different concern from `_extract_time_bounds` (anchor vs dates); co-located by necessity since the formal parser doesn't own `cohort()` yet.
 
 ### 2.5 Output: `synthesise_snapshot_subjects`
 
@@ -101,7 +101,7 @@ After scope resolution, `synthesise_snapshot_subjects(result, analysis_type)` pr
 
 ### 2.6 Legacy fallback
 
-`resolve_forecast_subjects` ([forecast_preparation.py:166](graph-editor/lib/runner/forecast_preparation.py#L166)) wraps `resolve_analysis_subjects` and falls back to `scenario.snapshot_subjects` ([:237](graph-editor/lib/runner/forecast_preparation.py#L237)) if subject resolution returns empty. This is for old clients that send pre-computed snapshot_subjects directly. New code should not rely on this path.
+`resolve_forecast_subjects` ([forecast_preparation.py:204](graph-editor/lib/runner/forecast_preparation.py#L204)) wraps `resolve_analysis_subjects` and falls back to `scenario.snapshot_subjects` ([:275](graph-editor/lib/runner/forecast_preparation.py#L275)) if subject resolution returns empty. This is for old clients that send pre-computed snapshot_subjects directly. New code should not rely on this path.
 
 ---
 
@@ -119,11 +119,11 @@ For each subject:
 
 ### 3.2 Regime selection
 
-`apply_temporal_regime_selection` ([:47](graph-editor/lib/runner/forecast_preparation.py#L47)) is the core selector. The snapshot DB may return rows for multiple regime families (window-anchored vs cohort-anchored) — they have distinct `core_hash` values. The selector ranks the requested temporal mode first, then delegates to `snapshot_regime_selection.select_regime_rows` to pick one regime per retrieved date.
+`apply_temporal_regime_selection` ([:85](graph-editor/lib/runner/forecast_preparation.py#L85)) is the core selector. The snapshot DB may return rows for multiple regime families (window-anchored vs cohort-anchored) — they have distinct `core_hash` values. The selector ranks the requested temporal mode first, then delegates to `snapshot_regime_selection.select_regime_rows` to pick one regime per retrieved date.
 
 Anchor matching: if a `cohort(anchor,...)` clause specifies an explicit anchor node, cohort-mode candidates whose `cohort_anchor` doesn't match are excluded ([:104-106](graph-editor/lib/runner/forecast_preparation.py#L104-L106)). Unanchored cohort candidates are still admissible (they represent the app's convention-derived anchor).
 
-`flatten_candidate_regime_hashes` ([:120](graph-editor/lib/runner/forecast_preparation.py#L120)) flattens the candidate-regimes list into one primary hash plus equivalents, mirroring the synthesis in `analysis_subject_resolution`. The DB query can then return rows across every candidate regime family in one shot.
+`flatten_candidate_regime_hashes` ([:158](graph-editor/lib/runner/forecast_preparation.py#L158)) flattens the candidate-regimes list into one primary hash plus equivalents, mirroring the synthesis in `analysis_subject_resolution`. The DB query can then return rows across every candidate regime family in one shot.
 
 ### 3.3 Per-edge cohort-maturity derivation
 
@@ -168,14 +168,14 @@ For single-edge paths this is mostly a passthrough (`composed.frames` matches th
 
 ### 4.2 Single-subject fallback
 
-If only one subject was prepared and it lacks `from_node`/`to_node` metadata (rare; happens with legacy `snapshot_subjects`), the prep skips the composer and surfaces the lone derivation's frames directly ([forecast_preparation.py:652-669](graph-editor/lib/runner/forecast_preparation.py#L652-L669)). This keeps minimal cohort handlers emitting frames even when path composition is impossible.
+If only one subject was prepared and it lacks `from_node`/`to_node` metadata (rare; happens with legacy `snapshot_subjects`), the prep skips the composer and surfaces the lone derivation's frames directly ([forecast_preparation.py:700-712](graph-editor/lib/runner/forecast_preparation.py#L700-L712)). This keeps minimal cohort handlers emitting frames even when path composition is impossible.
 
 ---
 
 ## 5. Stage 4 — Envelope Plan Construction
 
 **Module**: `graph-editor/lib/runner/request_envelope.py`
-**Entry point**: `build_request_envelope_plan(graph, query_from_node, query_to_node, anchor_node_id, anchor_from, anchor_to, is_window, …)`
+**Entry point**: `build_request_envelope_plan(*, graph, query_from_node, query_to_node, anchor_from, anchor_to, population_root, graph_preference, as_at, scenario_id, context_key, context_selector, …)` — keyword-only. There is no `is_window` flag and no `anchor_node_id`; the population root (which equals `query_from_node` for window and cohort(A=X), or the A node for active mode) carries the mode degeneracy.
 
 ### 5.1 What it does
 
@@ -192,15 +192,15 @@ See [`docs/current/snapshot-fetch-envelope-design.md`](../snapshot-fetch-envelop
 
 The envelope plan can be built in two places:
 
-1. **Preparation layer** (canonical): `prepare_forecast_subject_group` ([forecast_preparation.py:574-596](graph-editor/lib/runner/forecast_preparation.py#L574-L596)) builds the plan when the caller doesn't supply one, then threads it forward to each subject's fetch.
+1. **Preparation layer** (canonical): `prepare_forecast_subject_group` ([forecast_preparation.py:613-637](graph-editor/lib/runner/forecast_preparation.py#L613-L637)) builds the plan when the caller doesn't supply one, then threads it forward to each subject's fetch.
 
-2. **Runtime inline fallback**: `build_resolved_cf_runtime` ([cohort_forecast_v3.py:1353-1376](graph-editor/lib/runner/cohort_forecast_v3.py#L1353-L1376)) builds the plan inline in active mode when `envelope_plan is None`. This is the "legacy/test entry points still work" path the runtime's docstring mentions ([:1261-1262](graph-editor/lib/runner/cohort_forecast_v3.py#L1261-L1262)).
+2. **Runtime inline fallback**: `build_resolved_cf_runtime` ([cohort_forecast_v3.py:665-679](graph-editor/lib/runner/cohort_forecast_v3.py#L665-L679)) builds the plan inline when `envelope_plan is None` (degenerate / minimal unit callers, per the comment at the build site). Both paths call `build_request_envelope_plan`, but the duplication is real: same construction logic, two sites.
 
 Both paths call `build_request_envelope_plan` with the same arguments, but the duplication is real: same construction logic, two sites. Production requests go through the preparation layer; tests and legacy callers occasionally trigger the runtime inline. This is tracked as case-fork debt in [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) and should consolidate when every caller routes through preparation.
 
 ### 5.3 Window mode
 
-For `window()` queries the envelope plan leaves arrival maps unset (per Appendix A's local-clock binding contract); the runtime builds an identity X-rooted subject map inline ([cohort_forecast_v3.py:1380-1402](graph-editor/lib/runner/cohort_forecast_v3.py#L1380-L1402)). This is data degeneracy, not a separate path: window mode = cohort(A=X) with identity carrier.
+For `window()` queries the degeneracy is absorbed by `build_request_envelope_plan` itself: it returns an X-rooted identity `subject_arrival_map` and a `None` `carrier_arrival_map` (a zero-length carrier, not a mode flag). The runtime then consumes both maps unconditionally ([cohort_forecast_v3.py](graph-editor/lib/runner/cohort_forecast_v3.py); see the comment in `build_resolved_cf_runtime`: 'no window/cohort branch and no second arrival-map builder'). This is data degeneracy, not a separate path: window mode = cohort(A=X) with identity carrier.
 
 ---
 
@@ -224,7 +224,7 @@ For `window()` queries the envelope plan leaves arrival maps unset (per Appendix
 
 ### 6.1 Anchor resolution
 
-`_resolve_anchor_node` ([forecast_preparation.py:266](graph-editor/lib/runner/forecast_preparation.py#L266)) handles the case where the DSL doesn't carry an explicit anchor. It walks the graph backward from the target edge's `from` node, finds reachable start nodes (nodes with `entry.is_start = true`), picks the **furthest** one (max BFS distance, tie-broken alphabetically). This is the "where did this population originate?" question; in single-source graphs it's deterministic.
+`_resolve_anchor_node` ([forecast_preparation.py:304](graph-editor/lib/runner/forecast_preparation.py#L304)) handles the case where the DSL doesn't carry an explicit anchor. It walks the graph backward from the target edge's `from` node, finds reachable start nodes (nodes with `entry.is_start = true`), picks the **furthest** one (max BFS distance, tie-broken alphabetically). This is the "where did this population originate?" question; in single-source graphs it's deterministic.
 
 If the target edge's `from` is already a start node, that's the anchor. If no start nodes are reachable, the anchor is `None` and the request will be treated as window mode.
 

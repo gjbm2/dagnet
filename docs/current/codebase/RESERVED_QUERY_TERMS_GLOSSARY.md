@@ -133,7 +133,7 @@ Leave-one-out expected log pointwise predictive density. A proper scoring rule m
 
 **ΔELPD** / **`delta_elpd`**
 
-The difference between the Bayesian model's LOO-ELPD and the analytic stats pass's plug-in log-likelihood, for the same set of observations. Positive means the Bayesian model predicts better than the analytic point estimates; negative means worse. The primary per-edge model adequacy metric. Stored on `PosteriorSummary` (Python) and `ProbabilityPosterior` / `LatencyPosterior` (TypeScript).
+The difference between the Bayesian model's LOO-ELPD and the analytic stats pass's plug-in log-likelihood, for the same set of observations. Positive means the Bayesian model predicts better than the analytic point estimates; negative means worse. The primary per-edge model adequacy metric. Stored on `PosteriorSummary` (Python, `bayes/compiler/types.py`) and on `ModelVarsFitDiagnostics` (TypeScript — the probability and latency fit-diagnostics sub-blocks; also surfaced on `SlicePosteriorEntry`).
 
 **Pareto k** / **`pareto_k_max`**
 

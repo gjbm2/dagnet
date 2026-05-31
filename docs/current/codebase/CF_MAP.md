@@ -25,8 +25,8 @@ Persistence (which fields apply back to the graph) is owned by [`FORECAST_STACK_
 ```
    HTTP POST /api/runner/analyze
         │
-        │  api_handlers.handle_runner_analyze:598
-        │  → _handle_runner_analyze_impl:632
+        │  api_handlers.handle_runner_analyze:509
+        │  → _handle_runner_analyze_impl:546
         │  → string-match on analysis_type
         ▼
    ┌──────────────────────────────────────────────────────────────────┐
@@ -54,19 +54,20 @@ Persistence (which fields apply back to the graph) is owned by [`FORECAST_STACK_
                   ▼
    ┌──────────────────────────────────────────────────────────────────┐
    │ ROW BUILDER ENTRY     cohort_forecast_v3.compute_cohort_         │
-   │                       maturity_rows_v3:5974                      │
+   │                       maturity_rows_v3:2404                      │
+   │                       (thin wrapper: build bundle → tau reducer) │
    │                                                                  │
-   │   1. resolve_model_params                                        │
-   │   2. build_cohort_evidence_from_frames        ◄  row layer 1     │
-   │   3. _aggregate_request_candidates                               │
-   │   4. build_resolved_cf_runtime                ◄  SUBSTRATE STAGE │
-   │      → primitive_readout.compute_resolved_runtime_readout        │
-   │   5. _root_window_carrier_n_by_anchor_day     ◄  row layer 2     │
-   │   6. _build_selected_source_day_mass          ◄  row layer 3     │
-   │   7. _build_carrier_only_denominator_prefix   ◄  row layer 4     │
-   │   8. _build_selected_a_clock_evidence_from_runtime               │
-   │                                                ◄  row layers 5+6 │
-   │   9. _project_runtime_rows                    ◄  row layers 7+8  │
+   │   bundle = build_cf_projection_bundle:2017                       │
+   │     1. resolve_model_params  (from runner.model_resolver)        │
+   │     2. build_cohort_evidence_from_frames       ◄ row layer 1     │
+   │     3. _aggregate_request_candidates                             │
+   │     4. build_resolved_cf_runtime               ◄ SUBSTRATE STAGE │
+   │        → primitive_readout.compute_resolved_runtime_readout      │
+   │     5. _root_window_carrier_n_by_anchor_day                      │
+   │     6. _build_selected_retrieval_frontier / _derive_saturation_τ │
+   │     7. _build_selected_cohort_inputs                             │
+   │     8. model_span_spine.project_selected_cohort_rows             │
+   │   reduce_cohort_maturity_rows:2489  → _project_runtime_rows:1447 │
    └──────────────┬───────────────────────────────────────────────────┘
                   │
                   │  List[maturity_row]
@@ -111,7 +112,8 @@ Key call-order subtlety: row layer 1 (frame evidence) runs **before** the substr
 | `lib/runner/span_kernel.py` | Underlying topology + forward DP; shared by `timing_span` |
 | `lib/runner/subject_span_composer.py` | `compose_primitive_span` → `ComposedPrimitiveSpan` (role-neutral) |
 | `lib/runner/primitive_readout.py` | `compute_resolved_runtime_readout` — orchestrates substrate, builds spans + overlays |
-| `lib/runner/forecast_runtime.py` | `prepare_forecast_runtime_inputs`, `resolve_model_params`, `find_edge_by_id`, `get_cf_mode_and_reason` |
+| `lib/runner/forecast_runtime.py` | `prepare_forecast_runtime_inputs`, `find_edge_by_id`, `get_cf_mode_and_reason` |
+| `lib/runner/model_resolver.py` | `resolve_model_params` — canonical model-param resolution |
 | `lib/runner/edge_binding_descriptor.py` | `build_candidates_for_descriptor` — superset rows → typed candidates |
 | `lib/runner/evidence_adapters.py` | Adapter layer between superset rows and `EvidenceCandidate` shape |
 
@@ -119,22 +121,19 @@ Key call-order subtlety: row layer 1 (frame evidence) runs **before** the substr
 
 | Function | Role |
 |---|---|
-| `compute_cohort_maturity_rows_v3:5974` | Public entry; orchestrates everything below |
-| `build_cohort_evidence_from_frames:5563` | Frame → `engine_cohorts`, epoch boundaries, observed prefixes (identity) |
-| `_aggregate_request_candidates:911` | Flatten target / per-edge-subject / per-edge-upstream pools → one `request_evidence_candidates` |
-| `build_resolved_cf_runtime:1235` | Construct `ResolvedCFRuntime`; calls `compute_resolved_runtime_readout` |
+| `compute_cohort_maturity_rows_v3:2404` | Public entry; builds the CFProjectionBundle then runs the tau reducer |
+| `build_cohort_evidence_from_frames:1701` | Frame → `engine_cohorts`, epoch boundaries, observed prefixes (identity) |
+| `_aggregate_request_candidates:153` | Flatten target / per-edge-subject / per-edge-upstream pools → one `request_evidence_candidates` |
+| `build_resolved_cf_runtime:542` | Construct `ResolvedCFRuntime`; calls `compute_resolved_runtime_readout` |
 | `ResolvedCFRuntime` (dataclass) | Request-scoped object owning conditioning, composition, projection-facing provenance |
 | `_root_window_carrier_n_by_anchor_day` | Active `a_pop` per anchor; root-window admission rule |
-| `_build_selected_source_day_mass` | `M_select(U, C, u)` — per subject primitive source-day mass |
-| `_build_carrier_only_denominator_prefix` | `X_prefix(C, τ)` — denominator cumulative mass |
-| `_build_rate_attributed_subject_prefix` | `Y_prefix(C, τ)` — numerator cumulative mass |
-| `_build_active_selected_a_clock_evidence_from_runtime` | Build `SelectedAClockEvidence` cell surface |
-| `_join_conditioned_carrier_backmap` | Subject row placement onto A-clock |
-| `_selected_cohort_group_rate_draws` | E+F reducer — per-particle `ΣY(τ)/ΣX(τ)` |
+| `_build_selected_cohort_inputs` | Per-Cohort projection inputs (anchor day, base mass, frontier) |
+| `model_span_spine.project_selected_cohort_rows` | Projects the per-Cohort FC arrays consumed by the tau/date reducers |
+| `_derive_saturation_tau` | Latent t95 of the composed predictive CDF; caps the projection horizon |
 | `_project_runtime_rows` | Per-τ row emission; quantiles reducer draws; coverage signals |
 | `_attach_cf_row_metadata` | Stamp first row with provenance / cf_mode |
-| `build_superset_candidates_by_edge:841` | Subject-edge superset rows → candidates |
-| `build_carrier_superset_candidates_by_edge:816` | Carrier-edge superset rows → candidates |
+| `build_superset_candidates_by_edge:77` | Subject-edge superset rows → candidates |
+| `build_carrier_superset_candidates_by_edge:46` | Carrier-edge superset rows → candidates |
 
 ### Hold-outs (parallel paths bypassing the substrate)
 

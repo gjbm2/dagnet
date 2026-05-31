@@ -78,7 +78,7 @@ The CF engine core is a mathematical object that must degenerate algebraically. 
 
 ### I-48: Single conditioning locus
 
-`primitive_conditioning.condition_primitive` is the only place where evidence updates a posterior. Composition (`subject_span_composer.compose_primitive_span`), readout (`primitive_readout.compute_resolved_runtime_readout`), the selected-cohort reducer (`model_span_spine.project_selected_cohort_rows`), the row projector (`_project_runtime_rows`), and the legacy trajectory engine (`compute_forecast_trajectory`) all consume already-conditioned primitives — none re-condition. The doc-52 mass-ratio subset policy (`r = min(m_S/m_G, 1)`) is applied **once**, at the primitive layer, never re-applied by composed consumers. The conditioned primitive object is the unit of work the result cache keys; re-conditioning downstream breaks draw-family coherence and busts the cache silently. See [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) §3.1.
+`primitive_conditioning.condition_primitive` is the only place where evidence updates a posterior. Composition (`subject_span_composer.compose_primitive_span`), readout (`primitive_readout.compute_resolved_runtime_readout`), the selected-cohort reducer (`model_span_spine.project_selected_cohort_rows`), and the row projector (`_project_runtime_rows`) all consume already-conditioned primitives — none re-condition. The doc-52 mass-ratio subset policy (`r = min(m_S/m_G, 1)`) is applied **once**, at the primitive layer, never re-applied by composed consumers. The conditioned primitive object is the unit of work the result cache keys; re-conditioning downstream breaks draw-family coherence and busts the cache silently. See [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md) §3.1.
 
 ---
 

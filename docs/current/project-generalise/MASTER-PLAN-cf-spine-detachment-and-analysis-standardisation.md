@@ -1,7 +1,7 @@
 # CF Spine Detachment And Analysis Standardisation Master Plan
 
 **Date:** 26-May-26  
-**Status:** In progress; progress reconciled against code 31-May-26 — Stages 0–4 complete, Stage 6 partially scaffolded; the neutral spine extraction (Stage 5) is the next major step, with Stages 7–8 and 73q Phase 8 outstanding  
+**Status:** In progress; progress reconciled against code 31-May-26 — Stages 0–4 complete, Stage 6 partially scaffolded; the neutral spine extraction (Stage 5) is the next major step, with Stages 7–9 and 73q Phase 8 outstanding  
 **Scope:** Finish detaching the conditioned-forecast spine from `cohort_forecast_v3`, standardise `cohort_maturity` as the canonical analysis type, and migrate remaining forecast-backed analyses onto shared runtime/projection surfaces.
 
 ## Implementation Progress
@@ -17,6 +17,7 @@
 - [/] Stage 6 - Standardise Forecast-Backed Analyse Dispatch - partially scaffolded via 73q Phase 4: `runner/cf_analysis.py` holds the shared preparation boundary and the `reducer_for` selector. Bespoke handlers (`_compute_surprise_gauge`, `_handle_conditioned_forecast_impl`) and the in-`v3` reducers remain
 - [ ] Stage 7 - Decide The `conversion_funnel` Final Integration Shape
 - [ ] Stage 8 - Rewrite Codebase Docs And Close Stale Plans
+- [ ] Stage 9 - Perimeter De-Fattening And Dead-Path Removal - cross-cutting; detailed item ledger owned by the companion proposal (see Summary)
 
 ## Summary
 
@@ -35,13 +36,15 @@ The desired end state is:
 - no public caller of the legacy trajectory engine;
 - docs that describe the live architecture, not a mixture of historical states.
 
+A companion proposal, [`cf-perimeter-cleanup-and-dead-path-removal-proposal-31-May-26.md`](cf-perimeter-cleanup-and-dead-path-removal-proposal-31-May-26.md), catalogues the cross-cutting **perimeter de-fattening and dead-path removal** surfaced by a full, documentation-blind read of the back-end forecast-production code (31-May-26). It changes no numerics and no invariants: it deletes paths that already have no production caller, moves statistics/render out of the perimeter handler into reducers, removes the ambient `mc_draws` settings channel, and retires shims the repo's no-shims rule already forbids. It owns **Stage 9** and routes individual items into Stages 5–8 where they belong. It deliberately does **not** duplicate the engine-fallback work owned by [`cf-defensive-coding-audit.md`](cf-defensive-coding-audit.md), the dispersion work owned by [`fc-kappa-predictive-dispersion-proposal-26-May-26.md`](fc-kappa-predictive-dispersion-proposal-26-May-26.md), or the evidence-admission work owned by the admission-binding plans.
+
 ## Current State
 
 The current live state has five important facts.
 
 First, the spine cutover has happened for the cohort-maturity row path. The row projector calls `model_span_spine.project_selected_cohort_rows`, and the public chart fields are now mapped to strict evidence, `f_*`, `ef_*`, and optional overlay surfaces.
 
-Second, 73q Phases 1-7 have landed (27–31-May-26): `daily_conversions` no longer calls the legacy trajectory engine for forecast enrichment. It resolves subjects, prepares the shared forecast bundle through `runner/cf_analysis.py`, and applies `reduce_daily_conversions_rows`. Observed calendar counts remain owned by `derive_daily_conversions`. The only open 73q phase is Phase 8 (companion `bridge_view` / `conversion_rate` migrations).
+Second, 73q Phases 1-7 have landed (27–31-May-26): `daily_conversions` no longer calls the legacy trajectory engine for forecast enrichment. It resolves subjects, prepares the shared forecast bundle through `runner/cf_analysis.py`, and applies `reduce_daily_conversions_rows`. The canonical daily response is bundle-only; `derive_daily_conversions` is not part of the daily-conversions chart path. The only open 73q phase is Phase 8 (companion `bridge_view` / `conversion_rate` migrations).
 
 Third, `conditioned_forecast` has also moved to the scalar reducer. `_handle_conditioned_forecast_impl` now calls `prepare_cf_scalar_bundle` and `reduce_cf_scalars`, then frames the graph-enrichment response from scalar output plus bundle/runtime metadata. It no longer calls the cohort-maturity tau reducer or scrapes tau rows. The performance optimisation is not complete: `prepare_cf_scalar_bundle` still wraps `prepare_cf_projection_bundle`, still builds per-Cohort projection arrays, and currently passes `mc_draws_override=None`.
 
@@ -112,7 +115,7 @@ The bundle must expose the data needed by the sibling reducers:
 - per-Cohort `ef_*` surfaces, strict evidence surfaces, and projection status;
 - per-Cohort completeness readouts before cross-Cohort aggregation.
 
-The daily-conversions date reducer now reads from that bundle instead of calling the legacy trajectory engine. Observed daily conversion counts remain owned by `derive_daily_conversions`; projection fields are read from the shared bundle.
+The daily-conversions date reducer now reads from that bundle instead of calling the legacy trajectory engine. Its row evidence and projection fields are both read from the shared bundle; there is no secondary observed-row input.
 
 Stage 1 must not scrape public cohort-maturity tau rows to feed daily conversions. The shared bundle is the common input; tau rows and date rows are sibling readouts.
 
@@ -192,6 +195,8 @@ The extraction should be mechanical wherever possible. Behavioural changes belon
 
 Stop condition: `cohort_forecast_v3.py` no longer owns neutral CF runtime/projection concepts. It is either deleted, renamed to a cohort-maturity reducer module, or reduced to a temporary compatibility wrapper with a dated deletion plan.
 
+Companion cleanup (Stage 9 ledger): the `compute_cohort_maturity_rows_v3` compatibility wrapper is now test-only, and its handler docstring at `api_handlers.py:878` is stale — it still claims `_handle_cohort_maturity_v3` calls the wrapper when the handler reduces the bundle directly (companion item A6). Thread `mc_draws` as an explicit bundle-build parameter during this extraction so the scalar callsite's reduced-draw policy stops riding the settings `ContextVar` (companion item D1, which subsumes the Stage 1 draw-count tail).
+
 ## Stage 6 - Standardise Forecast-Backed Analyse Dispatch
 
 **Status (31-May-26): Partially scaffolded.** `runner/cf_analysis.py` provides the shared preparation boundary (`prepare_cf_projection_bundle` / `prepare_cf_scalar_bundle`) and `reducer_for` for reducer selection, and the three forecast-backed analyses route through it. The full stop condition is not met: `_compute_surprise_gauge` and `_handle_conditioned_forecast_impl` are still bespoke handlers, and the reducers still live in `cohort_forecast_v3.py` pending Stage 5.
@@ -212,6 +217,8 @@ This stage should also clarify the FE request contract for analyses that need ca
 
 Stop condition: adding a forecast-backed analysis type means registering a reducer and its response schema, not adding a bespoke handler with local preparation and projection logic.
 
+Companion cleanup (Stage 9 ledger): the bespoke handler bodies that currently block this stop condition are itemised as `_compute_surprise_gauge` (the surprise z-score in the handler, companion C1), `_append_synthetic_frames_impl` (forecast-tail maths in the handler, C2), and the multi-scenario chart-axis reduction / pad-out (C3). Each should become a registered reducer or a reducer-owned display step. The handler-side horizon sizing (`_compute_extent_for_scenario`) is carried to Open Questions rather than assumed a deviation.
+
 ## Stage 7 - Decide The `conversion_funnel` Final Integration Shape
 
 `conversion_funnel` is adjacent rather than blocking.
@@ -226,6 +233,8 @@ This stage decides whether `conversion_funnel` should:
 The decision should be based on semantic need, not aesthetic uniformity. If scalar CF output is the correct abstraction for funnel bars, keep it and document that boundary. If funnel needs projection-bundle internals, migrate it deliberately rather than letting it grow a second private spine.
 
 Stop condition: `conversion_funnel` has an explicit final integration decision and no longer appears as ambiguous architectural debt in the CF hold-out documentation.
+
+Companion cleanup (Stage 9 ledger): the funnel's `runners.py:1488` `from api_handlers import handle_conditioned_forecast` (companion item B1) is the worst layering inversion in the back end — an engine runner reaching up into an HTTP request handler. Whichever integration shape is chosen, the inverted import must go: the conditioned-forecast scalar pipeline should be exposed as a shared reducer/client the funnel calls, not the endpoint handler.
 
 ## Stage 8 - Rewrite Codebase Docs And Close Stale Plans
 
@@ -247,6 +256,20 @@ Then close or archive superseded plans: selected-cohort cutover, v1/v2 retiremen
 
 Stop condition: a new agent reading the codebase docs sees one architecture, one canonical cohort-maturity analysis type, and one clear route for adding a forecast-backed analysis.
 
+Companion cleanup (Stage 9 ledger): alongside the doc rewrite, lift the forensic serialisation out of the compute layer — `forecast_runtime.serialise_runtime_bundle` (companion item E1) and the `model_span_spine._summarise_*` diagnostics (E2) — behind the diagnostics flag so the runtime/spine stay compute-only, and fix the stale in-code line cites (F7, e.g. `api_handlers.py:2251` citing ~3822 in a 3637-line file).
+
+## Stage 9 - Perimeter De-Fattening And Dead-Path Removal
+
+**Status (31-May-26): Not started.** The detailed item ledger, severities, and sequencing live in the companion proposal [`cf-perimeter-cleanup-and-dead-path-removal-proposal-31-May-26.md`](cf-perimeter-cleanup-and-dead-path-removal-proposal-31-May-26.md).
+
+This stage is cross-cutting rather than strictly sequential. It carries the structural cleanup a full, documentation-blind read of the back-end forecast-production code surfaced (31-May-26) — the work the spine migration makes safe but does not itself itemise. It is **structural only**: no numerical or invariant change, and every atom must keep fixtures and oracles bit-for-bit green. It respects this plan's principles, in particular that reducers may own display while the engine may not — render that lives in a reducer is not flagged; render in the runtime/compute layer or the HTTP handler is.
+
+The companion groups its atoms as: dead-path deletion (modules with zero production callers — `span_adapter.py`, `predicates.py`, the dead `path_runner` state-space engine, `confidence_bands.py`, `span_operator_supply.py`); the inverted dependency arrows (the funnel→handler import, the prepare→DB reach-through); perimeter statistics/render relocation (surprise gauge, synthetic-tail, chart-axis); the ambient `mc_draws` settings channel made an explicit parameter; runtime-layer diagnostics moved behind the diagnostics flag; and shim/vestigial removal under the repo's no-shims rule.
+
+Sequencing: dead-path deletion and shim removal are safe now and independent of Stage 5; the draws-explicit and perimeter-relocation atoms accompany Stages 5–6; the funnel inverted-arrow atom lands with the Stage 7 decision; diagnostics-relocation and stale-cite fixes land with the Stage 8 doc rewrite. A god-module split beyond `cohort_forecast_v3` (`api_handlers`, `model_span_spine`, `runners`, `snapshot_service`, and the `timing_span` API/DP-core fusion) is explicitly **deferred** out of this stage to avoid colliding with Stage 5.
+
+Stop condition: the companion's Stage 9 acceptance criteria are met — no dead module remains undeleted, `mc_draws` is an explicit parameter through the `cf_analysis` bundle boundary (and the nested broadcast-collapse `use_request_settings` workaround is gone), no statistics or chart maths remain in `api_handlers.py`, and no `if False:` / hard-`False` capability gate / "DO NOT call from production" fallback / overdue dated-deletion shim remains on the forecast path.
+
 ## Acceptance Criteria
 
 The whole programme is complete when:
@@ -258,7 +281,8 @@ The whole programme is complete when:
 - neutral CF runtime/projection modules own the spine;
 - `cohort_maturity`, `daily_conversions`, and `conditioned_forecast` read sibling outputs of the same shared bundle;
 - adding a new forecast-backed analysis type does not require importing from `cohort_forecast_v3.py` or `forecast_state.py`;
-- docs and tests no longer present the legacy reducer or versioned cohort-maturity types as current architecture.
+- docs and tests no longer present the legacy reducer or versioned cohort-maturity types as current architecture;
+- the companion proposal's Stage 9 acceptance criteria are met: no dead modules remain, `mc_draws` is an explicit bundle-boundary parameter, no statistics or chart maths remain in the perimeter handler, and no forbidden shims remain on the forecast path — all with bit-for-bit identical numerical output.
 
 ## Open Questions
 
@@ -269,4 +293,6 @@ The whole programme is complete when:
 3. When `cohort_forecast_v3.py` is emptied of neutral runtime concepts, should it be renamed to a cohort-maturity reducer module immediately, or kept briefly as a compatibility wrapper to reduce review risk?
 
 4. Which stale plans should be archived versus left in `docs/current/` with a completion note? The answer should be decided once Stage 8 starts, not piecemeal during earlier implementation.
+
+5. Is handler-side horizon sizing (`_compute_extent_for_scenario` composing a span-kernel t95 in the perimeter) acceptable perimeter policy, or should `compute_extent` be an input the engine derives? The code's own comments frame it as deliberate "perimeter-owned render-calc policy"; the companion proposal surfaces it as a Stage 6 decision rather than a silent split.
 

@@ -1,7 +1,7 @@
 # Draw-Family Keying (Keyed RNG)
 
 **Status**: Active reference, 12-May-26
-**Scope**: the keyed-RNG seam that replaces legacy fixed seeds (`seed=42|43|71`) across the CF primitive substrate, the runtime, and the trajectory engine. Lives in `primitives.py`.
+**Scope**: the keyed-RNG seam that replaces legacy fixed seeds (`seed=42|43|71`) across the CF primitive substrate and the forecast runtime. Lives in `primitives.py`.
 
 This is a small contract module — 13 named derivations, one canonical-string format, one `make_rng(key, derivation)` function. The contract is small; the **consequences of getting it wrong** are large: two consumers of the same primitive under the same scope MUST receive identical draws. Without that, composition cannot honour draw-family coherence and the cache cannot key primitives correctly.
 
@@ -89,10 +89,10 @@ What each derivation is used for:
 | `primitive_p_draws` | `primitive_conditioning.condition_primitive`, `make_unconditioned_primitive`, `_make_prior_only_primitive` | The `p` draw stream per primitive |
 | `primitive_timing_draws` | Same | The `(μ, σ, onset)` multivariate-normal stream per primitive |
 | `primitive_is_resampling` | `_evaluate_likelihood_plan` IS resample step | Resampling indices for IS reweighting |
-| `primitive_drift` | `forecast_state.compute_forecast_trajectory._run_cohort_loop` | Per-cohort drift draws (legacy trajectory engine) |
-| `primitive_completeness_sd` | `compute_completeness_with_sd` | Completeness uncertainty (200 MC draws) |
+| `primitive_drift` | _(no live consumer)_ | Per-cohort drift draws — key retained for stream-identity compatibility; the legacy trajectory engine that consumed it has been deleted |
+| `primitive_completeness_sd` | _(no live consumer)_ | Completeness uncertainty — key retained for stream-identity compatibility; `compute_completeness_with_sd` has been deleted |
 | `doc52_blend_permutation` | `_apply_doc52_blend` | Permutation for `(1-r):r` conditioned-vs-prior particle mix |
-| `node_arrival_cache` | `build_node_arrival_cache` | Per-node MC arrival CDFs (legacy whole-graph carrier) |
+| `node_arrival_cache` | _(no live consumer)_ | Per-node MC arrival CDFs — key retained for stream-identity compatibility; `build_node_arrival_cache` (legacy whole-graph carrier) has been deleted |
 | `subject_span_full_path_mc` | `forecast_runtime.prepare_forecast_runtime_inputs` | Pre-substrate full-path subject-span MC |
 | `subject_span_epistemic_overlay` | Same (retired) | Pre-substrate epistemic overlay MC |
 | `anchor_relative_edge_p_mc` | Same | Edge-level `p` MC for anchor-relative subject CDF |
@@ -128,7 +128,7 @@ Pre-73n the runtime had three fixed-seed RNG constants scattered across the code
 - `np.random.default_rng(seed=43)` — doc-52 blend permutation.
 - `np.random.default_rng(seed=71)` — completeness uncertainty.
 
-The retirement is partial: `forecast_runtime.prepare_forecast_runtime_inputs` still names "Fixed-seed retirement" in comments and routes through `_request_scoped_key('subject_span_full_path_mc')` etc., but the legacy trajectory engine `compute_forecast_trajectory` retains a `_trajectory_fallback_draw_family_key` for callers that don't supply a key. That fallback derives `scenario_id` from the resolved model's `(alpha, beta, n_effective, src)` so two calls with matching resolved parameters reuse the same stream.
+The retirement is partial: `forecast_runtime.prepare_forecast_runtime_inputs` still names "Fixed-seed retirement" in comments and routes through `_request_scoped_key('subject_span_full_path_mc')` etc., but the legacy trajectory engine (`compute_forecast_trajectory`) and its `_trajectory_fallback_draw_family_key` have since been deleted, so no trajectory-engine fallback key remains. That fallback used to derive `scenario_id` from the resolved model's `(alpha, beta, n_effective, src)` so two calls with matching resolved parameters reused the same stream.
 
 [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md) does not flag the legacy fallback as a defensive-code violation — it is a documented bridge.
 

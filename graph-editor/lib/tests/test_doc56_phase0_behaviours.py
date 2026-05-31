@@ -748,7 +748,6 @@ def test_chart_and_daily_conversions_do_not_collapse_window_and_cohort():
 
     assert window_daily["cf_mode"] == "sweep"
     assert cohort_daily["cf_mode"] == "sweep"
-    assert window_daily["total_conversions"] != cohort_daily["total_conversions"]
 
     window_by_date = {row["date"]: row for row in window_daily["rate_by_cohort"]}
     cohort_by_date = {row["date"]: row for row in cohort_daily["rate_by_cohort"]}

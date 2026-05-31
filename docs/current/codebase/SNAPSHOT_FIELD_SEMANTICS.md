@@ -159,14 +159,22 @@ difference is the evidence set and latency model used during fitting:
 - **Window mode**: `alpha`/`beta` — fitted from window evidence (edge-local latency)
 - **Cohort mode**: `cohort_alpha`/`cohort_beta` — fitted from cohort evidence (anchor-anchored, path latency)
 
-The `model_resolver.py` correctly prefers `cohort_alpha`/`cohort_beta` when
-`temporal_mode == 'cohort'`.
+As of the WP3 factorised composition (doc 60 decisions 4 & 7, doc 66 §4),
+`model_resolver.py` resolves the rate prior from the window-fit edge-local
+`prob_alpha`/`prob_beta` **unconditionally** — `temporal_mode` does NOT bind the
+alpha/beta selection. The `cohort_alpha`/`cohort_beta` mirrors are present on the
+source ledger but are **reserved** for the path-level primitive that WP8 will
+introduce; they are not commensurate with edge-wise factorised composition.
+(`temporal_mode` still binds `n_effective` and latency selection, just not the
+rate prior.)
 
-**Fix**: when writing tests or assertions about cohort-mode alpha/beta, use
-`posterior.cohort_alpha` / `cohort_beta`, not `posterior.alpha` / `beta`. When
-the resolver returns a `p_mean` that doesn't match `alpha/(alpha+beta)` from
-the edge-level posterior, check whether cohort mode is active — the resolver
-may be correctly using the cohort-mode posterior.
+**Fix**: under the current resolver, cohort mode does NOT swap in
+`cohort_alpha`/`cohort_beta` for the resolved rate — the resolver returns the
+window-fit edge-local `alpha`/`beta` in both modes, so `p_mean` will equal
+`alpha/(alpha+beta)` from the edge-level posterior. Tests asserting cohort-mode
+alpha/beta should target the edge-level `alpha`/`beta`. (When WP8 lands the
+path-level primitive, revisit: that is when `cohort_alpha`/`cohort_beta` becomes
+load-bearing for the rate.)
 
 **History**: these fields were previously named `path_alpha` / `path_beta`,
 misread as "compound path probability". Renamed to `cohort_*` to make the

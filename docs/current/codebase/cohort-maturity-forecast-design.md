@@ -93,7 +93,7 @@ The evidence line plateaus naturally (Σy stops growing for dropped cohorts, Σx
 
 Beyond all real evidence. The backend generates synthetic frames from `sweep_to + 1` to `anchor_to + t95`. Each synthetic frame carries frozen evidence + model-predicted projected_y for all cohorts.
 
-**Status**: implemented in `_append_synthetic_cohort_maturity_frames` in `api_handlers.py`. Working for some edges, not yet confirmed for all.
+**Status**: implemented in `_append_synthetic_frames_impl` in `api_handlers.py`. Working for some edges, not yet confirmed for all.
 
 ---
 
@@ -108,8 +108,8 @@ Beyond all real evidence. The backend generates synthetic frames from `sweep_to 
 ### 4.2 What's broken / incomplete
 
 - **Epoch B carry-forward**: not yet implemented. When cohorts drop out in epoch B, Σx shrinks, causing the evidence rate to jump artificially. Need to emit carry-forward points for plateaued cohorts to keep the denominator stable.
-- **Blend formula in `annotate_data_point`**: the current blend `blended_rate = c × evidence_rate + (1-c) × fm × c` produces `projected ≈ evidence` when evidence tracks the model. The crown is invisible. This formula needs rethinking — possibly replaced with the pure model prediction for projected_y, or a different blend weight.
-- **Synthetic frames not generating for some edges**: diagnostic logging has been added to `_append_synthetic_cohort_maturity_frames` but the root cause is not yet identified. Need to check whether the function is called and why it might exit early.
+- **Forecast crown visibility**: the synthetic-frame tail now uses the direct model projection `projected_y = x × fm × CDF(τ)` (in `_append_synthetic_frames_impl`); there is no longer an `annotate_data_point` blend helper (it was deleted with the v1/v2 CF removal). Crown visibility still needs review for cases where evidence tracks the model closely.
+- **Synthetic frames not generating for some edges**: diagnostic logging has been added to `_append_synthetic_frames_impl` but the root cause is not yet identified. Need to check whether the function is called and why it might exit early.
 - **tauMax clipping**: the frontend clips data at tauMax = dayDiff(B, anchorFrom). For wide anchor ranges, this can clip synthetic frames for older cohorts (their τ exceeds tauMax). May need adjustment.
 
 ### 4.3 Files changed
@@ -117,8 +117,7 @@ Beyond all real evidence. The backend generates synthetic frames from `sweep_to 
 | File | Change |
 |------|--------|
 | `graph-editor/lib/api_handlers.py` | Synthetic frame generation: use `x` not `a` for y_future; carry forward frozen evidence; set annotation fields directly instead of re-annotating; diagnostic logging |
-| `graph-editor/lib/runner/forecast_application.py` | `annotate_rows`: use `x` (from-node arrivals) not `a` as denominator; `annotate_data_point`: added `x` and `forecast_mean` params with blend formula |
-| `graph-editor/lib/tests/test_forecast_application.py` | Updated test expectations for blend formula and None projected_y during dead time |
+| `graph-editor/lib/runner/forecast_application.py` | (historical) `annotate_rows`/`annotate_data_point` carried the `x` denominator and blend; both have since been deleted — the file now retains only `compute_completeness` |
 
 ### 4.4 Files NOT changed (no frontend changes)
 
@@ -135,11 +134,11 @@ Beyond all real evidence. The backend generates synthetic frames from `sweep_to 
 
 Emit carry-forward data points in the backend for cohorts that have plateaued at a given τ. Keeps Σx monotonically non-decreasing and makes the evidence line plateau smoothly rather than jumping.
 
-Where: either in `_append_synthetic_cohort_maturity_frames` (extend to cover epoch B) or in a new post-processing step after real frame annotation.
+Where: either in `_append_synthetic_frames_impl` (extend to cover epoch B) or in a new post-processing step after real frame annotation.
 
 ### 5.2 Forecast crown visibility (priority 2)
 
-The blend formula in `annotate_data_point` produces projected ≈ evidence, making the crown invisible. Options:
+The earlier blend approach (since removed with the v1/v2 CF deletion) produced projected ≈ evidence, making the crown invisible. Options:
 
 **A. Use pure model prediction for projected_y**: `projected_y = x × fm × CDF(τ)`. The crown = model - evidence. Always visible when evidence is behind the model. But the curve is not weighted by evidence (user rejected this).
 

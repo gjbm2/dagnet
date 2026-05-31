@@ -1,7 +1,7 @@
 # Forecast Runtime Architecture
 
 **Status**: Active reference, 6-May-26
-**Scope**: the live `cohort_forecast_v3` runtime: `ResolvedCFRuntime`, primitive conditioning and composition, selected-Cohort reduction, selected A-clock evidence, row projection, and public scalar projection. Handler I/O, persistence, and response application remain owned by [`FORECAST_STACK_DATA_FLOW.md`](FORECAST_STACK_DATA_FLOW.md). Semantic authority remains [`COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md).
+**Scope**: the live `cohort_forecast_v3` runtime: `ResolvedCFRuntime`, primitive conditioning and composition, selected-Cohort reduction, the empirical-evidence operator (strict observed evidence), row projection, and public scalar projection. Handler I/O, persistence, and response application remain owned by [`FORECAST_STACK_DATA_FLOW.md`](FORECAST_STACK_DATA_FLOW.md). Semantic authority remains [`COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`](COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md).
 
 This doc describes the current runtime after the primitive substrate, carrier/subject composition, selected-Cohort mass reducer, active-carrier projection, and selected A-clock evidence adapter work landed. Reading order for a new contributor: semantics doc first, this doc second, data-flow doc third.
 
@@ -21,7 +21,7 @@ This doc describes the current runtime after the primitive substrate, carrier/su
 
 ## 1. The Live Shape
 
-An `[I10]` request enters either the cohort maturity analysis endpoint or the conditioned forecast endpoint. Both surfaces route through `compute_cohort_maturity_rows_v3` in `graph-editor/lib/runner/cohort_forecast_v3.py`; there is no separate row engine for CF scalars.
+An `[I10]` request enters either the cohort maturity analysis endpoint or the conditioned forecast endpoint. Both surfaces share the same `ResolvedCFRuntime` and `CFProjectionBundle` (`prepare_cf_projection_bundle` in `graph-editor/lib/runner/cf_analysis.py`), then diverge at the reducer chosen by `reducer_for(analysis_type)`: the cohort maturity chart uses the tau reducer `reduce_cohort_maturity_rows`, while CF scalars use `prepare_cf_scalar_bundle` + `reduce_cf_scalars`. The three reducers (`reduce_cohort_maturity_rows`, `reduce_daily_conversions_rows`, `reduce_cf_scalars`) and the runtime still live in `cohort_forecast_v3.py`; `compute_cohort_maturity_rows_v3` survives only as a thin bundle→tau-reducer wrapper for legacy/test callers and is no longer on the production handler path.
 
 The live call order through `compute_cohort_maturity_rows_v3` interleaves the **primitive substrate stage** (the 5 layers in [CF_PRIMITIVE_SUBSTRATE.md](CF_PRIMITIVE_SUBSTRATE.md)) with the **row pipeline stage** (the 8 layers in [CF_ROW_PIPELINE.md](CF_ROW_PIPELINE.md)). Frame evidence (row layer 1) runs **before** substrate construction; substrate stage A runs once; the rest of the row pipeline (layers 2–8) runs **after** the substrate, reading the resolved runtime. See [CF_ROW_PIPELINE.md §1a](CF_ROW_PIPELINE.md#1a-data-flow-vs-call-order) for the explicit ordered diagram.
 
@@ -92,7 +92,7 @@ Active `cohort(A != X)` supplies a real composed carrier for selected-Cohort pro
 
 ## 5. Evidence Materialisation
 
-`build_cohort_evidence_from_frames` is a display-evidence materialiser, not a carrier builder and not a scalar authority. It builds `engine_cohorts` (with `a_pop`, `frontier_age`, epoch boundaries) and the per-Cohort `cohort_list`. Its frame-derived `obs_x`/`obs_y` arrays survive on `engine_cohorts` only for non-v3 legacy consumers (notably `compute_forecast_trajectory` callers — daily-conversions annotation, surprise-gauge-style legacy paths); the v3 row builder does not read them for evidence-named row fields.
+`build_cohort_evidence_from_frames` is a display-evidence materialiser, not a carrier builder and not a scalar authority. It builds `engine_cohorts` (with `a_pop`, `frontier_age`, epoch boundaries) and the per-Cohort `cohort_list`. Its frame-derived `obs_x`/`obs_y` arrays survive on `engine_cohorts` only for non-v3 legacy consumers (daily-conversions annotation and the legacy hold-out paths); the v3 row builder does not read them for evidence-named row fields.
 
 Post selected-cohort cutover, strict observed evidence is owned by the **empirical-evidence operator** — not a bespoke `SelectedAClockEvidence` object (that object and its builder `_build_selected_a_clock_evidence_from_runtime` are deleted):
 
@@ -134,7 +134,7 @@ This mass-first reduction is what feeds E+F mode's evidence layer and the FC con
 Observed evidence fields are separate from projection fields:
 
 - Both identity-carrier and active rows read the strict empirical surfaces (`rate_strict`, `evidence_*_strict`) emitted by `project_selected_cohort_rows`; there is no separate evidence object and no `aggregate_by_tau`. Callers do not pass an alternate evidence map, and no path aggregates `engine_cohorts.obs_x/obs_y` for v3 evidence-named row fields.
-- When `SelectedAClockEvidence` is absent or has no cells, evidence-named row fields are absent (None) rather than reconstructed from the frame substrate — invariant 12.
+- When the strict empirical surfaces have no admissible cells, evidence-named row fields are absent (None) rather than reconstructed from the frame substrate — invariant 12.
 - Model projection never fills evidence-named fields.
 
 Epoch gating is output-layer policy, not data scarcity: the spine generates `ef_*` across the full tau sweep with strict-evidence prefix-pinning. The FE chart layer suppresses the E+F forecast layer in epoch A (where it would coincide with the solid E line and double-draw) and the E mode evidence layer in epoch C (where there are no observations). See [CF_ROW_PIPELINE.md §6.1](CF_ROW_PIPELINE.md#61-display-mode-epoch-mapping) for the full table.
@@ -174,11 +174,11 @@ Invalidation remains coarse-grained through `result_cache.clear_all()`. Scope-be
 
 ## 10. Handler Boundary
 
-The cohort maturity analysis endpoint and the conditioned forecast endpoint both call the same v3 machinery. Cross-surface parity comes from shared runtime objects, shared primitive preparation, shared selected-Cohort reduction, selected A-clock evidence construction, and shared row projection.
+The cohort maturity analysis endpoint and the conditioned forecast endpoint both call the same v3 machinery. Cross-surface parity comes from shared runtime objects, shared primitive preparation, the shared `prepare_cf_projection_bundle` boundary, and shared selected-Cohort reduction (the empirical-evidence operator owns strict observed evidence; there is no separate selected-A-clock construction step).
 
 The fetch-envelope plan that feeds subject and carrier observations is built at the preparation layer in `forecast_preparation.prepare_forecast_subject_group` and applied before runtime construction. Prepared per-edge entries expose those rows as `evidence_superset_rows`. The runtime no longer performs in-runtime DB widening, and `forecast_runtime.prepare_forecast_runtime_inputs` no longer constructs target-edge evidence or request-level evidence sets. See [`snapshot-fetch-envelope-design.md`](../snapshot-fetch-envelope-design.md) and [`FORECAST_PREPARATION.md`](FORECAST_PREPARATION.md) §5.
 
-**Legacy inline fallback.** `build_resolved_cf_runtime` ([`cohort_forecast_v3.py:1353-1376`](../../graph-editor/lib/runner/cohort_forecast_v3.py#L1353-L1376)) constructs the envelope plan inline when the caller does not supply one, so legacy and test entry points still work in active mode. Production requests always route through the preparation layer; the inline path is a fallback, not a parallel path, and is tracked as case-fork debt in [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md). The two construction sites must remain semantically identical.
+**Legacy inline fallback.** `build_resolved_cf_runtime` ([`cohort_forecast_v3.py`](../../graph-editor/lib/runner/cohort_forecast_v3.py#L542)) constructs the envelope plan inline (the `if envelope_plan is None:` fallback that calls `build_request_envelope_plan`) when the caller does not supply one, so legacy and test entry points still work in active mode. Production requests always route through the preparation layer; the inline path is a fallback, not a parallel path, and is tracked as case-fork debt in [`cf-defensive-findings.md`](../project-generalise/cf-defensive-findings.md). The two construction sites must remain semantically identical.
 
 ## 11. What Lives Where
 

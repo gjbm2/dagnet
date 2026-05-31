@@ -520,7 +520,7 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
 
             Legacy snapshot-based analysis:
                 - snapshot_query: {param_id, core_hash, anchor_from, anchor_to, slice_keys?}
-                - analysis_type: 'lag_histogram' | 'daily_conversions'
+                - analysis_type: 'lag_histogram'
 
             Optional on any shape:
                 - no_cache: bool — when true, bypass the snapshot_service TTL cache
@@ -1261,21 +1261,14 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
     A client of the same preparation→bundle boundary cohort_maturity uses:
     admit shared forecast evidence → build the one shared
     ``CFProjectionBundle`` → reduce it with the registry-selected date
-    reducer. The observed ``data`` / ``cohort_y_at_age`` /
-    ``total_conversions`` / ``date_range`` and the observed ``x`` / ``y`` /
-    ``rate`` per Cohort stay owned by ``derive_daily_conversions`` over the
-    shared admitted rows — the SAME asat-bounded rows the bundle is built
-    from, so observed and forecast cannot diverge on admission frontier (the
-    bundle is a Cohort×tau projection, not the calendar-delta observed
-    series) — and the date reducer joins each observed row to its Cohort by
-    ``anchor_day``. Daily has no bespoke pre-reducer admission: no second
+    reducer. Daily has no bespoke pre-reducer admission, no second
     ``query_snapshots`` fetch, no daily-specific read mode, no separate
-    regime selection. See single-evidence-admission-binding plan Stage 2.
+    regime selection, and no secondary observed-response object. The
+    ``CFProjectionBundle`` is the sole authority for canonical
+    daily-conversions rows.
     """
-    from runner.daily_conversions_derivation import derive_daily_conversions
     from runner.forecast_admission import (
         admit_forecast_evidence,
-        admitted_rows_for_target,
     )
     from runner.forecast_preparation import extract_forecast_context_scope
     from runner.forecast_runtime import (
@@ -1328,58 +1321,55 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
         _as_at = parse_asat_from_dsl(temporal_dsl)
         subjects = [pe['subject'] for pe in preparation.per_edge_results]
 
-        # Observed series: the shared admitted rows for the target edge,
-        # reduced by derive_daily_conversions. These are the SAME rows the CF
-        # projection bundle is built from — observed and forecast can no longer
-        # diverge on admission frontier. Owns the calendar `data` series,
-        # per-Cohort observed x/y/rate, cohort_y_at_age, totals, date_range.
-        admitted_rows = admitted_rows_for_target(preparation)
-        observed = derive_daily_conversions(admitted_rows)
-        observed['date_range'] = {
-            'from': _format_retrieved_at_for_display(preparation.anchor_from),
-            'to': _format_retrieved_at_for_display(preparation.anchor_to),
-        }
+        if not preparation.last_edge_id:
+            per_scenario_results.append({
+                "scenario_id": scenario_id,
+                "success": False,
+                "subjects": [{
+                    "subject_id": "daily_conv:unresolved",
+                    "success": False,
+                    "error": "No resolvable subject edge for daily_conversions",
+                    "rows_analysed": preparation.total_rows,
+                }],
+                "rows_analysed": preparation.total_rows,
+            })
+            continue
 
-        # Forecast enrichment: the date reducer over the shared bundle. No
-        # edge resolved → no projection; the observed series stands alone.
-        if preparation.last_edge_id:
-            visibility_mode = scenario.get('visibility_mode', 'f+e')
-            compute_extent = _compute_extent_for_scenario(
-                display_settings=display_settings,
-                visibility_mode=visibility_mode,
-                anchor_from=preparation.anchor_from,
-                sweep_to=preparation.sweep_to,
-                graph_data=graph_data,
-                last_edge_id=preparation.last_edge_id,
-                forecasting_settings=forecasting_settings,
-                is_window=is_window,
-                query_from_node=preparation.query_from_node or None,
-                query_to_node=preparation.query_to_node or None,
-                anchor_node=preparation.anchor_node,
+        visibility_mode = scenario.get('visibility_mode', 'f+e')
+        compute_extent = _compute_extent_for_scenario(
+            display_settings=display_settings,
+            visibility_mode=visibility_mode,
+            anchor_from=preparation.anchor_from,
+            sweep_to=preparation.sweep_to,
+            graph_data=graph_data,
+            last_edge_id=preparation.last_edge_id,
+            forecasting_settings=forecasting_settings,
+            is_window=is_window,
+            query_from_node=preparation.query_from_node or None,
+            query_to_node=preparation.query_to_node or None,
+            anchor_node=preparation.anchor_node,
+        )
+        prepared = prepare_cf_projection_bundle(
+            preparation,
+            graph_data=graph_data,
+            subjects=subjects,
+            is_window=is_window,
+            context_scope=context_scope,
+            scenario_id=scenario_id,
+            as_at=_as_at,
+            candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+            per_edge_results_by_uuid={},
+            compute_extent=compute_extent,
+            include_epistemic_overlay=False,
+            use_prepared_resolved=False,
+            show_model_curve=False,
+            log_prefix='[daily_conv]',
+        )
+        result = reducer_for('daily_conversions')(prepared.bundle)
+        if _emit_diagnostics and prepared.runtime_bundle_diag is not None:
+            _diag['rate_evidence_provenance'] = serialise_rate_evidence_provenance(
+                prepared.runtime_bundle_diag
             )
-            prepared = prepare_cf_projection_bundle(
-                preparation,
-                graph_data=graph_data,
-                subjects=subjects,
-                is_window=is_window,
-                context_scope=context_scope,
-                scenario_id=scenario_id,
-                as_at=_as_at,
-                candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
-                per_edge_results_by_uuid={},
-                compute_extent=compute_extent,
-                include_epistemic_overlay=False,
-                use_prepared_resolved=False,
-                show_model_curve=False,
-                log_prefix='[daily_conv]',
-            )
-            result = reducer_for('daily_conversions')(prepared.bundle, observed)
-            if _emit_diagnostics and prepared.runtime_bundle_diag is not None:
-                _diag['rate_evidence_provenance'] = serialise_rate_evidence_provenance(
-                    prepared.runtime_bundle_diag
-                )
-        else:
-            result = observed
 
         per_scenario_results.append({
             "scenario_id": scenario_id,
@@ -1388,9 +1378,9 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
                 "subject_id": f"daily_conv:{preparation.query_from_node}:{preparation.query_to_node}",
                 "success": True,
                 "result": result,
-                "rows_analysed": len(admitted_rows),
+                "rows_analysed": preparation.total_rows,
             }],
-            "rows_analysed": len(admitted_rows),
+            "rows_analysed": preparation.total_rows,
         })
 
     # Flatten single-scenario / single-subject (matches the other handlers).
@@ -2615,12 +2605,13 @@ def _handle_snapshot_analyze_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Legacy handler: snapshot_query (single-subject, used by older callers).
     
-    Queries snapshot DB and derives analytics (histogram, daily conversions).
+    Queries snapshot DB and derives legacy snapshot analytics. Canonical
+    daily_conversions requires a scenario graph and shared CF projection
+    bundle, so it is not supported by this legacy shape.
     """
     from datetime import date, datetime
     from snapshot_service import query_snapshots
     from runner.histogram_derivation import derive_lag_histogram
-    from runner.daily_conversions_derivation import derive_daily_conversions
     
     snapshot_query = data['snapshot_query']
     analysis_type = data.get('analysis_type', 'lag_histogram')
@@ -2660,7 +2651,10 @@ def _handle_snapshot_analyze_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
     if analysis_type == 'lag_histogram':
         result = derive_lag_histogram(rows)
     elif analysis_type == 'daily_conversions':
-        result = derive_daily_conversions(rows)
+        raise ValueError(
+            "daily_conversions requires scenario graph analysis via "
+            "handle_runner_analyze, not legacy snapshot_query",
+        )
     elif analysis_type == 'conversion_rate':
         from runner.conversion_rate_derivation import derive_conversion_rate
         result = derive_conversion_rate(rows, bin_size='day')

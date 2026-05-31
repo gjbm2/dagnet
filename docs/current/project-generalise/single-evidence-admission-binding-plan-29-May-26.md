@@ -4,6 +4,15 @@
 **Status:** Replacement plan, daily-conversions first  
 **Scope:** Remove daily conversions' bespoke pre-reducer path. Daily conversions must reach the same `ForecastPreparation` and `CFProjectionBundle` as cohort maturity before its existing reducer runs.
 
+**31-May-26 supersession note:** this plan closed the duplicate-admission
+fork, then the canonical daily path was tightened further. Live
+`daily_conversions` now reduces `CFProjectionBundle` directly:
+`reduce_daily_conversions_rows(bundle)`. It no longer builds or passes
+`derive_daily_conversions` output, and it no longer preserves raw
+`{date, conversions}` response fields as part of the canonical chart path.
+References below to `reduce_daily_conversions_rows(bundle, observed)` and
+`derive_daily_conversions` as a daily input are historical.
+
 ## Implementation Progress
 
 - [x] Stage 0 - Pin The Daily Fork In Tests — completed 29-May-26

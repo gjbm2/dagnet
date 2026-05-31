@@ -116,7 +116,7 @@ These are the rules whose violation produces silent wrong answers. The substrate
 
 ### 3.1 Single conditioning locus
 
-`primitive_conditioning.condition_primitive` is **the only** place where evidence updates a posterior. Composition (Layer 4), readout (Layer 5), the selected-cohort reducer, the row projector, and the legacy trajectory engine all consume already-conditioned primitives — none re-condition.
+`primitive_conditioning.condition_primitive` is **the only** place where evidence updates a posterior. Composition (Layer 4), readout (Layer 5), the selected-cohort reducer, and the row projector all consume already-conditioned primitives — none re-condition.
 
 This is what makes the primitive object a unit of work the result cache can key. Re-conditioning downstream would break draw-family coherence and bust the cache silently. See [INVARIANTS.md](INVARIANTS.md) I-48.
 
@@ -148,7 +148,7 @@ This is why the legacy trajectory engine (which collapsed them into a single `ra
 
 ### 3.7 Single conditioning at the primitive level for doc-52 subset policy
 
-The doc-52 mass-ratio policy (`r = min(m_S/m_G, 1)`) is applied **once**, in `primitive_conditioning._compute_subset_policy`. Composed consumers (`window()`, `subject_span`, `carrier_to_x`, projection) **must not** re-apply subset logic. The conditioned primitive carries the posterior outright. The retired in-trajectory blend (`forecast_state.compute_forecast_trajectory`'s `_compute_blend_params`) is documented in [CF_HOLD_OUT_ENGINES.md](CF_HOLD_OUT_ENGINES.md).
+The doc-52 mass-ratio policy (`r = min(m_S/m_G, 1)`) is applied **once**, in `primitive_conditioning._compute_subset_policy`. Composed consumers (`window()`, `subject_span`, `carrier_to_x`, projection) **must not** re-apply subset logic. The conditioned primitive carries the posterior outright. The retired in-trajectory blend (the deleted `compute_forecast_trajectory`'s `_compute_blend_params`, removed from `forecast_state.py` in 73q Phase 7) is documented in [CF_HOLD_OUT_ENGINES.md](CF_HOLD_OUT_ENGINES.md).
 
 ### 3.8 Structurally non-latency timing is provenance-only on μ/σ/onset
 
@@ -169,7 +169,7 @@ Window mode and `cohort(A = X)` have only one map (X-rooted, identity weights ov
 
 `window()` and `cohort(A = X)` are degeneracies of the same runtime object. Their `composed_carrier` is `None`; the composer helpers treat `carrier is None` as identity; the selected-cohort reducer additionally checks `population_root == denominator_node` (semantic equality is authoritative even if a stray carrier object exists).
 
-The implementation has a known unification gap: 20+ `if is_identity_carrier:` branches in `cohort_forecast_v3.py` and a separate `_synthesize_identity_carrier_observed_surface` helper. The design says "identity is data"; the code is mid-refactor toward that. AP58, audit H-5, and [CF_REFACTOR_TRACKERS.md](CF_REFACTOR_TRACKERS.md). I-45 is the canonical invariant ("one resolution path; cases differ by degeneration, not branching").
+The runtime now degenerates window and `cohort(A = X)` via `composed_carrier is None` checks rather than a dedicated identity-carrier branch — the unification gap (formerly 20+ `if is_identity_carrier:` branches plus a `_synthesize_identity_carrier_observed_surface` helper) has been closed in `cohort_forecast_v3.py`. The design says "identity is data"; the code now realises that. AP58, audit H-5, and [CF_REFACTOR_TRACKERS.md](CF_REFACTOR_TRACKERS.md). I-45 is the canonical invariant ("one resolution path; cases differ by degeneration, not branching").
 
 ---
 
@@ -244,13 +244,12 @@ A process-memory cache wraps the composer keyed by topology + per-edge primitive
 This is the orchestrator. It:
 
 1. Builds the two arrival maps (subject X-rooted; carrier A-rooted when active) if the caller hasn't pre-built them.
-2. Walks the carrier and subject edge-resolution lists, running each edge through the residual guard (`primitive_residual_guard.classify_edge_requirement`) and then through `_prepare_one` — which calls `bind_primitive_evidence` + `condition_primitive` and registers the resulting primitive in the request's `RequestPrimitiveRegistry` (carrier primitives are registered under the carrier-map identity; subject primitives under the subject-map identity).
+2. Walks the carrier and subject edge-resolution lists, running each edge through the residual guard (`primitive_residual_guard.classify_edge_requirement`) and then through `_prepare_conditioned_primitive` — which calls `bind_primitive_evidence` + `condition_primitive` and registers the resulting primitive in the request's `RequestPrimitiveRegistry` (carrier primitives are registered under the carrier-map identity; subject primitives under the subject-map identity).
 3. Calls `compose_primitive_span` twice: once for the carrier (`A → X`, skipped in identity-carrier mode), once for the subject (`X → end`).
 4. Builds `unconditioned_overlays` keyed by dispersion basis (`'predictive'` for F-mode bands, optional `'epistemic'` for the model-curve overlay). Each overlay runs `compose_primitive_span` over a parallel set of prior-only primitives produced by `make_unconditioned_primitive`.
-5. Computes shadow/acceptance band deltas (`SHADOW_ABS_BAND` / `ACCEPTANCE_ABS_BAND`) against the caller-supplied legacy moments — diagnostic only; v3 row paths pass no legacy moments.
-6. Returns a `ResolvedRuntimeReadoutResult` with the composed spans, primitive registry, conditioned-primitive map, role-labelled provenance, and a `should_substitute` property.
+5. Returns a `ResolvedRuntimeReadoutResult` with the composed spans (conditioned, predictive, and empirical), primitive registry, conditioned-primitive map, and role-labelled provenance (`carrier_span_role` / `subject_span_role`).
 
-`ResolvedCFRuntime` (in `cohort_forecast_v3.py`) is the request-level dataclass that wraps the readout result plus the runtime-resolved dual-prefix objects (`selected_source_day_mass`, `selected_x_prefix`, `selected_y_prefix`) used by the row pipeline. See [CF_ROW_PIPELINE.md](CF_ROW_PIPELINE.md).
+`ResolvedCFRuntime` (in `cohort_forecast_v3.py`) is the request-level dataclass that wraps the readout result plus the runtime-resolved `source_layer_transitions` (the union of carrier + subject source-layer transitions) used by the row pipeline. See [CF_ROW_PIPELINE.md](CF_ROW_PIPELINE.md).
 
 ---
 

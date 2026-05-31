@@ -32,7 +32,8 @@ Accessors operate on the returned ``ForecastPreparation``:
 - ``target_per_edge_result(preparation)`` — the per-edge result for the
   query's target (last) edge.
 - ``admitted_rows_for_target(preparation)`` — that edge's post-regime
-  evidence-superset rows (the observed-evidence input daily reduces).
+  evidence-superset rows (diagnostic/test accessor; canonical
+  daily_conversions reduces the CFProjectionBundle, not this row list).
 - ``admission_fingerprint(preparation)`` — a deterministic, comparable
   signature of what was admitted, for cross-handler parity checks (Stage 3).
 """
@@ -113,9 +114,8 @@ def target_per_edge_result(preparation: ForecastPreparation) -> Dict[str, Any]:
 def admitted_rows_for_target(preparation: ForecastPreparation) -> List[Dict[str, Any]]:
     """The target edge's post-regime evidence-superset rows.
 
-    This is the observed-evidence input daily conversions reduces with
-    ``derive_daily_conversions`` after the Stage 2 cutover — the same rows the
-    ``CFProjectionBundle`` is built from.
+    Diagnostic/test accessor for the rows that feed bundle construction.
+    Canonical daily_conversions does not reduce this row list directly.
     """
     return target_per_edge_result(preparation)['evidence_superset_rows']
 

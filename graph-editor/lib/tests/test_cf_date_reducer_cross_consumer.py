@@ -17,9 +17,8 @@ The tau reducer (``cohort_maturity``) and the date reducer
 
 Built on the DB-free synth-frame bundle harness from
 ``test_cf_projection_bundle.py`` (which itself reuses the inline
-cohort_maturity v3 fixtures). The date reducer is fed an ``observed``
-dict synthesised from the bundle's own cohort_list, so the join key
-(anchor_day) matches by construction — the realistic production shape.
+cohort_maturity v3 fixtures). The date reducer is bundle-only: the
+join key is the bundle's own cohort_list-aligned date axis.
 """
 
 import os
@@ -35,6 +34,7 @@ from runner.cohort_forecast_v3 import (
     build_cf_projection_bundle,
     reduce_daily_conversions_rows,
     _project_runtime_rows,
+    _date_key,
 )
 
 from test_cohort_maturity_v3_contract import (  # noqa: E402
@@ -75,30 +75,6 @@ def _build_bundle(admitted_anchors):
     return bundle, sweep_to
 
 
-def _observed_from_bundle(bundle):
-    """Synthesise the derive_daily_conversions-shaped observed dict from
-    the bundle's cohort_list, so the date reducer's anchor_day join is
-    exact."""
-    rows = []
-    for ci in bundle.frame_evidence.cohort_list:
-        ad = ci['anchor_day']
-        date_str = ad.isoformat() if hasattr(ad, 'isoformat') else str(ad)[:10]
-        x = float(ci.get('x_frozen', 0.0) or 0.0)
-        y = float(ci.get('y_frozen', 0.0) or 0.0)
-        rows.append({
-            'date': date_str, 'x': x, 'y': y,
-            'rate': (y / x if x > 0 else None),
-        })
-    return {
-        'analysis_type': 'daily_conversions',
-        'data': [],
-        'cohort_y_at_age': {},
-        'total_conversions': 0,
-        'date_range': {'from': None, 'to': None},
-        'rate_by_cohort': rows,
-    }
-
-
 def _tau_rows(bundle, sweep_to):
     return _project_runtime_rows(
         runtime=bundle.runtime,
@@ -114,7 +90,10 @@ def _tau_rows(bundle, sweep_to):
 
 
 def _date_row(result, date_str):
-    return next(r for r in result['rate_by_cohort'] if r['date'] == date_str)
+    return next(
+        r for r in result['rate_by_cohort']
+        if _date_key(r['date']) == _date_key(date_str)
+    )
 
 
 class TestSingleCohortDateTauAgreement:
@@ -125,8 +104,7 @@ class TestSingleCohortDateTauAgreement:
         # forecast_bands and the cohort_maturity terminal row must be
         # identical (same draws, same band quantiler).
         bundle, sweep_to = _build_bundle(('2026-03-10',))
-        observed = _observed_from_bundle(bundle)
-        date_result = reduce_daily_conversions_rows(bundle, observed)
+        date_result = reduce_daily_conversions_rows(bundle)
         tau_rows = _tau_rows(bundle, sweep_to)
 
         terminal_tau = int(bundle.max_tau)
@@ -141,8 +119,7 @@ class TestSingleCohortDateTauAgreement:
 
     def test_single_cohort_projected_rate_agrees_at_terminal_tau(self):
         bundle, sweep_to = _build_bundle(('2026-03-10',))
-        observed = _observed_from_bundle(bundle)
-        date_result = reduce_daily_conversions_rows(bundle, observed)
+        date_result = reduce_daily_conversions_rows(bundle)
         tau_rows = _tau_rows(bundle, sweep_to)
         terminal_tau = int(bundle.max_tau)
         tau_row = next(r for r in tau_rows if int(r['tau_days']) == terminal_tau)
@@ -159,8 +136,7 @@ class TestMultiCohortMassFirstAggregation:
 
     def test_per_cohort_projected_y_is_unsummed_view(self):
         bundle, sweep_to = _build_bundle(('2026-03-10', '2026-03-06'))
-        observed = _observed_from_bundle(bundle)
-        date_result = reduce_daily_conversions_rows(bundle, observed)
+        date_result = reduce_daily_conversions_rows(bundle)
         sp = bundle.selected_projection
 
         # Each admitted Cohort's projected_y is its own terminal FC rate
@@ -201,8 +177,7 @@ class TestMultiCohortMassFirstAggregation:
         # Each date-row fan reads the same per-Cohort terminal FC surface as
         # the tau reducer.
         bundle, sweep_to = _build_bundle(('2026-03-10', '2026-03-06'))
-        observed = _observed_from_bundle(bundle)
-        date_result = reduce_daily_conversions_rows(bundle, observed)
+        date_result = reduce_daily_conversions_rows(bundle)
         sp = bundle.selected_projection
 
         for entry in bundle.cohort_projection_status:

@@ -3,7 +3,7 @@
 **Status**: Active reference, 12-May-26
 **Scope**: the residual / complement / unparameterised-edge refusal surface in `primitive_residual_guard.py`. The first guardrail for edge requirements that primitive conditioning cannot serve.
 
-This is a 451-line module whose entire content is a refusal taxonomy plus a constructor for `UNSUPPORTED_RESIDUAL` and `STRUCTURALLY_DETERMINISTIC` primitives. Designed to fail loud rather than silently derive missing probabilities.
+This is a 390-line module whose entire content is a refusal taxonomy plus a single constructor for `STRUCTURALLY_DETERMINISTIC` primitives. Designed to fail loud rather than silently derive missing probabilities.
 
 ---
 
@@ -13,7 +13,7 @@ This is a 451-line module whose entire content is a refusal taxonomy plus a cons
 
 Three rules:
 
-1. **No adjacency-`1−p` derivation.** CF composition contains no `1 − p`, residual-sibling, or branch-complement code. A request for adjacency complement surfaces as `UNSUPPORTED_RESIDUAL` rather than being computed.
+1. **No adjacency-`1−p` derivation.** CF composition contains no `1 − p`, residual-sibling, or branch-complement code. A request for adjacency complement is refused (`forward_to_conditioning = False`) with a `rejection_reason` and `residual_policy.branch_complement_required` set, rather than being computed.
 2. **No silent inference of determinism from missing evidence.** If `kind = STRUCTURALLY_DETERMINISTIC`, the caller must supply an explicit `deterministic_p`. Missing `deterministic_p` raises `ValueError`.
 3. **No turning supported doc 29b topology into a residual problem.** Splits, joins, fan-in, fan-out, and side-exit leakage edges that lie inside the carrier or subject closure and have parameterised primitives remain normal DAG-composition cases. The guard MUST NOT misclassify these.
 
@@ -37,30 +37,18 @@ class EdgeRequirementKind(str, Enum):
 | Kind | What it means | Guard decision |
 |---|---|---|
 | `PARAMETERISED` (no adjacency-complement requested) | The composer needs a posterior on this edge and the edge has its own parameterisation. Forward to Stage 3 conditioning. | `forward_to_conditioning = True`. Stage 3 conditions; if its evidence is empty, Stage 3 emits `PRIOR_ONLY`. The guard never returns `UNSUPPORTED_RESIDUAL` for PARAMETERISED. |
-| `PARAMETERISED` + `requires_adjacency_one_minus_p` | Composer would need to derive this edge's probability from a sibling's `1 − p`. | Refuse as `UNSUPPORTED_RESIDUAL` with `branch_complement_required` set. CF composition does not perform `1 − p` sibling derivation. |
-| `STRUCTURALLY_DETERMINISTIC` (with explicit `deterministic_p`) | Graph semantics fix `p` (e.g. boolean wiring). | Emit `STRUCTURALLY_DETERMINISTIC` primitive at the given `p`. No evidence consulted. |
+| `PARAMETERISED` + `requires_adjacency_one_minus_p` | Composer would need to derive this edge's probability from a sibling's `1 − p`. | Refuse: `forward_to_conditioning = False`, `residual_policy.branch_complement_required` set. No primitive is built. CF composition does not perform `1 − p` sibling derivation. |
+| `STRUCTURALLY_DETERMINISTIC` (with explicit `deterministic_p`) | Graph semantics fix `p` (e.g. boolean wiring). | Set `decision.deterministic_p`; the caller wires it into `make_structurally_deterministic_primitive`. No evidence consulted. |
 | `STRUCTURALLY_DETERMINISTIC` without `deterministic_p` | Composer didn't supply the constant. | `ValueError`. Determinism is never inferred from missing evidence. |
-| `UNPARAMETERISED_RESIDUAL` | Closure required a residual edge that has no parameterisation. | Emit `UNSUPPORTED_RESIDUAL` with `residual_closure_required` set. |
-| `UNPARAMETERISED_COMPLEMENT` | Branch complement needed (sibling `1 − p`) with no parameterisation. | Emit `UNSUPPORTED_RESIDUAL` with `branch_complement_required` set. |
-| `PREPARED_SPAN_REJECTED` | Stage 2's `validate_span_primitive` rejected a prepared span primitive (crosses X boundary, mixes incompatible metadata). | Emit `UNSUPPORTED_RESIDUAL` carrying the rejection reason. |
+| `UNPARAMETERISED_RESIDUAL` | Closure required a residual edge that has no parameterisation. | Refuse: `forward_to_conditioning = False`, `residual_policy.residual_closure_required` set. No primitive is built. |
+| `UNPARAMETERISED_COMPLEMENT` | Branch complement needed (sibling `1 − p`) with no parameterisation. | Refuse: `forward_to_conditioning = False`, `residual_policy.branch_complement_required` set. No primitive is built. |
+| `PREPARED_SPAN_REJECTED` | Stage 2's `validate_span_primitive` rejected a prepared span primitive (crosses X boundary, mixes incompatible metadata). | Refuse: `forward_to_conditioning = False`, `rejection_reason` carries the Stage 2 reason. No primitive is built. |
 
 ---
 
-## The two primitive constructors
+## The single primitive constructor
 
-The guard exposes two factories that produce `ConditionedTransitionPrimitive` objects in their respective non-conditioned states.
-
-### `make_unsupported_residual_primitive`
-
-Constructs a `status = UNSUPPORTED_RESIDUAL` primitive:
-
-- `probability_posterior` and `timing_posterior` are deliberately `None` — there is no posterior to read.
-- `draw_family_mode = MOMENTS_ONLY`; `draw_family_key = None`.
-- `is_draw_coherent` is False; `probability_draws()` and `timing_draws()` raise `DrawFamilyUnavailable`.
-- `residual_policy` records the structural element that would have been needed (`branch_complement_required` or `residual_closure_required`) so diagnostics can name the missing piece.
-- `notes` carries the rejection reason.
-
-Composers that hit an `UNSUPPORTED_RESIDUAL` primitive must either fall back to a different topology or surface degraded provenance to the caller.
+The guard exposes one factory that produces a `ConditionedTransitionPrimitive` in a non-conditioned state. Refusals no longer build a primitive: a refused `EdgeRequirement` propagates as a `ResidualGuardDecision` with `forward_to_conditioning = False` plus an explicit `rejection_reason` and (for residual/complement cases) a `residual_policy`. No primitive is constructed for a refused edge — the absence of a primitive plus the diagnostic IS the refusal. (The earlier `make_unsupported_residual_primitive` factory and the `UNSUPPORTED_RESIDUAL` status were removed; refusal is now signalled on the decision itself.)
 
 ### `make_structurally_deterministic_primitive`
 
@@ -86,20 +74,19 @@ for edge in closure.edges:
     decision = classify_edge_requirement(requirement)  # ask the guard
     if decision.forward_to_conditioning:
         primitive = condition_primitive(...)           # Stage 3 owns the posterior
-    elif decision.status_to_emit == ConditioningStatus.STRUCTURALLY_DETERMINISTIC:
+    elif decision.deterministic_p is not None:
         primitive = make_structurally_deterministic_primitive(
             ..., deterministic_p=decision.deterministic_p,
         )
+        registry.register(primitive)
     else:
-        primitive = make_unsupported_residual_primitive(
-            ...,
-            residual_policy=decision.residual_policy,
-            rejection_reason=decision.rejection_reason,
-        )
-    registry.register(primitive)
+        # Refused: no primitive is built. The absence of a primitive
+        # plus decision.rejection_reason / decision.residual_policy IS
+        # the refusal — surface it as degraded provenance to the caller.
+        report_refusal(decision.rejection_reason, decision.residual_policy)
 ```
 
-The composer never embeds the refusal logic itself — `classify_edge_requirement` is the single decision point. This is how `primitive_readout._prepare_one` (the v3 substrate's edge preparation step) handles the carrier and subject walks. It always classifies as `PARAMETERISED`; the guard is in the live request path defensively.
+The composer never embeds the refusal logic itself — `classify_edge_requirement` is the single decision point. No production composer consumes the guard yet: the v3 substrate's per-edge preparation step (`primitive_readout._prepare_conditioned_primitive`) binds evidence and calls `condition_primitive` directly, so the carrier and subject walks effectively treat every edge as `PARAMETERISED`. The guard remains shadow until residual-aware composition lands.
 
 The guard is **Stage 4 in the plan choreography** — currently shadow per the plan's migration discipline. Stage 5+ composers will consume it directly when residual-aware composition lands.
 

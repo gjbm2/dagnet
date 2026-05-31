@@ -596,7 +596,8 @@ degenerate naturally across:
   (see [`FORECAST_STACK_DATA_FLOW.md`](FORECAST_STACK_DATA_FLOW.md)
   §B.3 [I10] "WP8 discipline"). Until WP8 lands, every cohort and window
   request goes through the pre-WP8 conditioning seam
-- the `Pop C / Pop D` split in `forecast_state.py` only makes semantic
+- the `Pop C / Pop D` split in the factorised carrier/subject machinery
+  (`model_span_spine.py`) only makes semantic
   sense if the future numerator is still factorised
 - if a future implementation promotes a gross fitted subject numerator,
   that implementation must stop adding separate Pop C and Pop D
@@ -670,7 +671,7 @@ source selection.
 
 ### 3. One conditioning locus
 
-Every primitive is prepared once by `primitive_readout._prepare_one`
+Every primitive is prepared once by `primitive_readout.prepare_primitive`
 and conditioned by `primitive_conditioning.condition_primitive`.
 Posterior conditioning lives nowhere else. No projection-time
 conditioning. No row-time conditioning. No scalar-time conditioning.
@@ -732,7 +733,8 @@ They must not contain their own carrier, subject-span, `p∞`,
 completeness, or admission logic. `_project_runtime_rows` reads from
 runtime surfaces; it does not rebuild them. `_attach_cf_row_metadata`
 attaches provenance; it does not synthesise it. Active-row evidence
-fields read only from `SelectedAClockEvidence`; they are not patched
+fields read only from the selected A-clock evidence surface
+(`SelectedRetrievalFrontier`); they are not patched
 from local subject rows when selected A-clock observations are
 absent — the field is absent rather than wrong.
 

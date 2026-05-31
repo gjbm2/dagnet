@@ -18,6 +18,15 @@
 - [x] Phase 7 — Cleanup sweep — completed 31-May-26 (cohort_forecast.py and cohort_forecast_v2.py deleted whole; forecast_state.py trimmed from 1869 LOC to 133 LOC keeping only _resolve_edge_p / _warn_legacy_pmean_carrier / CohortEvidence; forecast_application.py trimmed to just compute_completeness; api_handlers.py legacy _is_cohort_maturity dispatch sweep; six legacy-only test files retired and four others pruned. CohortEvidence kept in forecast_state.py rather than rehomed.)
 - [ ] Phase 8 — Companion analysis migrations: `bridge_view` direct-CF (8a) and `conversion_rate` bin reducer (8b)
 
+**31-May-26 cleanup note:** canonical `daily_conversions` is now
+bundle-only. `reduce_daily_conversions_rows` consumes only
+`CFProjectionBundle`; it does not accept `derive_daily_conversions` output,
+does not preserve raw `{date, conversions}` response fields, and does not
+fallback from bundle strict evidence to an observed row. Older prose below
+that describes `derive_daily_conversions` as part of the canonical daily
+chart path is historical context for the pre-cleanup migration, not live
+architecture.
+
 ## Why this is a rewrite
 
 The first draft of 73q was written before the 73m/73n carrier composition and unified CF runtime work landed. It also predates the frontier-conditioned chart-surface work. The current target is therefore sharper: there is no second pipeline to build, and the date reducer must read the same CF/FC projection surfaces that now feed `cohort_maturity`.

@@ -40,11 +40,11 @@ flowchart LR
   subgraph A["Band 3: current-answer / scoped"]
     Step2["FE topo Step 2<br/>reads active source + p.evidence.* + effective DSL<br/>writes provisional p.mean, p.stdev, p.stdev_pred, p.latency.completeness, p.latency.completeness_stdev<br/>trigger: per-fetch<br/>persistence: graph / IDB"]
     CF["BE CF / handle_conditioned_forecast<br/>I10/I12; reads request graph + DB snapshot + engorged evidence<br/>writes authoritative p.mean, p.stdev, p.stdev_pred, p.latency.completeness, p.latency.completeness_stdev, p.evidence.{k,n}<br/>trigger: per-fetch CF race or direct CF consumer<br/>persistence: graph / IDB when applied"]
-    Today["live conditioning locus (default)<br/>compute_forecast_trajectory / compute_forecast_summary<br/>PreparedConditioningEvidence is compatibility metadata only post-73n Stage 8<br/>persistence: request only"]
+    Today["live conditioning locus (default)<br/>build_resolved_cf_runtime -> build_cf_projection_bundle (cohort_forecast_v3.py); evidence subset/conjugate update inside the CF kernel<br/>PreparedConditioningEvidence is compatibility metadata only post-73n Stage 8<br/>persistence: request only"]
     Locks["Manual output locks<br/>mean_overridden, stdev_overridden<br/>pin current-answer fields only; no model_vars[manual]<br/>trigger: user overtype<br/>persistence: graph / IDB"]
     GraphReaders["Graph-consumer runners<br/>path, path_to_end, path_through, branch_comparison, end_comparison<br/>read edge.p.* via apply_visibility_mode"]
     DirectCF["Direct CF consumers<br/>conversion_funnel calls handle_conditioned_forecast<br/>consumes CF response before rendering"]
-    InBand["In-band forecast consumers<br/>cohort_maturity -> compute_forecast_trajectory<br/>surprise_gauge -> compute_forecast_summary"]
+    InBand["Bundle/reducer forecast consumers<br/>cohort_maturity -> prepare_cf_projection_bundle + reduce_cohort_maturity_rows<br/>surprise_gauge -> prepare_cf_scalar_bundle + reduce_cf_scalars"]
   end
 
   subgraph P["Band 4: promoted / model field"]
@@ -118,7 +118,7 @@ Analysis dispatch has three forecast-state read shapes:
 |---|---|---|---|
 | Graph-consumer runners | `path`, `path_to_end`, `path_through`, `branch_comparison`, `end_comparison` | Read `edge.p.mean`, `edge.p.evidence.mean`, or `edge.p.forecast.mean` through `apply_visibility_mode` | Render-only |
 | Direct CF consumers | `conversion_funnel` | Calls `handle_conditioned_forecast`; consumes per-edge `p_mean`, `p_sd`, `p_sd_epistemic`, `completeness`, `conditioned` | Funnel response is render-only; embedded CF apply can persist I12 fields |
-| In-band forecast consumers | `cohort_maturity`, `surprise_gauge` | Invoke `compute_forecast_trajectory` or `compute_forecast_summary` for the requested subject | Render-only |
+| Bundle/reducer forecast consumers | `cohort_maturity`, `surprise_gauge` | Build the shared CF bundle (`prepare_cf_projection_bundle` / `prepare_cf_scalar_bundle`) and run the matching reducer (`reduce_cohort_maturity_rows` / `reduce_cf_scalars`) for the requested subject | Render-only |
 
 Analysis runners do not trigger the fetch-pipeline Stage 2 CF race. They either read the graph state already produced by Stage 2, call the public CF surface directly, or run an in-band forecast kernel for their own render-only result.
 
@@ -133,7 +133,7 @@ This schematic reuses the `FORECAST_STACK_DATA_FLOW.md` interface labels and int
 
 ## Conditioning Locus
 
-**Live default (flag-OFF)**: evidence conditioning happens inside the forecast engine request path. `forecast_runtime.build_prepared_runtime_bundle` assembles `PreparedForecastRuntimeBundle.p_conditioning_evidence` (post-73n Stage 8 this object is **compatibility metadata only** — not an evidence-ownership decider); `compute_forecast_trajectory` / `compute_forecast_summary` consume it and apply the importance-sampling update while solving the requested span. This remains the live path for every CF request unless a primitive-readout flag is enabled.
+**Live default (flag-OFF)**: evidence conditioning happens inside the forecast engine request path. `forecast_runtime.build_prepared_runtime_bundle` assembles `PreparedForecastRuntimeBundle.p_conditioning_evidence` (post-73n Stage 8 this object is **compatibility metadata only** — not an evidence-ownership decider); the `cohort_forecast_v3` runtime (`build_resolved_cf_runtime` -> `build_cf_projection_bundle`) then builds the CF projection bundle and applies the evidence update while solving the requested span. This remains the live path for every CF request unless a primitive-readout flag is enabled.
 
 **73n primitive substrate (Stages 1-8 landed 1-May-26, default OFF)**: a typed `ConditionedTransitionPrimitive` substrate sits inside the CF kernel boundary. Subset / effective-evidence policy and the conjugate update apply **once at primitive construction** (`primitive_conditioning.py`); the primitives are then composed by `compose_subject_span` (and 73m's `compose_carrier_to_x` for active cohort `A != X`) into per-readout outputs. Four flag-gated readouts at the shared row-builder seam: `DAGNET_SINGLE_HOP_PRIMITIVE_READOUT`, `DAGNET_MULTI_HOP_SUBJECT_COMPOSITION`, `DAGNET_MULTI_HOP_WINDOW_READOUT`, `DAGNET_ACTIVE_COHORT_CARRIER_READOUT`. Each accepts `OFF` (live path), `SHADOW` (compute substrate readout in parallel and emit divergence diagnostics, return live result), or `ON` (return substrate readout). Production flag-ON for any of the four is currently blocked on the maturity-aware likelihood migration follow-up; SHADOW is the highest mode recommended in production.
 

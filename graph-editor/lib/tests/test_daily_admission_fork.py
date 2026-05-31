@@ -1,40 +1,9 @@
-"""Stage 0 pin: the daily-conversions pre-reducer admission fork.
+"""Daily-conversions admission uses the shared CF bundle path.
 
-Single-evidence-admission-binding plan (29-May-26), Stage 0 — "Pin The Daily
-Fork In Tests". Purpose: prove the daily-conversions failure starts *before*
-reducer logic, in evidence admission.
-
-`_handle_daily_conversions` currently admits evidence through TWO different
-pre-reducer paths for the same query:
-
-  Fork 1 (feeds the CF projection bundle):
-      resolve_forecast_subjects(path_analysis_type='daily_conversions')
-        -> prepare_forecast_subject_group(...)
-        -> per_edge_result["evidence_superset_rows"]
-    The 'daily_conversions' read mode is 'raw_snapshots'
-    (ANALYSIS_TYPE_READ_MODES), so synthesise_snapshot_subjects leaves
-    `sweep_to` UNSET. query_snapshots_for_sweep then bounds retrieved_at by
-    [sweep_from, sweep_to] = [None, None] -> UNBOUNDED above. The superset
-    therefore admits observations *after* the asat frontier.
-
-  Fork 2 (feeds the observed daily series):
-      query_snapshots(as_at=<asat>) -> _apply_temporal_regime_selection(...)
-        -> derive_daily_conversions(...)
-    This path caps retrieved_at <= asat.
-
-So the bundle is built from a later evidence frontier than the observed
-series the user sees. That is the upstream cause of the public symptom
-recorded in docs/current/handover/29-May-26-daily-conversions-completeness.md
-(daily-conversions row completeness ~0.4640 vs scalar completeness ~0.4974
-for `from(simple-a).to(simple-b).window(10-Jan-26:10-Jan-26).asat(20-Jan-26)`).
-
-The cutover (Stage 2) deletes Fork 2 and feeds the observed series from the
-SAME shared admitted rows the bundle uses: daily needs nothing special. This
-test pins the current divergence and asserts the intended shared input.
-
-Snapshot DB access is mocked. The two mocks honour their bound arguments
-(sweep date-range vs asat ceiling) exactly as the real SQL does, so the
-divergence emerges from the read-mode-driven subject stamping — not by fiat.
+The canonical daily-conversions handler must admit evidence through the same
+forecast preparation path as cohort_maturity, build one CFProjectionBundle, and
+reduce that bundle directly. It must not run a second query_snapshots admission
+or feed derive_daily_conversions into the date reducer.
 """
 
 import os
@@ -254,125 +223,15 @@ def _frontier_strict_xy(rows):
     return (sum(r["y"] for r in at_frontier), sum(r["x"] for r in at_frontier))
 
 
-def test_daily_pre_reducer_admission_fork_diverges_on_asat_frontier():
-    from analysis_subject_resolution import ANALYSIS_TYPE_READ_MODES
-    from runner.daily_conversions_derivation import derive_daily_conversions
-
-    # The read-mode fork that causes the divergence (names Fork 1's mechanism).
-    assert ANALYSIS_TYPE_READ_MODES['daily_conversions'] == 'raw_snapshots'
-
-    with (
-        patch("snapshot_service.query_snapshots_for_sweep",
-              side_effect=_fake_query_snapshots_for_sweep),
-        patch("snapshot_service.query_snapshots",
-              side_effect=_fake_query_snapshots),
-    ):
-        graph, subjects = _resolve_daily_subjects()
-        assert subjects, "daily subject resolution produced no subjects"
-
-        # The daily 'raw_snapshots' subject carries no asat-capped sweep_to:
-        # its admission is unbounded above. This is the root of the fork.
-        daily_subj = subjects[-1]
-        assert not daily_subj.get('sweep_to'), (
-            "daily subject unexpectedly carries a sweep_to bound; the "
-            "raw_snapshots read-mode fork this test pins may have changed"
-        )
-
-        shared_rows = _shared_admitted_rows(graph, subjects)
-        direct_rows = _direct_observed_rows(subjects)
-
-    # Non-vacuousness (AP17): real evidence on both sides.
-    assert shared_rows and direct_rows
-    assert all(r["x"] > 0 for r in shared_rows)
-
-    # --- Defect signature 1: latest admitted retrieved_at differs. ---
-    shared_frontier = _latest_retrieved_date(shared_rows)
-    direct_frontier = _latest_retrieved_date(direct_rows)
-    assert shared_frontier == date.fromisoformat("2026-01-25")
-    assert direct_frontier == date.fromisoformat(ASAT_DAY)
-    assert shared_frontier != direct_frontier, (
-        "expected the bundle's evidence frontier to diverge from the "
-        "observed series' frontier today"
-    )
-
-    # The shared (bundle) admission admits a POST-asat observation that the
-    # observed series never sees — the precise pre-reducer defect.
-    assert shared_frontier > date.fromisoformat(ASAT_DAY)
-    assert all(_to_date(r["retrieved_at"]) <= date.fromisoformat(ASAT_DAY)
-               for r in direct_rows)
-
-    # --- Defect signature 2: selected evidence frontier set differs. ---
-    shared_dates = {_to_date(r["retrieved_at"]) for r in shared_rows}
-    direct_dates = {_to_date(r["retrieved_at"]) for r in direct_rows}
-    assert shared_dates != direct_dates
-    assert direct_dates < shared_dates  # observed is a strict subset
-
-    # --- Defect signature 3: strict sum(y)/sum(x) at the frontier differs. ---
-    shared_y, shared_x = _frontier_strict_xy(shared_rows)
-    direct_y, direct_x = _frontier_strict_xy(direct_rows)
-    assert (shared_y, shared_x) == (50, 100)
-    assert (direct_y, direct_x) == (40, 100)
-    assert shared_y / shared_x != direct_y / direct_x, (
-        "strict Cohort rate at the selected frontier must differ between the "
-        "bundle admission and the observed admission today"
-    )
-
-    # --- Defect signature 4: the observed daily series the user sees is
-    # built on the divergent (asat-capped) admission, so it disagrees with
-    # what the shared admission would produce. This is the upstream cause of
-    # the handover's row-vs-scalar completeness mismatch. ---
-    observed_current = derive_daily_conversions(direct_rows)
-    observed_intended = derive_daily_conversions(shared_rows)
-
-    cur_cohort = observed_current["rate_by_cohort"][0]
-    int_cohort = observed_intended["rate_by_cohort"][0]
-    assert cur_cohort["date"] == int_cohort["date"] == ANCHOR_DAY_UK
-    assert (cur_cohort["x"], cur_cohort["y"]) == (100, 40)
-    assert (int_cohort["x"], int_cohort["y"]) == (100, 50)
-    assert cur_cohort["rate"] != int_cohort["rate"]
-    assert observed_current["total_conversions"] != observed_intended["total_conversions"]
-
-
-def test_derive_daily_conversions_over_shared_rows_is_the_intended_observed_input():
-    """Second Stage 0 assertion: after the cutover, daily needs nothing
-    special — its observed series is `derive_daily_conversions` over the SAME
-    shared admitted rows the bundle is built from. Pin that this wiring yields
-    a coherent observed structure (the Stage 2 target)."""
-    from runner.daily_conversions_derivation import derive_daily_conversions
-
-    with (
-        patch("snapshot_service.query_snapshots_for_sweep",
-              side_effect=_fake_query_snapshots_for_sweep),
-        patch("snapshot_service.query_snapshots",
-              side_effect=_fake_query_snapshots),
-    ):
-        graph, subjects = _resolve_daily_subjects()
-        shared_rows = _shared_admitted_rows(graph, subjects)
-
-    observed = derive_daily_conversions(shared_rows)
-
-    assert observed["analysis_type"] == "daily_conversions"
-    assert len(observed["rate_by_cohort"]) == 1
-    cohort = observed["rate_by_cohort"][0]
-    assert cohort["date"] == ANCHOR_DAY_UK
-    assert cohort["x"] == 100 and cohort["y"] == 50
-    assert cohort["rate"] == 0.5
-    # Calendar series and totals reflect the full shared admission frontier;
-    # date_range is the selected Cohort scope, not the retrieval frontier.
-    assert observed["total_conversions"] == 50
-    assert observed["date_range"] == {"from": ANCHOR_DAY_UK, "to": ANCHOR_DAY_UK}
-    assert observed["cohort_y_at_age"].get(ANCHOR_DAY_UK)
-
-
 def test_daily_handler_reads_shared_asat_bounded_admission_after_cutover():
-    """Stage 2 cutover proof (handler level).
+    """Handler-level proof of bundle-only daily-conversions admission.
 
     After the repoint, ``_handle_daily_conversions`` admits evidence through
-    the shared cohort-maturity binder only. Its observed series therefore comes
-    from the asat-bounded admission — the selected Cohort's frontier is the
-    asat day (20-Jan, y=40), NOT the post-asat 25-Jan (y=50) the old unbounded
-    ``raw_snapshots`` fetch would have admitted. And the handler no longer
-    issues its own direct ``query_snapshots`` fetch.
+    the shared cohort-maturity binder only and reduces the resulting
+    CFProjectionBundle directly. The selected Cohort's strict evidence
+    frontier is the asat day (20-Jan, y=40), NOT the post-asat 25-Jan
+    (y=50) the old unbounded ``raw_snapshots`` fetch would have admitted.
+    The handler no longer issues its own direct ``query_snapshots`` fetch.
 
     `analytics_dsl` is set so subject resolution actually runs (and stamps the
     cohort-maturity sweep bounds); the sweep query is mocked to honour those
@@ -414,8 +273,8 @@ def test_daily_handler_reads_shared_asat_bounded_admission_after_cutover():
         "from": ANCHOR_DAY_UK,
         "to": ANCHOR_DAY_UK,
     }
-    # Observed reflects the asat-bounded shared admission (frontier 20-Jan):
-    # y=40, NOT the unbounded raw_snapshots y=50.
+    # Strict evidence reflects the asat-bounded shared admission
+    # (frontier 20-Jan): y=40, NOT unbounded raw_snapshots y=50.
     assert cohort["x"] == pytest.approx(100)
     assert cohort["y"] == pytest.approx(40)
     # rows_analysed reflects the asat-bounded admitted set (15-Jan + 20-Jan).

@@ -81,11 +81,11 @@ These modules are where defence belongs. New validation, coercion, schema normal
 - [`request_envelope.py`](../../graph-editor/lib/runner/request_envelope.py) — candidate pool construction, explicit identity translation.
 - [`evidence_adapters.py`](../../graph-editor/lib/runner/evidence_adapters.py) — schema normalisation for evidence rows.
 - [`forecast_runtime.py`](../../graph-editor/lib/runner/forecast_runtime.py) — entry-point validation, role resolution.
-- [`api_handlers.py`](../../graph-editor/lib/runner/api_handlers.py) — request-shape validation and response framing.
+- [`api_handlers.py`](../../graph-editor/lib/api_handlers.py) — request-shape validation and response framing.
 - [`analysis_subject_resolution.py`](../../graph-editor/lib/analysis_subject_resolution.py) — analysis dispatch type rules (`ANALYSIS_TYPE_SCOPE_RULES`).
 - [`primitive_residual_guard.py`](../../graph-editor/lib/runner/primitive_residual_guard.py) — explicit marking of unsupported residual / complement edges; the model the engine core should aspire to. See [CF_RESIDUAL_GUARD.md](CF_RESIDUAL_GUARD.md).
 
-Inside `cohort_forecast_v3.py`, `primitive_*.py`, `*_span.py`, `funnel_engine.py`, `daily_conversions_derivation.py`, `cohort_maturity_derivation.py`, `epistemic_bands.py`, `confidence_bands.py`, and the Bayes compiler — **no defence, no fallback, no clip, no swallow**.
+Inside `cohort_forecast_v3.py`, `primitive_*.py`, `*_span.py`, `funnel_engine.py`, `daily_conversions_derivation.py`, `cohort_maturity_derivation.py`, `epistemic_bands.py`, and the Bayes compiler — **no defence, no fallback, no clip, no swallow**.
 
 ---
 

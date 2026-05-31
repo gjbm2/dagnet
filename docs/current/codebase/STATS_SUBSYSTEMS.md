@@ -44,7 +44,7 @@ For the field-origin canvas across both model-vars generation and projection / f
 
 Key invariants:
 - A single field can be written by multiple subsystems — the authoritative writer depends on which pass has landed most recently and what promotion selects.
-- Promotion hierarchy (`modelVarsResolution.ts`): `bayesian` (if gated), else `analytic`; `manual` always wins when present.
+- Promotion hierarchy (`modelVarsResolution.ts`): `bayesian` (if gated), else `analytic`. The `manual` source has been retired (doc 73b §3.1); a stale `manual` selector graceful-degrades to the default `best_available` ordering.
 - The CF pass owns `p.mean`, `p.stdev`, `p.stdev_pred`, `completeness`, `completeness_stdev` — these overwrite whatever the FE topo pass produced once CF arrives.
 
 ---
@@ -69,7 +69,7 @@ Key invariants:
 
 **Consumption**: readers go through `model_resolver.resolve_model_params()` which applies quality gates (ESS ≥ 400, rhat < 1.05, converged_pct thresholds) before promoting the bayesian source. If gates fail, falls back to `analytic`.
 
-**Key files**: `bayes/compiler/model.py`, `bayes/compiler/inference.py`, `bayes/compiler/evidence.py`, `bayes/worker.py`, `bayes/results_schema.py`. Downstream consumption: `graph-editor/lib/runner/model_resolver.py:117-277`.
+**Key files**: `bayes/compiler/model.py`, `bayes/compiler/inference.py`, `bayes/compiler/evidence.py`, `bayes/worker.py`, `bayes/results_schema.py`. Downstream consumption: `graph-editor/lib/runner/model_resolver.py` (`resolve_model_params`, ~line 207).
 
 **Design docs**: `docs/current/project-bayes/INDEX.md` is the canonical index (80+ docs). Key references: doc 8 (phases), doc 21 (unified posterior schema), doc 24 (Phase 2 posterior-as-prior), doc 32 (LOO-ELPD), doc 34 (latency dispersion κ), doc 38 (PPC calibration), doc 49 (epistemic vs predictive SDs), doc 45 (forecast parity).
 
@@ -100,29 +100,29 @@ Key invariants:
 >
 > Reading order for new contributors to the CF subsystem: semantics → runtime → data flow.
 
-**What it is**: the sophisticated topologically-sequenced MC enrichment that runs the full cohort_maturity v3 pipeline per edge, across the whole graph, using snapshot DB evidence and per-edge IS conditioning on query-DSL-scoped evidence. Writes per-edge conditioned scalars back to the graph. **This is a graph enrichment endpoint, not an analysis type** — the docstring at [api_handlers.py:2513](../../graph-editor/lib/api_handlers.py#L2513) is explicit.
+**What it is**: the sophisticated topologically-sequenced MC enrichment that runs the full cohort_maturity v3 pipeline per edge, across the whole graph, using snapshot DB evidence and per-edge IS conditioning on query-DSL-scoped evidence. Writes per-edge conditioned scalars back to the graph. **This is a graph enrichment endpoint, not an analysis type** — the docstring at [api_handlers.py:1438](../../graph-editor/lib/api_handlers.py#L1438) is explicit.
 
 **Trigger**: `fetchDataService.ts` Stage 2, fires alongside the FE topo pass. Raced against a 500ms fast-path deadline (`CF_FAST_DEADLINE_MS`). Fast path merges into the FE topo pass's single render; slow path renders FE fallback and overwrites on arrival.
 
 **Scenario fan-out**: the BE endpoint accepts a `scenarios` array (see below) but the FE client `runConditionedForecast` always sends a single-element array built from the one graph and one DSL it was called with ([conditionedForecastService.ts](../../graph-editor/src/services/conditionedForecastService.ts)). Fan-out over visible scenarios therefore happens one layer up, at the `fetchItems` level: Current is fetched via `useDSLReaggregation` on DSL change, and visible live scenarios are each fetched via `regenerateScenario` — typically orchestrated by `regenerateAllLive`'s sequential loop. Each invocation fires its own Stage 2 and therefore its own CF pass. See `SCENARIO_SYSTEM_ARCHITECTURE.md` §"Auto-regeneration triggers" for the full list of fan-out paths and `FE_BE_STATS_PARALLELISM.md` for the race mechanics.
 
-**Endpoint**: `POST /api/forecast/conditioned` → `handle_conditioned_forecast` ([api_handlers.py:2506](../../graph-editor/lib/api_handlers.py#L2506)).
+**Endpoint**: `POST /api/forecast/conditioned` → `handle_conditioned_forecast` ([api_handlers.py:1413](../../graph-editor/lib/api_handlers.py#L1413)).
 
 **Scope**: two modes:
 - **Single-edge/path** (`analytics_dsl` provided): scoped to one edge or path span via query DSL.
 - **Whole-graph** (`all_graph_parameters`, doc 47): resolves all parameterised edges, processes in **topological order** (START nodes first, then downstream) with cached upstream frames feeding downstream Tier 2 empirical carriers.
 
-**Inner pipeline per edge** ([api_handlers.py:2625-2911](../../graph-editor/lib/api_handlers.py#L2625-L2911)):
+**Inner pipeline per edge** (in `handle_conditioned_forecast`, api_handlers.py ~1413 onward, delegating to `cf_analysis.prepare_cf_*` and the `cohort_forecast_v3` runtime):
 1. Snapshot DB query → raw rows within sweep range
 2. Regime selection per doc 30
 3. `derive_cohort_maturity` → virtual per-day frames
 4. `compose_path_maturity_frames` → span-level evidence composition (x-incident vs y-incident edges per doc 29c)
 5. `compose_span_kernel` → encodes graph topology as convolution kernel
 6. Upstream carrier (cohort mode): `_fetch_upstream_observations` pulls from whole-graph topo cache, builds `XProvider` for IS conditioning
-7. `compute_cohort_maturity_rows_v3` → `compute_forecast_trajectory` → full v3 MC with IS
+7. `compute_cohort_maturity_rows_v3` → `build_cf_projection_bundle` (assembles the `ResolvedCFRuntime` + selected-Cohort projection) → `reduce_cohort_maturity_rows` (tau reducer over the shared bundle)
 8. Extract scalar `p@∞` and `completeness` from last row
 
-**Per-draw mechanics**: `compute_forecast_trajectory` uses `resolved.alpha_pred, beta_pred` from the promoted source (typically bayesian) as the proposal distribution; draws `p_draws ~ Beta(α_pred, β_pred)`; applies IS weights `w_s = Π_c Binomial.pmf(k_c | n_c, p_s · CDF_s(τ_c))` using query-scoped cohort evidence. The conditioned posterior is the IS-reweighted draw set. `p_mean` is the median of the conditioned draw set at saturation τ.
+**Per-draw mechanics**: the `ResolvedCFRuntime` (built by `build_resolved_cf_runtime`) uses `resolved.alpha_pred, beta_pred` from the promoted source (typically bayesian) as the proposal distribution; draws `p_draws ~ Beta(α_pred, β_pred)`; applies IS weights `w_s = Π_c Binomial.pmf(k_c | n_c, p_s · CDF_s(τ_c))` using query-scoped cohort evidence. The conditioned posterior is the IS-reweighted draw set. `p_mean` is the median of the conditioned draw set at saturation τ.
 
 **Runtime-bundle conditioning seam (current live behaviour)**: before the
 row-builder or summary solve runs, the live callers assemble
@@ -165,9 +165,10 @@ on the factorised rules established by the earlier work packages.
 sits **inside** the CF kernel boundary, between `forecast_runtime`
 bundle preparation and the `forecast_state` row builder. The four
 primitive readouts are gated behind environment-variable flags; all
-four default to OFF. The pre-73n `compute_forecast_trajectory` /
-`compute_forecast_summary` route remains the live path until the flags
-are flipped.
+four default to OFF. The shared CF projection-bundle route
+(`build_cf_projection_bundle` / `ResolvedCFRuntime` plus the three
+reducers) is the live path; the 73n primitive readouts sit alongside it
+behind their flags.
 
 | Flag | Surface |
 |---|---|
@@ -263,7 +264,7 @@ been removed from `cohort_forecast_v3.py`, `forecast_state.py`,
 
 **Distinction from cohort_maturity analysis runner**: they share the v3 pipeline (derive → compose → row builder). The cohort_maturity runner returns chart-ready rows for one target edge/span; the CF pass runs the same pipeline across the whole graph and extracts scalar per-edge outputs. Shared code → guaranteed parity.
 
-**Key files**: `lib/api_handlers.py:2506-2925` (handler), `lib/runner/cohort_forecast_v3.py` (v3 row builder), `lib/runner/forecast_state.py:1040+` (`compute_forecast_trajectory`), `lib/runner/cohort_maturity_derivation.py`, `lib/runner/span_evidence.py`, `lib/runner/span_kernel.py`, `src/services/conditionedForecastService.ts` (client).
+**Key files**: `lib/api_handlers.py` (`handle_conditioned_forecast`, ~line 1413), `lib/runner/cf_analysis.py` (`prepare_cf_projection_bundle` / `prepare_cf_scalar_bundle` / `reducer_for`), `lib/runner/cohort_forecast_v3.py` (`build_resolved_cf_runtime`, `build_cf_projection_bundle`, and the three reducers), `lib/runner/cf_projection_bundle.py` (`CFProjectionBundle`), `lib/runner/cohort_maturity_derivation.py`, `lib/runner/span_evidence.py`, `lib/runner/span_kernel.py`, `src/services/conditionedForecastService.ts` (client).
 
 **Design docs**: doc 45 (forecast parity), doc 47 (whole-graph pass), doc 29 (generalised forecast engine), doc 29c (evidence composition), doc 29g (IS conditioning + sweep), doc 30 (regime selection), doc 31 (subject resolution), doc 50 (CF generality gap — known limitation around non-latency edges).
 
@@ -275,7 +276,7 @@ branch_comparison, etc.). They do not all consume forecast state in the
 same way: some read the enriched graph, some call the public CF surface
 directly, and some run dedicated in-band forecast kernels.
 
-**Trigger**: `POST /api/runner/analyze` → `handle_runner_analyze` ([api_handlers.py:949](../../graph-editor/lib/api_handlers.py#L949)). Dispatched via `analysis_types.yaml` rules.
+**Trigger**: `POST /api/runner/analyze` → `handle_runner_analyze` ([api_handlers.py:509](../../graph-editor/lib/api_handlers.py#L509)). Dispatched via `analysis_types.yaml` rules.
 
 **Scope**: subjects resolved from the query DSL — typically a single edge, path, or span, not the whole graph.
 
@@ -291,8 +292,10 @@ directly, and some run dedicated in-band forecast kernels.
   response directly, then project the needed subgraph or path view. They
   use the public CF surface, not the inner kernels.
 - **In-band forecast-engine consumers**: `cohort_maturity` fetches its own
-  snapshot evidence and invokes `compute_forecast_trajectory` to produce
-  per-`tau` rows; `surprise_gauge` uses `compute_forecast_summary` for a
+  snapshot evidence and builds the shared CF projection bundle, then runs
+  the `cohort_maturity` tau reducer (`reduce_cohort_maturity_rows`) to
+  produce per-`tau` rows; `surprise_gauge` reads the shared CF scalar
+  bundle (`prepare_cf_scalar_bundle` + `reduce_cf_scalars`) for a
   scalar-only summary path.
 
 **Do analysis runners trigger the CF pass?**: they do **not** trigger the
@@ -308,7 +311,7 @@ If Stage 2 CF has not landed yet, graph-consumer runners read the FE/BE
 topo fallback scalars (via promotion). Direct CF consumers and in-band
 forecast-engine consumers are separate from that graph-state path.
 
-**apply_visibility_mode** ([graph_builder.py:564](../../graph-editor/lib/runner/graph_builder.py#L564)): mutates `edge['p']` in place per visibility mode:
+**apply_visibility_mode** ([graph_builder.py:594](../../graph-editor/lib/runner/graph_builder.py#L594)): mutates `edge['p']` in place per visibility mode:
 - `'e'`: `p = edge.evidence.mean` (raw k/n), complement-fill for failure edges
 - `'f'`: `p = edge.forecast.mean` (asymptote — same value as CF's `p.mean` when CF landed)
 - `'f+e'`: `p = edge.p.mean` as-is (the CF-conditioned or topo-pass-blended value)
@@ -354,8 +357,8 @@ Q. User issues query ───────────────────�
      Examples:
        - graph-state runners → apply_visibility_mode
        - conversion_funnel → direct CF response
-       - cohort_maturity → compute_forecast_trajectory
-       - surprise_gauge → compute_forecast_summary
+       - cohort_maturity → CF projection bundle + reduce_cohort_maturity_rows
+       - surprise_gauge → CF scalar bundle + reduce_cf_scalars
 ```
 
 **Timing reality**: Stage 2's two passes have different completion windows:
@@ -453,7 +456,7 @@ Dispersion fields on the Bayes posterior block and on `model_vars[bayesian].late
 
 **Consumer intent split**:
 - **Reporting surfaces** (BayesPosteriorCard text ±, ModelRateChart mini-chart, cohort_maturity_v3 "model belief" overlay curves) read the bare (epistemic) slot.
-- **Forecasting surfaces** (cohort_forecast_v3 fan chart, conditioned-forecast MC sweep via `build_span_params`, `compute_forecast_trajectory`) read the `_pred` slot.
+- **Forecasting surfaces** (cohort_forecast_v3 fan chart, conditioned-forecast MC sweep via the `ResolvedCFRuntime` / CF projection bundle) read the `_pred` slot.
 - Where `_pred` is absent (no kappa_lat fitted, or pre-migration data), forecast consumers fall back to the bare slot via `ResolvedLatency.mu_sd_predictive` — correct when predictive and epistemic coincide.
 
 **Residual asymmetry**: the CF response carries `p_sd` (predictive, closed-form Beta σ from α_pred/β_pred) and `p_sd_epistemic` (epistemic, from α/β). This retains the doc 49 convention — inverted relative to doc 61 — and has not been unified. See §3.3 dispersion-contract note.
@@ -470,12 +473,12 @@ Analysis authors and new consumers repeatedly pick the wrong Python entry point 
 
 | I want to… | Correct entry point | Do NOT use |
 |---|---|---|
-| Get query-scoped, evidence-conditioned per-edge `p_mean, p_sd, completeness, completeness_sd` for a specific path/span or the whole graph, for use inside an analysis runner or chart builder | `handle_conditioned_forecast` ([api_handlers.py:2506](../../graph-editor/lib/api_handlers.py#L2506)) — a.k.a. `/api/forecast/conditioned`. Pass `analytics_dsl` to scope to a path; omit to run whole-graph. | `compute_forecast_trajectory`, `compute_forecast_summary`, `mc_span_cdfs` — these are inner kernels and bypass the topo-sequencing, upstream-carrier caching, and span-kernel composition that the handler performs |
-| Run the full cohort-population MC sweep for ONE target edge/span internally (e.g. inside the CF handler or cohort_maturity v3 row builder) | `compute_forecast_trajectory` ([forecast_state.py:1096](../../graph-editor/lib/runner/forecast_state.py#L1096)) | Anything inside an analysis runner — go via `handle_conditioned_forecast` instead |
-| Compute a per-edge ESS-regularised IS-conditioned summary (legacy surprise-gauge path) | `compute_forecast_summary` ([forecast_state.py:475](../../graph-editor/lib/runner/forecast_state.py#L475)) — surprise gauge only, superseded on implementation by doc 55 | New analyses — use `handle_conditioned_forecast` instead |
-| Produce per-draw span CDFs by reconvolving drawn per-edge params | `mc_span_cdfs` / `mc_span_cdfs_for_source` ([span_kernel.py:491, :699](../../graph-editor/lib/runner/span_kernel.py#L491)) — called by `compute_forecast_trajectory` and the model-overlay builder | Anything outside the forecast engine — these are span-kernel primitives |
+| Get query-scoped, evidence-conditioned per-edge `p_mean, p_sd, completeness, completeness_sd` for a specific path/span or the whole graph, for use inside an analysis runner or chart builder | `handle_conditioned_forecast` ([api_handlers.py:1413](../../graph-editor/lib/api_handlers.py#L1413)) — a.k.a. `/api/forecast/conditioned`. Pass `analytics_dsl` to scope to a path; omit to run whole-graph. | the inner CF kernels (`build_cf_projection_bundle`, `mc_span_cdfs`) — these bypass the topo-sequencing, upstream-carrier caching, and span-kernel composition that the handler performs |
+| Run the full cohort-population MC sweep for ONE target edge/span internally (e.g. inside the CF handler or cohort_maturity v3 row builder) | `build_cf_projection_bundle` ([cohort_forecast_v3.py:2017](../../graph-editor/lib/runner/cohort_forecast_v3.py#L2017)) — builds the `ResolvedCFRuntime` and selected-Cohort projection | Anything inside an analysis runner — go via `handle_conditioned_forecast` instead |
+| Compute a per-edge scalar CF summary (surprise-gauge path) | `prepare_cf_scalar_bundle` ([cf_analysis.py:245](../../graph-editor/lib/runner/cf_analysis.py#L245)) + `reduce_cf_scalars` ([cohort_forecast_v3.py:2560](../../graph-editor/lib/runner/cohort_forecast_v3.py#L2560)) — surprise gauge only | New analyses — use `handle_conditioned_forecast` instead |
+| Produce per-draw span CDFs by reconvolving drawn per-edge params | `mc_span_cdfs` ([span_kernel.py:392](../../graph-editor/lib/runner/span_kernel.py#L392)) — called by `forecast_runtime` and `timing_span` | Anything outside the forecast engine — these are span-kernel primitives |
 | Compute per-edge analytic latency scalars (mu, sigma, t95, path_t95, completeness, p_infinity) from cohort evidence | `enhanceGraphLatencies` in [statisticalEnhancementService.ts](../../graph-editor/src/services/statisticalEnhancementService.ts). Produces `analytic` model_vars; run synchronously during Stage 2 of every fetch | `handle_conditioned_forecast` — that's the sophisticated CF pass, a DIFFERENT subsystem |
-| Read a per-edge scalar inside an analysis runner (e.g. funnel, path) | `edge.p.mean, edge.p.latency.*` directly, via `apply_visibility_mode` ([graph_builder.py:564](../../graph-editor/lib/runner/graph_builder.py#L564)) — values are already populated by Stage 2 enrichment | Any forecast-engine function — the enrichment has already happened upstream |
+| Read a per-edge scalar inside an analysis runner (e.g. funnel, path) | `edge.p.mean, edge.p.latency.*` directly, via `apply_visibility_mode` ([graph_builder.py:594](../../graph-editor/lib/runner/graph_builder.py#L594)) — values are already populated by Stage 2 enrichment | Any forecast-engine function — the enrichment has already happened upstream |
 | Get per-edge Bayesian aggregate posterior α/β (unconditioned — doesn't reflect current query) | `edge.p.model_vars[source='bayesian'].probability.{alpha, beta, alpha_pred, beta_pred}`. Access via `resolve_model_params` ([model_resolver.py](../../graph-editor/lib/runner/model_resolver.py)) if you need promotion semantics | The inner CF kernels — they use these α/β internally but as the proposal, not the output |
 
 **Rule of thumb**: if you're writing an **analysis runner** or a **chart builder**, the public entry point you need is `handle_conditioned_forecast` (for CF-conditioned scalars). Analytic scalars are already present on the graph from the FE Stage-2 enrichment — read them directly. Everything else is an inner kernel. If you find yourself importing from `forecast_state.py` or `span_kernel.py` inside a runner, stop and re-read this table.

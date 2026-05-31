@@ -1,6 +1,6 @@
 # Surprise Gauge Analysis Type
 
-**Status**: Doc 55 rework — thin projection of `compute_forecast_summary`
+**Status**: Doc 55 rework — thin projection of `reduce_cf_scalars` over the shared CF projection bundle
 **Date**: 20-Apr-26 (rework); Phase-1/2 history below
 **Authority**: [doc 55 in project-bayes](../project-bayes/55-surprise-gauge-rework.md)
 is the design doc of record. This file is the codebase-level reference.
@@ -72,18 +72,21 @@ Axis is linear in σ, tick labels in percentiles (50, 80, 90, 95, 99).
 ## 4. Variables
 
 Two. Both produced by the BE handler from a single call to
-`compute_forecast_summary`. No other variables. μ, σ, onset descoped
+`prepare_cf_scalar_bundle` + `reduce_cf_scalars` over the shared CF
+projection bundle. No other variables. μ, σ, onset descoped
 per doc 55 §2.5.
 
 | Variable | Expected (dial) | Observed (needle) | z |
 |----------|-----------------|-------------------|---|
-| **p** | `pp_rate_unconditioned ± pp_rate_unconditioned_sd` | `Σk / Σn` over the cohorts the CF call consumed | `(Σk/Σn − pp_rate_unconditioned) / pp_rate_unconditioned_sd` |
-| **completeness** | `completeness_unconditioned ± completeness_unconditioned_sd` | `completeness` (i.e. `completeness_conditioned`) | `(completeness − completeness_unconditioned) / completeness_unconditioned_sd` |
+| **p** | `unconditioned_terminal_rate_mean_epistemic ± unconditioned_terminal_rate_sd_epistemic` | `fc_terminal_rate_mean ± fc_terminal_rate_sd_predictive` | combined-spread z: `(needle_mean − dial_mean) / √(needle_sd² + dial_sd²)` |
+| **completeness** | `unconditioned_frontier_to_terminal_cdf_ratio_mean ± unconditioned_frontier_to_terminal_cdf_ratio_sd_epistemic` | `fc_frontier_to_terminal_rate_ratio_mean ± fc_frontier_to_terminal_rate_ratio_sd_predictive` | combined-spread z (same form as `p`) |
 
-All four `pp_rate_unconditioned*` / `completeness_unconditioned*`
-scalars are fields on `ForecastSummary` (see `forecast_state.py`),
-populated by `compute_forecast_summary` from its already-computed
-unconditioned draws; the gauge does not recompute them.
+All of these scalars are fields on `CFScalarReduction`
+(in `cohort_forecast_v3.py`), populated by `reduce_cf_scalars` from the
+shared CF projection bundle's already-computed conditioned and
+unconditioned surfaces; the gauge does not recompute them. The combined-spread
+z (denominator floored at 1e-12) is computed by `_compute_surprise_gauge`
+in `api_handlers.py`.
 
 The p variable's draws come from the **predictive** alpha/beta
 (kappa-inflated per doc 49) inside the CF engine. The gauge asks
@@ -104,10 +107,11 @@ would generate — requiring observation-noise-inflated draws.
    query, derives cohort maturity frames, extracts per-cohort
    `(age, n, k)` tuples, and — in cohort mode — builds an upstream
    node arrival cache for carrier convolution.
-4. `compute_forecast_summary` is called with resolved params, cohort
-   ages / weights, and evidence tuples. Returns a `ForecastSummary`
-   with conditioned and unconditioned draws plus the four scalar
-   fields the gauge projects.
+4. `prepare_cf_scalar_bundle` (in `cf_analysis.py`) builds the shared CF
+   projection bundle from resolved params, cohort ages / weights, and
+   evidence tuples; `reduce_cf_scalars` (in `cohort_forecast_v3.py`) then
+   collapses it to a `CFScalarReduction` carrying conditioned and
+   unconditioned scalar moments — the fields the gauge projects.
 5. Gauge handler computes `Σk, Σn` from the same evidence list it
    passed in, divides to get `obs_rate`, computes the two z-scores
    and quantiles from the summary scalars, returns
@@ -132,11 +136,11 @@ A variable is marked `available: false` with a stated reason when:
 - Snapshot query returns no rows.
 - Cohort frames derive to empty.
 - No valid `(age, n, k)` cohorts remain after filtering.
-- `compute_forecast_summary` raises.
-- For `p`: `pp_rate_unconditioned_sd` effectively zero (degenerate
-  posterior — nothing can be surprising).
-- For `completeness`: `completeness_unconditioned_sd` effectively zero
-  (same reason).
+- `prepare_cf_scalar_bundle` / `reduce_cf_scalars` raises.
+- For `p`: `unconditioned_terminal_rate_sd_epistemic` effectively zero
+  (degenerate posterior — nothing can be surprising).
+- For `completeness`: `unconditioned_frontier_to_terminal_cdf_ratio_sd_epistemic`
+  effectively zero (same reason).
 
 Low importance-sampling ESS is **not** a sparse-data failure mode. The
 conditioning path uses the full likelihood and records ESS as a
@@ -161,16 +165,16 @@ shortDescription: 'How surprising is current evidence given the Bayesian posteri
 icon: Gauge
 snapshotContract: {
   scopeRule: 'funnel_path',
-  readMode: 'none',
+  readMode: 'sweep_simple',
   slicePolicy: 'mece_fulfilment_allowed',
   timeBoundsSource: 'query_dsl_window',
-  perScenario: true,
+  perScenario: false,
 }
 cf_dependency: 'none' (interim per doc 55 / doc 54 §8)
 ```
 
-The gauge calls `compute_forecast_summary` inline for its own subject.
-It does not consume on-edge CF scalars. A Tier-2 cut-over (doc 55
+The gauge calls `prepare_cf_scalar_bundle` + `reduce_cf_scalars` inline
+for its own subject. It does not consume on-edge CF scalars. A Tier-2 cut-over (doc 55
 §4.6, doc 54 §8.1) would change that once the whole-graph CF pass
 persists the necessary scalars on-edge.
 
@@ -188,7 +192,8 @@ persists the necessary scalars on-edge.
    right posterior slice and triggers carrier convolution in cohort
    mode. Gauge itself contains no cohort-vs-window branch.
 4. **Observed and expected from one source.** Both derived from the
-   cohort list `compute_forecast_summary` consumes.
+   cohort list the shared CF projection bundle
+   (`prepare_cf_scalar_bundle` / `reduce_cf_scalars`) consumes.
 5. **Guard rails.** Zero posterior-predictive SD → variable
    unavailable. No snapshot rows → variable unavailable. No ad-hoc
    fallbacks. Low IS ESS not surfaced as a warning — see §6.
