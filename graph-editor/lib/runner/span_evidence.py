@@ -42,7 +42,7 @@ def compose_path_maturity_frames(
     Returns:
         Result dict in the same schema as derive_cohort_maturity output:
         {
-            "analysis_type": "cohort_maturity_v2",
+            "analysis_type": "cohort_maturity",
             "frames": [...],
             "anchor_range": {...},
             "sweep_range": {...},
@@ -58,7 +58,7 @@ def compose_path_maturity_frames(
     # ── Single-edge fast path (parity with v1) ────────────────────────
     if len(per_edge_results) == 1 and per_edge_results[0].get('path_role') == 'only':
         result = dict(per_edge_results[0].get('derivation_result', {}))
-        result['analysis_type'] = 'cohort_maturity_v2'
+        result['analysis_type'] = 'cohort_maturity'
         return result
 
     # ── Identify x-incident and y-incident edges ─────────────────────
@@ -185,7 +185,7 @@ def compose_path_maturity_frames(
         })
 
     return {
-        'analysis_type': 'cohort_maturity_v2',
+        'analysis_type': 'cohort_maturity',
         'frames': frames,
         'anchor_range': {
             'from': sorted_anchor_days[0] if sorted_anchor_days else None,
@@ -207,7 +207,7 @@ def _get_frames(edge_entry: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _empty_result() -> Dict[str, Any]:
     return {
-        'analysis_type': 'cohort_maturity_v2',
+        'analysis_type': 'cohort_maturity',
         'frames': [],
         'anchor_range': {'from': None, 'to': None},
         'sweep_range': {'from': None, 'to': None},

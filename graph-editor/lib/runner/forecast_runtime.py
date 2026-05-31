@@ -1,11 +1,8 @@
 """
 Forecast runtime layer for the live forecast stack.
 
-This module started as the neutral home for helpers previously scattered
-across v1 (`cohort_forecast.py`), v2 (`cohort_forecast_v2.py`), and the
-transitional `span_adapter.py`). It is now the runtime-owned assembly
-layer used by the production forecast engine, the v3 row builder, and the
-active conditioned-forecast handlers.
+This is the runtime-owned assembly layer used by the production forecast
+engine, the v3 row builder, and the active conditioned-forecast handlers.
 
 It contains:
 
@@ -20,9 +17,8 @@ It contains:
     build_x_provider_from_graph delegates active A→X carrier timing to
     runner.timing_span's shared timing algebra.
 
-Legacy modules remain in the repo for frozen v2 / parity-oracle paths, but
-the production forecast stack should keep converging on this module rather
-than reintroducing v1/v2 imports.
+The production forecast stack converges on this module; v1 and v2 cohort
+forecast modules have been retired (73q Phases 6–7).
 """
 
 from __future__ import annotations
@@ -664,7 +660,7 @@ def build_closed_form_beta_rate_surface(
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Graph helpers (ex v1 — cohort_forecast.py)
+# Graph helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 

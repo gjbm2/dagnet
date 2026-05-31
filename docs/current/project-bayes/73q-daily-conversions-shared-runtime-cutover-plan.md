@@ -12,10 +12,10 @@
 - [x] Phase 2 — Projection Bundle Expansion — completed & closed 27-May-26 (horizon model reconciled; no-branch approvals recorded; cross-scenario tau-extent deferred — see Phase 2 close-out)
 - [x] Phase 3 — Date reducer — completed 27-May-26
 - [x] Phase 4 — Wire into daily conversions and retire the legacy path — completed 27-May-26 (shared `runner/cf_analysis.py` boundary + registry-driven reducer selection; cohort_maturity, conditioned_forecast, and daily_conversions all route through `prepare_cf_projection_bundle`; legacy inline trajectory enrichment deleted; boundary_shift contract reclassified — see Phase 4 close-out)
-- [ ] Phase 4R — Reducer Axis-Parity Repair — inserted 30-May-26 after Stage 4 regression review; blocks further Phase 5 work until completed
+- [x] Phase 4R — Reducer Axis-Parity Repair — completed 31-May-26 (all atoms landed or formally re-scoped; open issues Q1-Q4 resolved by user)
 - [x] Phase 5 — Remaining consumer decisions and legacy-engine migration — completed 28-May-26
-- [ ] Phase 6 — Retire cohort_maturity v1 and v2
-- [ ] Phase 7 — Cleanup sweep
+- [x] Phase 6 — Retire cohort_maturity v1 and v2 — completed 31-May-26
+- [x] Phase 7 — Cleanup sweep — completed 31-May-26 (cohort_forecast.py and cohort_forecast_v2.py deleted whole; forecast_state.py trimmed from 1869 LOC to 133 LOC keeping only _resolve_edge_p / _warn_legacy_pmean_carrier / CohortEvidence; forecast_application.py trimmed to just compute_completeness; api_handlers.py legacy _is_cohort_maturity dispatch sweep; six legacy-only test files retired and four others pruned. CohortEvidence kept in forecast_state.py rather than rehomed.)
 - [ ] Phase 8 — Companion analysis migrations: `bridge_view` direct-CF (8a) and `conversion_rate` bin reducer (8b)
 
 ## Why this is a rewrite

@@ -82,7 +82,7 @@ class TestSingleEdgePassthrough:
             query_from_node='x',
             query_to_node='y',
         )
-        assert result['analysis_type'] == 'cohort_maturity_v2'
+        assert result['analysis_type'] == 'cohort_maturity'
         assert len(result['frames']) == 2
         assert result['frames'][0]['data_points'][0]['y'] == 42
         assert result['frames'][1]['data_points'][0]['y'] == 45

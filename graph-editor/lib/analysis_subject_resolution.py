@@ -70,8 +70,6 @@ class ResolvedAnalysisResult:
 # Mirrors the FE's snapshotContract.scopeRule per analysis type.
 ANALYSIS_TYPE_SCOPE_RULES: Dict[str, str] = {
     'cohort_maturity': 'funnel_path',
-    'cohort_maturity_v1': 'funnel_path',
-    'cohort_maturity_v2': 'funnel_path',
     'daily_conversions': 'funnel_path',
     'conversion_rate': 'funnel_path',
     'lag_histogram': 'funnel_path',
@@ -85,8 +83,6 @@ ANALYSIS_TYPE_SCOPE_RULES: Dict[str, str] = {
 
 ANALYSIS_TYPE_READ_MODES: Dict[str, str] = {
     'cohort_maturity': 'cohort_maturity',
-    'cohort_maturity_v1': 'cohort_maturity',
-    'cohort_maturity_v2': 'cohort_maturity',
     'daily_conversions': 'raw_snapshots',
     'conversion_rate': 'raw_snapshots',
     'lag_histogram': 'raw_snapshots',

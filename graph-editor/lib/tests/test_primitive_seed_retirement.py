@@ -55,8 +55,10 @@ def _function_body(source: str, fn_name: str) -> str:
 # the keyed RNG derivation listed here.
 
 _SITE_PARAMS = [
-    ("forecast_state.py", "build_node_arrival_cache",
-     "node_arrival_cache", "Stage 2"),
+    # forecast_state.py:build_node_arrival_cache site retired with the
+    # legacy trajectory engine (73q Phase 7); the keyed-RNG contract for
+    # the live carrier-arrival path is now enforced inside
+    # cohort_forecast_v3 / forecast_runtime.
     ("forecast_runtime.py", "prepare_forecast_runtime_inputs",
      "subject_span_full_path_mc", "Stage 5b"),
     ("forecast_runtime.py", "prepare_forecast_runtime_inputs",

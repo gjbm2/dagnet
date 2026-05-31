@@ -106,29 +106,6 @@ analyses:
     # keep tau, collapse Cohorts (one row per relative age).
     reducer: cohort_maturity
 
-  # from(A).to(B) - cohort maturity v1 (legacy, dev only)
-  - id: cohort_maturity_v1
-    name: "Cohort Maturity v1"
-    description: "Legacy cohort maturity (dev only)"
-    dev_only: true
-    when:
-      node_count: 2
-      has_from: true
-      has_to: true
-    runner: path_runner
-
-  # from(A).to(B) - cohort maturity v2 (span kernel, dev only)
-  - id: cohort_maturity_v2
-    name: "Cohort Maturity v2"
-    description: "Multi-hop cohort maturity with span kernel (dev only)"
-    dev_only: true
-    when:
-      node_count: 2
-      has_from: true
-      has_to: true
-    runner: path_runner
-    runner: path_runner
-
   # from(A).to(B) - surprise gauge (doc 55) — Expectation Gauge
   # Two-distribution z-score comparing the FC continuation against the
   # unconditioned model overlay (73q Phase 5a). The reducer is the shared

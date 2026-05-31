@@ -1,10 +1,13 @@
 """
-Tests for forecast engine components (doc 29 Phase 3 + G.3).
+Tests for forecast_runtime helpers (ingress ordering, x-provider, prepared
+runtime bundle, identity-carrier degeneracy).
 
-Verifies:
-- NodeArrivalState is built correctly for synth graphs
-- Carrier convolution properties (_convolve_completeness_at_age)
-- compute_forecast_trajectory blend semantics + runtime-bundle wiring
+The legacy trajectory engine these tests previously also covered
+(``compute_forecast_trajectory``, ``build_node_arrival_cache``,
+``_convolve_completeness_at_age``, ``NodeArrivalState``) was retired in
+73q Phase 7; v3 invariants for those surfaces are covered by
+``test_cohort_maturity_v3_contract.py``, ``test_cf_projection_bundle*.py``
+and ``test_cf_scalar_reducer.py``.
 """
 
 import copy
@@ -254,57 +257,6 @@ class TestForecastRuntimeIngressOrdering:
         assert prepared.x_provider.reach == pytest.approx(0.8)
 
 
-class TestNodeArrivalCache:
-    """Per-node arrival cache construction."""
-
-    def test_anchor_node_has_delta_arrival(self):
-        """Anchor node should have reach=1.0 and CDF=[1,1,...,1]."""
-        from runner.forecast_state import build_node_arrival_cache
-
-        graph = _make_synth_graph([
-            ('e1', 'n1', 'n2', 'A', 'B', 0.8, 2.0, 0.5, 2.0),
-        ])
-
-        cache = build_node_arrival_cache(graph, anchor_id='n1', max_tau=100)
-        anchor = cache['n1']
-
-        assert anchor.reach == 1.0
-        assert anchor.tier == 'anchor'
-        assert anchor.deterministic_cdf is not None
-        assert all(v == 1.0 for v in anchor.deterministic_cdf)
-
-    def test_downstream_node_has_carrier(self):
-        """Node downstream of anchor should have a carrier CDF."""
-        from runner.forecast_state import build_node_arrival_cache
-
-        graph = _make_synth_graph([
-            ('e1', 'n1', 'n2', 'A', 'B', 0.8, 2.0, 0.5, 2.0),
-        ])
-
-        cache = build_node_arrival_cache(graph, anchor_id='n1', max_tau=100)
-        downstream = cache.get('n2')
-
-        assert downstream is not None
-        assert downstream.reach == pytest.approx(0.8, abs=0.01)
-        # Carrier should exist (Tier 1 parametric from edge A->B)
-        assert downstream.deterministic_cdf is not None or downstream.tier == 'none'
-
-    def test_multi_hop_reach_propagates(self):
-        """Reach accumulates through the graph: reach(C) = p_AB × p_BC."""
-        from runner.forecast_state import build_node_arrival_cache
-
-        graph = _make_synth_graph([
-            ('e1', 'n1', 'n2', 'A', 'B', 0.9, 1.5, 0.4, 1.0),
-            ('e2', 'n2', 'n3', 'B', 'C', 0.7, 2.5, 0.6, 3.0),
-        ])
-
-        cache = build_node_arrival_cache(graph, anchor_id='n1', max_tau=100)
-
-        assert cache['n1'].reach == 1.0
-        assert cache['n2'].reach == pytest.approx(0.9, abs=0.01)
-        assert cache['n3'].reach == pytest.approx(0.9 * 0.7, abs=0.01)
-
-
 # ── Enriched synth graph loading ─────────────────────────────────────
 
 from pathlib import Path
@@ -345,65 +297,6 @@ def _load_synth_graph():
     import json
     gp = _DATA_REPO_DIR / 'graphs' / 'synth-simple-abc.json'
     return json.loads(gp.read_text())
-
-
-class TestScopeAndCarrierConsistency:
-    """Engine must use edge-level params with carrier convolution (review #8)."""
-
-    def test_carrier_convolution_uses_edge_params_not_path(self):
-        """When carrier is present, completeness from edge-level params
-        should be higher than from path-level (path already includes
-        upstream delay, carrier applies it again → double-apply → lower).
-        """
-        from runner.forecast_state import (
-            CohortEvidence,
-            build_node_arrival_cache,
-            compute_forecast_trajectory,
-        )
-        from runner.model_resolver import resolve_model_params
-
-        graph = _load_synth_graph()
-        anchor = next(n for n in graph['nodes']
-                      if n.get('entry', {}).get('is_start'))
-        edge_bc = next(e for e in graph['edges']
-                       if e.get('p', {}).get('id') == 'simple-b-to-c')
-
-        cache = build_node_arrival_cache(graph, anchor_id=anchor['uuid'], max_tau=200)
-        from_node = cache.get(edge_bc['from'])
-
-        resolved_edge = resolve_model_params(edge_bc, scope='edge', temporal_mode='cohort')
-        resolved_path = resolve_model_params(edge_bc, scope='path', temporal_mode='cohort')
-
-        cohorts = [
-            CohortEvidence(
-                obs_x=[100.0] * 21, obs_y=[0.0] * 21,
-                x_frozen=100.0, y_frozen=0.0,
-                frontier_age=20, a_pop=100.0, eval_age=20,
-            ),
-            CohortEvidence(
-                obs_x=[100.0] * 31, obs_y=[0.0] * 31,
-                x_frozen=100.0, y_frozen=0.0,
-                frontier_age=30, a_pop=100.0, eval_age=30,
-            ),
-        ]
-
-        cf_edge = compute_forecast_trajectory(
-            resolved=resolved_edge, cohorts=cohorts, max_tau=60,
-            from_node_arrival=from_node,
-        )
-        cf_path = compute_forecast_trajectory(
-            resolved=resolved_path, cohorts=cohorts, max_tau=60,
-            from_node_arrival=from_node,
-        )
-
-        print(f"\nEdge mu={resolved_edge.latency.mu:.3f} "
-              f"Path mu={resolved_path.latency.mu:.3f}")
-        print(f"Edge+carrier: {cf_edge.completeness_mean:.4f}")
-        print(f"Path+carrier: {cf_path.completeness_mean:.4f} (double-apply)")
-
-        if resolved_path.latency.mu > resolved_edge.latency.mu:
-            assert cf_path.completeness_mean < cf_edge.completeness_mean, \
-                "Path+carrier gives lower completeness (double upstream lag)"
 
 
 class TestPreparedRuntimeBundle:
@@ -638,71 +531,3 @@ class TestPreparedRuntimeBundle:
         )
         assert diag['carrier_to_x']['has_x_provider'] is True
 
-    def test_trajectory_reads_operator_inputs_from_runtime_bundle(self):
-        from runner.forecast_runtime import build_prepared_runtime_bundle
-        from runner.forecast_state import CohortEvidence, compute_forecast_trajectory
-        from runner.model_resolver import ResolvedLatency, ResolvedModelParams
-
-        resolved = ResolvedModelParams(
-            p_mean=0.4,
-            p_sd=0.05,
-            alpha=40.0,
-            beta=60.0,
-            alpha_pred=40.0,
-            beta_pred=60.0,
-            edge_latency=ResolvedLatency(mu=3.0, sigma=0.6, onset_delta_days=0.0),
-            source='bayesian',
-        )
-        cohorts = [
-            CohortEvidence(
-                obs_x=[100.0] * 41,
-                obs_y=[40.0] * 41,
-                x_frozen=100.0,
-                y_frozen=40.0,
-                frontier_age=20,
-                a_pop=100.0,
-            ),
-            CohortEvidence(
-                obs_x=[80.0] * 41,
-                obs_y=[28.0] * 41,
-                x_frozen=80.0,
-                y_frozen=28.0,
-                frontier_age=15,
-                a_pop=80.0,
-            ),
-        ]
-        det_norm_cdf = [min(t / 20.0, 1.0) for t in range(41)]
-
-        explicit = compute_forecast_trajectory(
-            resolved=resolved,
-            cohorts=cohorts,
-            max_tau=40,
-            num_draws=256,
-            span_alpha=55.0,
-            span_beta=45.0,
-            det_norm_cdf=det_norm_cdf,
-        )
-        runtime_bundle = build_prepared_runtime_bundle(
-            mode='window',
-            query_from_node='A',
-            query_to_node='B',
-            resolved_params=resolved,
-            p_conditioning_temporal_family='window',
-            p_conditioning_source='frame_evidence',
-            p_conditioning_evidence_points=len(cohorts),
-            span_alpha=55.0,
-            span_beta=45.0,
-            det_norm_cdf=det_norm_cdf,
-        )
-        bundled = compute_forecast_trajectory(
-            resolved=resolved,
-            cohorts=cohorts,
-            max_tau=40,
-            num_draws=256,
-            runtime_bundle=runtime_bundle,
-        )
-
-        assert np.allclose(bundled.rate_draws, explicit.rate_draws)
-        assert bundled.runtime_bundle_diag is not None
-        assert bundled.runtime_bundle_diag['operator_inputs']['span_alpha'] == 55.0
-        assert bundled.runtime_bundle_diag['subject_span']['end_node_id'] == 'B'

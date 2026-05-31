@@ -11,11 +11,10 @@ pure function of explicit inputs. Per ``CF_ENGINE_DISCIPLINE.md`` there
 are no fallbacks, clips, or case-forks — missing inputs raise or
 propagate, they are not repaired.
 
-Phase 2 populates this module incrementally:
+Contents:
 
-  - the completeness → layer rule and its thresholds (lifted out of the
-    legacy ``forecast_application.annotate_data_point`` surface, which
-    73q Phase 7 deletes);
+  - the completeness → layer rule and its thresholds (canonical home,
+    73q Phase 2);
   - the latency-band tau accessor (lifted out of the inline
     daily-conversions derivation in ``api_handlers.py``);
   - the ``CFProjectionBundle`` dataclass and builder.
@@ -27,10 +26,8 @@ from typing import Any, Mapping, Optional, Sequence, Tuple
 from .lag_distribution_utils import log_normal_inverse_cdf
 
 # ── Layer classification (73q §"Layer") ────────────────────────────────
-# The maturity threshold and completeness floor are the existing values
-# from ``forecast_application.annotate_data_point``. They live here, in
-# the non-legacy projection boundary, so the date reducer and the tau
-# reducer share one definition once the legacy surface is retired.
+# Canonical home for the maturity threshold and completeness floor.
+# The date reducer and the tau reducer share these definitions.
 
 #: Completeness at or above this fraction classifies a Cohort as mature.
 MATURITY_THRESHOLD = 0.95
@@ -47,16 +44,9 @@ def completeness_to_layer(
 ) -> str:
     """Classify a completeness value into a daily-conversions ``layer``.
 
-    The rule is the existing rule from
-    ``forecast_application.annotate_data_point``:
-
         c >= maturity_threshold        -> 'mature'
         COMPLETENESS_EPSILON < c < ...  -> 'forecast'
         c <= COMPLETENESS_EPSILON       -> 'evidence'
-
-    ``maturity_threshold`` defaults to :data:`MATURITY_THRESHOLD` (0.95)
-    but stays a parameter for the legacy ``annotate_data_point`` caller,
-    which exposes it.
 
     Branchless: the layers are ordered ``evidence < forecast < mature``
     and the thresholds are ordered (``COMPLETENESS_EPSILON`` ≪
