@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.6b
+**Released:** 6-Jun-26
+
+Added PNG download
+
+---
+
 ## Version 2.1.5b
 **Released:** 31-May-26
 
