@@ -531,16 +531,33 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
         Analysis results
     """
     from runner.forecasting_settings import settings_from_dict, use_request_settings
+    from request_telemetry import request_telemetry
     settings = settings_from_dict(data.get('forecasting_settings'))
-    # Body-level cache bypass — works on every transport (dev FastAPI, Vercel
-    # BaseHTTPRequestHandler, direct Python callers). The dev middleware already
-    # handles ?no-cache=1 at the URL level; this covers the request body path.
-    with use_request_settings(settings):
-        if data.get('no_cache'):
-            from snapshot_service import cache_bypass_ctx
-            with cache_bypass_ctx():
-                return _handle_runner_analyze_impl(data)
-        return _handle_runner_analyze_impl(data)
+    # Phase A telemetry: brackets the whole invocation with a per-process boot id
+    # + self-healing in-flight counter, so co-located concurrent invocations on a
+    # single Vercel Fluid instance (the 300s/OOM suspect) become visible. Lives in
+    # this shared funnel so both the Vercel and dev FastAPI paths are covered.
+    try:
+        _mc_draws = int(getattr(settings, 'mc_draws', 0) or 0)
+    except Exception:
+        _mc_draws = 0
+    with request_telemetry(
+        label=data.get('analysis_type') or 'analyze',
+        trace_id=data.get('trace_id'),
+        analysis_type=data.get('analysis_type') or '',
+        mc_draws=_mc_draws,
+        scenarios=len(data.get('scenarios') or []),
+        no_cache=bool(data.get('no_cache')),
+    ):
+        # Body-level cache bypass — works on every transport (dev FastAPI, Vercel
+        # BaseHTTPRequestHandler, direct Python callers). The dev middleware already
+        # handles ?no-cache=1 at the URL level; this covers the request body path.
+        with use_request_settings(settings):
+            if data.get('no_cache'):
+                from snapshot_service import cache_bypass_ctx
+                with cache_bypass_ctx():
+                    return _handle_runner_analyze_impl(data)
+            return _handle_runner_analyze_impl(data)
 
 
 def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
