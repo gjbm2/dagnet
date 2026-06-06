@@ -52,6 +52,10 @@ minimal_image = modal.Image.debian_slim(python_version="3.12").pip_install(
     "requests",
 )
 
+status_image = minimal_image.pip_install(
+    "numpy>=2.0",  # status calls FunctionCall.get(), which deserialises worker returns
+)
+
 
 # ---------------------------------------------------------------------------
 # 0. Version endpoint – quick sanity check, no auth
@@ -165,7 +169,7 @@ def cancel(call_id: str = ""):
 # ---------------------------------------------------------------------------
 # 4. Status web endpoint – called directly by FE
 # ---------------------------------------------------------------------------
-@app.function(image=minimal_image)
+@app.function(image=status_image)
 @modal.fastapi_endpoint(method="GET")
 def status(call_id: str = ""):
     """Poll job status. No auth – call_id is an unguessable capability token.

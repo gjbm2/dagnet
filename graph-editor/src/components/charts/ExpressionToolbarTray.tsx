@@ -16,7 +16,7 @@
  */
 
 import React, { useRef, useState } from 'react';
-import { BarChart3, LayoutGrid, Table2, Download, Trash2, ExternalLink, ClipboardCopy, MoreHorizontal, Settings, ChevronDown, Crosshair, Layers, Plus, RefreshCcw, Code } from 'lucide-react';
+import { BarChart3, LayoutGrid, Table2, Download, Trash2, ExternalLink, ClipboardCopy, MoreHorizontal, Settings, ChevronDown, Crosshair, Layers, Plus, RefreshCcw, Code, Image as ImageIcon, FileCode } from 'lucide-react';
 import type { ViewMode } from '../../types/chartRecipe';
 import { getAvailableExpressions } from '../../types/chartRecipe';
 import { getDisplaySettingsForSurface } from '../../lib/analysisDisplaySettingsRegistry';
@@ -49,6 +49,10 @@ export interface ExpressionToolbarTrayProps {
   onOpenAsTab?: () => void;
   onDumpDebug?: () => void;
   onDelete?: () => void;
+  /** Download the live chart as an image. Only provided for chart view (where a
+   *  rendered ECharts instance exists); absent for cards/table views, which
+   *  therefore offer CSV only. */
+  onDownloadImage?: (format: 'png' | 'svg') => void;
   /** Analysis type palette */
   analysisTypeId?: string;
   availableAnalyses?: AvailableAnalysis[];
@@ -100,6 +104,7 @@ export const ExpressionToolbarTray = React.memo(function ExpressionToolbarTray({
   onOpenAsTab,
   onDumpDebug,
   onDelete,
+  onDownloadImage,
   analysisTypeId,
   availableAnalyses,
   onAnalysisTypeChange,
@@ -413,6 +418,16 @@ export const ExpressionToolbarTray = React.memo(function ExpressionToolbarTray({
             onClick={() => { const { filename, csv } = analysisResultToCsv(result); downloadTextFile({ content: csv, filename, mimeType: 'text/csv' }); }}
           >
             <Download size={12} /> Download CSV
+          </button>
+        )}
+        {onDownloadImage && (
+          <button type="button" className="cfp-menu-item" onClick={() => onDownloadImage('png')}>
+            <ImageIcon size={12} /> Download PNG
+          </button>
+        )}
+        {onDownloadImage && (
+          <button type="button" className="cfp-menu-item" onClick={() => onDownloadImage('svg')}>
+            <FileCode size={12} /> Download SVG
           </button>
         )}
         {onDumpDebug && (

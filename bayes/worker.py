@@ -2409,7 +2409,37 @@ def _build_result(
     except Exception:
         pass  # non-fatal — audit is diagnostic, not load-bearing
 
-    return result
+    return _json_safe(result)
+
+
+def _json_safe(value):
+    """Return a structure that Modal status and JSON patch paths can serialise.
+
+    Modal pickles function return values before the status endpoint calls
+    `FunctionCall.get()`. Native numpy scalar types therefore require numpy in
+    the status image unless we convert them before returning.
+    """
+    try:
+        import numpy as _np
+    except Exception:  # pragma: no cover - worker image always has numpy
+        _np = None
+
+    if _np is not None:
+        if isinstance(value, _np.generic):
+            return _json_safe(value.item())
+        if isinstance(value, _np.ndarray):
+            return _json_safe(value.tolist())
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+
+    return str(value)
 
 
 def _build_path_lookup(params_index: dict | None) -> dict[str, str]:

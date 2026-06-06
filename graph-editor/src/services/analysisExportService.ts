@@ -17,6 +17,19 @@ function formatDate_d_MMM_yy(dateStr: string): string {
 }
 
 /**
+ * Derive a filesystem-safe base filename (no extension) for an analysis
+ * result, shared by every export format (CSV / PNG / SVG) so a chart and its
+ * data download under one consistent name.
+ */
+export function analysisResultBaseFilename(result: AnalysisResult): string {
+  return (result?.analysis_name || result?.analysis_type || 'analysis')
+    .replace(/[^\w\s-]+/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .toLowerCase();
+}
+
+/**
  * Convert AnalysisResult to a "reasonable default" CSV:
  * - Prefer declared dimensions + metrics when semantics exist.
  * - Always include common context fields if present (scenario_name, probability_label, visibility_mode).
@@ -106,11 +119,7 @@ export function analysisResultToCsv(result: AnalysisResult): { filename: string;
       lines.push(columns.map((c) => escapeCsvCell(out[c])).join(','));
     }
 
-    const safeName = (result.analysis_name || result.analysis_type || 'analysis')
-      .replace(/[^\w\s-]+/g, '')
-      .trim()
-      .replace(/\s+/g, '-')
-      .toLowerCase();
+    const safeName = analysisResultBaseFilename(result);
 
     return { filename: `${safeName}-cohorts.csv`, csv: lines.join('\n') + '\n' };
   }
@@ -156,11 +165,7 @@ export function analysisResultToCsv(result: AnalysisResult): { filename: string;
     lines.push(columns.map(c => escapeCsvCell(out[c])).join(','));
   }
 
-  const safeName = (result.analysis_name || result.analysis_type || 'analysis')
-    .replace(/[^\w\s-]+/g, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .toLowerCase();
+  const safeName = analysisResultBaseFilename(result);
 
   return { filename: `${safeName}.csv`, csv: lines.join('\n') + '\n' };
 }

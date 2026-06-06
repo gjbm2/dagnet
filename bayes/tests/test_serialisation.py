@@ -15,6 +15,11 @@ Run with:
 
 from __future__ import annotations
 
+import json
+import pickle
+import subprocess
+import sys
+
 import pytest
 
 from bayes.compiler.types import (
@@ -22,7 +27,81 @@ from bayes.compiler.types import (
     PosteriorSummary,
     HDI_PROB,
 )
-from bayes.worker import _build_unified_slices
+from bayes.worker import _build_result, _build_unified_slices, _json_safe
+
+
+# ---------------------------------------------------------------------------
+# Modal status deserialisation boundary
+# ---------------------------------------------------------------------------
+
+class TestModalStatusPayloadSafety:
+    """Contract: worker returns must not require scientific packages to unpickle."""
+
+    def _python_without_site_packages_can_unpickle(self, payload: object) -> bool:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-c",
+                "import pickle,sys; pickle.loads(sys.stdin.buffer.read())",
+            ],
+            input=pickle.dumps(payload),
+            capture_output=True,
+            check=False,
+        )
+        return proc.returncode == 0
+
+    def test_numpy_scalars_reproduce_modal_deserialisation_failure(self):
+        """Regression proof: numpy scalars in a return value need numpy to unpickle."""
+        import numpy as np
+
+        payload = {"value": round(np.float64(1.23456), 4)}
+
+        assert type(payload["value"]).__module__.startswith("numpy")
+        assert not self._python_without_site_packages_can_unpickle(payload)
+
+    def test_json_safe_removes_numpy_pickle_dependency(self):
+        """Sanitised worker payloads unpickle without numpy and are strict JSON."""
+        import numpy as np
+
+        payload = {
+            "scalar": round(np.float64(1.23456), 4),
+            "integer": np.int64(7),
+            "array": np.array([np.float64(1.2), np.float64(3.4)]),
+            "nested": [{"bad": np.float64("nan")}, {"inf": np.float64("inf")}],
+        }
+
+        safe = _json_safe(payload)
+
+        assert safe == {
+            "scalar": 1.2346,
+            "integer": 7,
+            "array": [1.2, 3.4],
+            "nested": [{"bad": None}, {"inf": None}],
+        }
+        assert self._python_without_site_packages_can_unpickle(safe)
+        json.dumps(safe, allow_nan=False)
+
+    def test_build_result_returns_json_safe_payload(self):
+        """The actual worker result builder applies the sanitiser at exit."""
+        import numpy as np
+
+        result = _build_result(
+            None,
+            ["ok"],
+            {"sampling_ms": np.int64(12)},
+            0.0,
+            [{"slices": {"window()": {"alpha": round(np.float64(2.34567), 4)}}}],
+            [],
+            {"max_rhat": np.float64(1.001), "min_ess": np.float64(500.0)},
+            {"status": 200, "body": {"patch_path": "_bayes/patch-test.json"}},
+            "2026-06-06T09:00:00Z",
+        )
+
+        assert result["timings"]["sampling_ms"] == 12
+        assert result["webhook_payload_edges"][0]["slices"]["window()"]["alpha"] == 2.3457
+        assert self._python_without_site_packages_can_unpickle(result)
+        json.dumps(result, allow_nan=False)
 
 
 # ---------------------------------------------------------------------------

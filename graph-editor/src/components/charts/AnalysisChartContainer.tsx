@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { Download, Sliders, ExternalLink, ClipboardCopy } from 'lucide-react';
+import { Download, Sliders, ExternalLink, ClipboardCopy, Image as ImageIcon, FileCode } from 'lucide-react';
 
 import type { AnalysisResult, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { getDisplaySettings, getDisplaySettingsForSurface, resolveDisplaySetting, buildContextMenuSettingItems } from '../../lib/analysisDisplaySettingsRegistry';
@@ -9,8 +9,11 @@ import { ContextMenu } from '../ContextMenu';
 import type { ContextMenuItem } from '../ContextMenu';
 import { buildChartOption } from '../../services/analysisEChartsService';
 import { augmentChartKindOptionsForAnalysisType, planChartDisplay } from '../../services/chartDisplayPlanningService';
-import { analysisResultToCsv } from '../../services/analysisExportService';
+import { analysisResultToCsv, analysisResultBaseFilename } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
+import { downloadChartImage } from '../../services/chartImageExportService';
+import { registerChartImageProvider, unregisterChartImageProvider } from '../../services/chartImageExportRegistry';
+import { buildScenarioQueryLines } from '../../lib/chartQueryLabel';
 import { useElementSize } from '../../hooks/useElementSize';
 import { getAnalysisTypeMeta, ANALYSIS_TYPES } from '../panels/analysisTypes';
 import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
@@ -146,6 +149,10 @@ export function AnalysisChartContainer(props: {
   onOverlayColourChange?: (colour: string | null) => void;
   /** Analysis ID (for refresh event dispatch) */
   analysisId?: string;
+  /** Stable key under which this chart's live ECharts instance is registered in
+   *  chartImageExportRegistry, so an outer toolbar (e.g. ChartViewer's header
+   *  download button) can rasterise it to PNG/SVG. */
+  chartInstanceKey?: string;
   /** Delete the canvas analysis */
   onDelete?: () => void;
   /** Current canvas zoom level (for inverse-scaling UI chrome) */
@@ -490,6 +497,40 @@ export function AnalysisChartContainer(props: {
     props.onChartKindChange?.(nextKind);
   }, [props]);
 
+  // Image export (PNG/SVG) of the live chart. Only meaningful when an ECharts
+  // instance is actually rendered (see hasLiveChart below).
+  const handleDownloadImage = useCallback((format: 'png' | 'svg') => {
+    const instance = echartsRef.current?.getEchartsInstance?.() ?? null;
+    if (!instance) return;
+    const base = result ? analysisResultBaseFilename(result) : 'chart';
+    const header = result
+      ? {
+          title: result.analysis_name || result.analysis_type,
+          lines: buildScenarioQueryLines({
+            visibleScenarioIds: props.visibleScenarioIds,
+            scenarioNameById: props.scenarioMetaById,
+            scopeDslById: props.scenarioDslSubtitleById,
+            pathDsl: source?.query_dsl,
+          }),
+        }
+      : undefined;
+    downloadChartImage(instance, base, format, header);
+  }, [result, source, props.visibleScenarioIds, props.scenarioMetaById, props.scenarioDslSubtitleById]);
+
+  // Register the live instance so outer toolbars (ChartViewer header) can
+  // reach it for image export. Mirrors canvasAnalysisRefreshRegistry.
+  useEffect(() => {
+    const key = props.chartInstanceKey;
+    if (!key) return;
+    const getter = () => echartsRef.current?.getEchartsInstance?.() ?? null;
+    registerChartImageProvider(key, getter);
+    return () => unregisterChartImageProvider(key, getter);
+  }, [props.chartInstanceKey]);
+
+  // True only when an actual ECharts chart is on screen (not an info card and
+  // not a caller-supplied cards/table view), i.e. image export is possible.
+  const hasLiveChart = !!echartsOption && effectiveKind !== 'info' && !props.children;
+
   // Right-click context menu (non-canvas contexts only — canvas has its own node-level menu)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -679,14 +720,23 @@ export function AnalysisChartContainer(props: {
       });
     }
     if (result) {
-      items.push({
-        label: 'Download CSV',
-        icon: <Download size={14} />,
-        onClick: () => {
-          const { filename, csv } = analysisResultToCsv(result);
-          if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+      const downloadSubmenu: ContextMenuItem[] = [
+        {
+          label: 'CSV',
+          icon: <Download size={14} />,
+          onClick: () => {
+            const { filename, csv } = analysisResultToCsv(result);
+            if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+          },
         },
-      });
+      ];
+      if (hasLiveChart) {
+        downloadSubmenu.push(
+          { label: 'PNG', icon: <ImageIcon size={14} />, onClick: () => handleDownloadImage('png') },
+          { label: 'SVG', icon: <FileCode size={14} />, onClick: () => handleDownloadImage('svg') },
+        );
+      }
+      items.push({ label: 'Download', icon: <Download size={14} />, onClick: () => {}, submenu: downloadSubmenu });
     }
     if (props.onDumpDebug) {
       items.push({
@@ -697,7 +747,7 @@ export function AnalysisChartContainer(props: {
     }
 
     return items;
-  }, [defaultContext, props.analysisTypeId, props.onAnalysisTypeChange, props.availableAnalyses, availableChartKinds, kind, handleChartKindChange, effectiveKind, effectiveDisplay, handleDisplayChange, props.scenarioLayerItems, props.onScenarioToggleVisibility, result, props.onOpenAsTab, props.onDumpDebug]);
+  }, [defaultContext, props.analysisTypeId, props.onAnalysisTypeChange, props.availableAnalyses, availableChartKinds, kind, handleChartKindChange, effectiveKind, effectiveDisplay, handleDisplayChange, props.scenarioLayerItems, props.onScenarioToggleVisibility, result, props.onOpenAsTab, props.onDumpDebug, hasLiveChart, handleDownloadImage]);
 
   if (showInlineAnalysisTypePicker) {
     if (finalResult?.analysis_type === 'daily_conversions') {
@@ -776,6 +826,7 @@ export function AnalysisChartContainer(props: {
       onOpenAsTab={props.onOpenAsTab}
       onDumpDebug={props.onDumpDebug}
       onDelete={props.onDelete}
+      onDownloadImage={hasLiveChart ? handleDownloadImage : undefined}
       analysisTypeId={props.analysisTypeId}
       availableAnalyses={props.availableAnalyses}
       onAnalysisTypeChange={props.onAnalysisTypeChange}

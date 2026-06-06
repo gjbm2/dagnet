@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import LZString from 'lz-string';
 import { installShareLiveStubs, type ShareLiveStubState } from './support/shareLiveStubs';
 import { installShareForensics } from './support/shareForensics';
@@ -122,6 +122,14 @@ function buildLiveChartShareUrl(payload: SharePayloadV1): string {
   params.set('dashboard', '1');
   params.set('share', encodeSharePayloadToParam(payload));
   return `/?${params.toString()}`;
+}
+
+async function expectDownloadCsvAvailable(page: Page) {
+  const moreActionsButton = page.getByRole('button', { name: 'More actions' }).first();
+  await expect(moreActionsButton).toBeVisible();
+  await moreActionsButton.click();
+  await expect(page.getByRole('button', { name: 'Download CSV' }).first()).toBeVisible();
+  await page.keyboard.press('Escape');
 }
 
 test.describe.serial('Share-live chart (persistence-first)', () => {
@@ -1138,9 +1146,8 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     await sharePage.goto(new URL(shareUrl, baseURL).toString(), { waitUntil: 'domcontentloaded' });
     await expect(sharePage.getByText('Live view')).toBeVisible();
     await expect(sharePage.getByText('Chart — Current only')).toBeVisible();
-    // ChartViewer has its own "Download CSV" button, and some chart previews also expose one.
-    // Assert at least one is visible, without depending on unique button counts.
-    await expect(sharePage.getByRole('button', { name: 'Download CSV' }).first()).toBeVisible();
+    // CSV export now lives inside ChartViewer's Download menu.
+    await expectDownloadCsvAvailable(sharePage);
 
     await expect
       .poll(async () => (state.lastAnalyzeRequest?.scenarios || []).length, { timeout: 20_000 })
@@ -1220,7 +1227,7 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     // without hitting the GitHub API. This protects the persistence-first design and avoids
     // hidden network dependencies on reload.
     await expect(page.getByText('E2E Live Chart (cache incomplete)')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Download CSV' }).first()).toBeVisible();
+    await expectDownloadCsvAvailable(page);
 
     await expect
       .poll(async () => state.lastAnalyzeRequest ?? null, { timeout: 10_000 })
@@ -1442,7 +1449,7 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     // Critical semantics: when a parent graph tab is present in the bundle, the chart must be Linked (not pinned).
     await expect(page.getByText('Linked').first()).toBeVisible();
     // Stronger assertion: ChartViewer controls must be present (ensures chart CONTENT rendered, not just hidden tab metadata).
-    await expect(page.getByRole('button', { name: 'Download CSV' }).first()).toBeVisible();
+    await expectDownloadCsvAvailable(page);
 
     // Stability: analyze must have received at least one scenario, and the app must not spam tabs/renders.
     await expect

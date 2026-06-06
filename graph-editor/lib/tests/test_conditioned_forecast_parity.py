@@ -48,7 +48,10 @@ GRAPH = "synth-simple-abc"  # historical-asat fixture lives here
 # Per-graph DSL — bash _define_dsl_<name>(). The default mirrors the
 # bash fallback for unknown graphs.
 _GRAPH_DSL: dict[str, str] = {
-    "synth-simple-abc": "window(-90d:)",
+    # Pinned from the 29-Apr-26 wallclock resolution of window(-90d:).
+    # The asat cap freezes sweep/eval horizons; the absolute window avoids
+    # relative-date drift before the asat clause is interpreted.
+    "synth-simple-abc": "window(29-Jan-26:29-Apr-26).asat(29-Apr-26)",
     "synth-mirror-4step": "cohort(7-Mar-26:21-Mar-26)",
 }
 DSL = _GRAPH_DSL.get(GRAPH, "window(-90d:)")
@@ -106,6 +109,7 @@ def _analyse(dsl: str, *, analysis_type: str, no_snapshot_cache: bool = True) ->
         "--name", GRAPH,
         "--query", dsl,
         "--type", analysis_type,
+        "--no-cache",
         "--format", "json",
     ]
     if no_snapshot_cache:
@@ -120,7 +124,7 @@ def _analyse(dsl: str, *, analysis_type: str, no_snapshot_cache: bool = True) ->
                 f"(exit {exc.exit_code}): {exc}\nstderr:\n{exc.stderr[-2000:]}"
             )
     cmd = ["bash", str(_ANALYSE_SH), GRAPH, dsl,
-           "--type", analysis_type, "--format", "json"]
+           "--type", analysis_type, "--no-cache", "--format", "json"]
     if no_snapshot_cache:
         cmd.append("--no-snapshot-cache")
     result = subprocess.run(cmd, capture_output=True, text=True,

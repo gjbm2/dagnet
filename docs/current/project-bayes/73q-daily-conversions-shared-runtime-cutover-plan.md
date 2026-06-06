@@ -865,21 +865,29 @@ Each deleted test is checked for any unique semantic assertion not covered elsew
 
 ### Phase 8 — Companion analysis migrations
 
-Phase 8 owns the two companion-analysis migrations that Phase 5 records as committed but does not implement. They are independent of one another and independent of Phases 6 and 7; they can land in either order, before or after the cleanup sweep, but they remain part of 73q so the cutover is genuinely complete. Each sub-phase carries its own contract pass and acceptance walk, scoped narrowly to its analysis type.
+Phase 8 owns the two companion-analysis migrations that Phase 5 records as committed but does not implement. They are independent of one another and independent of Phases 6 and 7; they can land in either order, before or after the cleanup sweep, but they remain part of 73q so the cutover is genuinely complete. Each sub-phase carries its own contract pass and acceptance walk, scoped narrowly to its analysis type. Phase 8 also folds in a small shared evidence-surface coherence fix (Phase 8c), surfaced while settling the 8a contract, that both companion charts depend on.
 
 #### Phase 8a — `bridge_view` direct-CF migration
 
-Phase 8a implements the Phase 5c decision: `run_bridge_view` becomes a direct CF callsite, per scenario, so Reach decomposition reads the visibility-mode-correct display surface rather than the graph-state `p.mean`. Scope:
+Phase 8a implements the Phase 5c decision: `run_bridge_view` becomes a direct CF callsite, per scenario, so Reach decomposition reads the visibility-mode-correct display surface rather than the graph-state `p.mean`. The first scope item is the structural move:
 
-- Refactor `run_bridge_view` to call `_whole_graph_cf` per scenario before computing Reach decomposition, mirroring the `run_conversion_funnel` pattern. The bridge reducer consumes the scoped CF response; it does not build its own runtime, evidence binding, or post-hoc forecast residuals.
-- Rewrite the `shareLiveChart.spec.ts` e2e assertion against the new bridge output. The pre-73q assertion that `edge.p.mean` differs across visibility modes is replaced with an assertion on the display-level discriminator the bridge reducer now surfaces; the exact field is named in the Phase 8a contract pass at the time the phase begins.
-- Retire the e2e xfail recorded in the Phase 5 xfail ledger.
+- Refactor `run_bridge_view` to call `_whole_graph_cf` per scenario before computing Reach decomposition, mirroring the `run_conversion_funnel` pattern. The bridge derivation consumes the scoped CF response per edge; it does not build its own runtime, evidence binding, or post-hoc forecast residuals.
+
+**Contract pass (1-Jun-26) — E/F componentry, no hi/lo bands.** The bridge mirrors the funnel's evidence-vs-forecast decomposition but at the reach level, and deliberately stops short of the funnel's epistemic/predictive bands. The funnel realises both halves today: `funnel_engine`'s `bar_e` / `bar_f_residual` for the E/F split, and `lo_epi` / `hi_epi` / `lo_pred` / `hi_pred` for the fat-epistemic / thin-predictive bands. The bridge takes the E/F split and omits the bands. Concretely:
+
+- The bridge is a waterfall of Reach deltas. In E+F mode each hop — and each start/end total — shows a stacked **E (evidence)** component and an **F (FC residual)** component, mirroring the funnel.
+- The two components are produced by running the existing sequential-replacement Reach attribution over **two per-edge probability surfaces**, deterministically (no Monte Carlo). The **E surface** sets each edge's working probability to its own strict empirical rate (`evidence_k / evidence_n`, i.e. Σy/Σx for that edge, read from the CF response's `p.evidence.{k,n}`); the **FC surface** sets each edge's working probability to `p.mean` (the FC terminal rate). The reach product cumulates, so the per-edge unit is the edge's own `y/x` — not the funnel's entry-cohort `k / n_0` framing. `Reach_E` and `Reach_total` each close exactly, so the E sub-bars form their own internally-consistent waterfall, the E+F sub-bars form the FC waterfall, and the per-hop F residual is `delta_total − delta_e`.
+- The evidence rate is **computed** from `evidence_k / evidence_n`, not read from `evidence.mean` — `evidence.mean` is an FE-topo-written field today and can drift from CF's `evidence.{k,n}` (Phase 8c fixes that; until it lands, the bridge derives the ratio itself).
+- **No hi/lo uncertainty bands on the bridge (decided 1-Jun-26).** Per-step waterfall error bars have no clean additive semantics — steps are correlated through shared downstream edges, and a difference-of-products does not decompose into independent per-step variances. Banding even the reach totals would require a bespoke Monte-Carlo propagation over per-edge dispersion, judged semantically overloaded and disproportionate. Epistemic / predictive bands stay a cohort_maturity / funnel feature; the bridge shows point E/F deltas only.
+- Retire the `__balance__` closing fudge. Each surface's sequential-replacement attribution is additive by construction, so the residual should be ≈0; surface any residual as a diagnostic rather than absorbing it into an "Other" bucket.
+- Rewrite the `shareLiveChart.spec.ts` e2e assertion against the new bridge output. The pre-73q assertion that `edge.p.mean` differs across visibility modes is replaced with an assertion that the bridge output carries **distinct E and F components sourced from the CF response** (the evidence-surface reach and the FC-surface reach genuinely differ for immature edges); retire the `test.fixme`.
 
 Phase 8a acceptance:
 
 - `run_bridge_view` reads the scoped CF response per scenario, not the FE-supplied scenario graph's `p.mean`.
-- `shareLiveChart.spec.ts` passes against the new display-level assertion with no xfail.
-- **No-branch check:** no new CF runtime, no new conditioning branch, no fallback that re-reads `p.mean` from the scenario graph when the CF response is available.
+- Each hop and the start/end totals carry stacked E and F components computed from the two-surface attribution; no hi/lo bands are emitted; the `__balance__` fudge is gone.
+- `shareLiveChart.spec.ts` passes against the new E/F-component assertion with no xfail.
+- **No-branch check:** no new CF runtime, no new conditioning branch, no Monte Carlo, no fallback that re-reads `p.mean` from the scenario graph when the CF response is available. The two surfaces degenerate cleanly — a mature edge has `evidence_k / evidence_n ≈ p.mean`, so its F residual falls out near zero with no mode flag.
 
 #### Phase 8b — `conversion_rate` bin-reducer extension
 
@@ -899,9 +907,27 @@ Phase 8b acceptance:
 - The doc-49 §B.2 latency context is preserved end-to-end; the `conversion_rate_derivation.py:9` forward-reference is updated to point at Phase 8b and no longer mentions "doc 49 Phase 3".
 - **No-branch check:** no new CF runtime, no new conditioning branch, no fallback that bypasses the bin reducer when latency edges are present.
 
+#### Phase 8c — CF owns the evidence-surface mean (single-writer evidence triple)
+
+Surfaced while settling the Phase 8a bridge contract (1-Jun-26). The CF→graph apply mapping (`conditionedForecastService.applyConditionedForecastToGraph`, the I12 contract) already overwrites `edge.p.evidence.{k,n}` with CF's strict-empirical terminal totals when CF lands, but leaves `edge.p.evidence.mean` as the value the FE topo pass aggregated. Post-CF the triple is therefore internally split — `k` and `n` are CF's, `mean` is FE topo's — so `evidence.mean ≠ evidence_k / evidence_n` is possible (an AP52 split-writer drift). Overwriting two of the three sibling fields but not the third is the bug-shape. Scope:
+
+- The CF apply mapping writes `edge.p.evidence.mean = evidence_k / evidence_n` alongside the existing `evidence.{k,n}` writes, so the evidence triple is single-writer and internally coherent when CF lands. The FE topo pass remains the pre-CF fallback writer, exactly as for `p.mean` under the race. This mirrors the posterior-unification single-writer discipline (`applyPromotion` as the sole writer of `p.posterior`).
+- Both companion charts benefit: bridge (8a) and funnel can then read `p.evidence.mean` directly rather than recomputing `evidence_k / evidence_n` to dodge a stale `mean`.
+
+Before implementation:
+
+- **Semantic match.** Confirm CF's strict-empirical evidence surface (`evidence_y_strict / evidence_x_strict` at saturation, selected-Cohort) answers the same question `evidence.mean` is meant to represent. Window mode coincides; active `cohort(A ≠ X)` selected-A-clock strict evidence may differ from the FE-topo window aggregate. If they are genuinely different questions, CF-writing `evidence.mean` changes its meaning, not just its freshness — a decision to record before acting.
+- **Consumer audit.** Grep every reader of `p.evidence.mean` (notably the FE blendedMean fallback path) to confirm nothing depends on the FE-topo flavour. Verify the exact write / normalise site in `conditionedForecastService.ts` first — `mean` may already be recomputed from `k / n` somewhere downstream, in which case there is nothing to fix.
+
+Phase 8c acceptance:
+
+- When CF lands, `edge.p.evidence.mean`, `edge.p.evidence.k`, and `edge.p.evidence.n` are written by one writer and satisfy `mean == k / n` within float tolerance.
+- The semantic-match check and the consumer audit are recorded; no `p.evidence.mean` consumer regresses.
+- **No-branch check:** the change is one coherent write of the evidence triple at the apply boundary, not a per-mode fork.
+
 #### Phase 8 sequencing
 
-Phases 8a and 8b are independent and can land in either order. Neither blocks Phases 6 or 7, and neither requires the other. Both extend 73q's cutover surface and remain part of 73q core; 73q is not closed until both have landed or been explicitly retired with named replacement coverage.
+Phases 8a, 8b, and 8c are independent and can land in any order. None blocks Phases 6 or 7, and none requires the others — 8c improves the evidence surface that 8a and the funnel consume but is not a prerequisite, since 8a derives `evidence_k / evidence_n` directly until 8c lands. All three extend 73q's cutover surface and remain part of 73q core; 73q is not closed until they have landed or been explicitly retired with named replacement coverage.
 
 ## Invariants
 

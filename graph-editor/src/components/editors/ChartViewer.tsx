@@ -14,9 +14,13 @@ import { ScenarioLayerList } from '../panels/ScenarioLayerList';
 import { AnalysisTypeSection } from '../panels/AnalysisTypeSection';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { useElementSize } from '../../hooks/useElementSize';
-import { analysisResultToCsv } from '../../services/analysisExportService';
+import { analysisResultToCsv, analysisResultBaseFilename } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
-import { Link2, Pin, Settings, FileText, BarChart3, LayoutGrid, Table2, Download, RefreshCw } from 'lucide-react';
+import { downloadChartImage } from '../../services/chartImageExportService';
+import { getChartImageInstance } from '../../services/chartImageExportRegistry';
+import { buildScenarioQueryLines } from '../../lib/chartQueryLabel';
+import { CfpPopover } from '../charts/CfpPopover';
+import { Link2, Pin, Settings, FileText, BarChart3, LayoutGrid, Table2, Download, RefreshCw, Image as ImageIcon, FileCode } from 'lucide-react';
 import { getAvailableExpressions } from '../../types/chartRecipe';
 import { resolveDisplaySetting } from '../../lib/analysisDisplaySettingsRegistry';
 import { filterResultForScenarios } from '../../lib/analysisResultUtils';
@@ -250,6 +254,33 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
   const analyticsDsl = defRecipe?.analysis?.analytics_dsl || defRecipe?.analysis?.query_dsl || '';
   const analysisType = defRecipe?.analysis?.analysis_type || '';
 
+  // Per-layer "name · full DSL" lines. The standalone tab and exports lack the
+  // surrounding context (layer list, window selector), so they surface each
+  // layer's effective_dsl — which carries the cohort()/window() mode + dates.
+  const scenarioQueryLines = buildScenarioQueryLines({
+    visibleScenarioIds: scenarioIds,
+    scenarioNameById: scenarioMetaById,
+    scopeDslById: scenarioDslSubtitleById,
+    pathDsl: analyticsDsl,
+  });
+
+  // Image export resolves the live ECharts instance (owned by the
+  // AnalysisChartContainer below) via the registry, keyed by this chart's
+  // fileId, and bakes the title banner (title + date + per-layer DSL) into it.
+  const handleDownloadImage = useCallback((format: 'png' | 'svg') => {
+    const instance = getChartImageInstance(fileId);
+    if (!instance) {
+      console.warn('[ChartViewer] No chart instance registered for image export');
+      return;
+    }
+    const header = {
+      title: chartDef.title || undefined,
+      subtitle: chart?.created_at_uk || undefined,
+      lines: scenarioQueryLines,
+    };
+    downloadChartImage(instance, analysisResultBaseFilename(analysisResult), format, header);
+  }, [fileId, analysisResult, chartDef.title, chart?.created_at_uk, scenarioQueryLines]);
+
   const scenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
     return scenarios.map((s: any) => ({
       id: s.scenario_id,
@@ -431,11 +462,14 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
         <div style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--border-primary)', background: 'var(--bg-primary)', color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           {isLinked ? <><Link2 size={11} /> Linked</> : <><Pin size={11} /> Pinned</>}
         </div>
-        {analyticsDsl && (
-          <div style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--border-primary)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300 }} title={analyticsDsl}>
-            {analyticsDsl}
+        {/* Per-layer "name · full DSL" — surfaces the cohort()/window() mode +
+            date scope that the bare path DSL omits (standalone tab has no
+            layer list / window selector for context). */}
+        {scenarioQueryLines.map((line, i) => (
+          <div key={i} style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--border-primary)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 360 }} title={line}>
+            {line}
           </div>
-        )}
+        ))}
         {!autoUpdatePolicy.enabled && isStale ? (
           <div style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--color-warning)', background: 'var(--color-warning-bg)', color: 'var(--color-warning)' }}>
             Stale
@@ -469,18 +503,38 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
             );
           })}
         </span>
-        {/* Download CSV */}
-        <button
-          type="button"
-          className="chart-viewer-btn"
-          onClick={() => {
-            const { filename, csv } = analysisResultToCsv(analysisResult);
-            downloadTextFile({ content: csv, filename, mimeType: 'text/csv' });
-          }}
-          title="Download CSV"
+        {/* Download dropdown: CSV always; PNG/SVG when a chart is rendered */}
+        <CfpPopover
+          icon={<Download size={13} />}
+          title="Download"
+          sticky
+          trigger={
+            <button type="button" className="chart-viewer-btn" title="Download">
+              <Download size={13} />
+            </button>
+          }
         >
-          <Download size={13} />
-        </button>
+          <button
+            type="button"
+            className="cfp-menu-item"
+            onClick={() => {
+              const { filename, csv } = analysisResultToCsv(analysisResult);
+              downloadTextFile({ content: csv, filename, mimeType: 'text/csv' });
+            }}
+          >
+            <Download size={12} /> Download CSV
+          </button>
+          {viewMode === 'chart' && (
+            <button type="button" className="cfp-menu-item" onClick={() => handleDownloadImage('png')}>
+              <ImageIcon size={12} /> Download PNG
+            </button>
+          )}
+          {viewMode === 'chart' && (
+            <button type="button" className="cfp-menu-item" onClick={() => handleDownloadImage('svg')}>
+              <FileCode size={12} /> Download SVG
+            </button>
+          )}
+        </CfpPopover>
         <button
           type="button"
           className="chart-viewer-btn"
@@ -656,6 +710,7 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
             <div style={{ position: 'absolute', inset: 0 }}>
               <AnalysisChartContainer
                 result={analysisResult}
+                chartInstanceKey={fileId}
                 chartKindOverride={chartDef.chart_kind}
                 visibleScenarioIds={scenarioIds}
                 scenarioVisibilityModes={scenarioVisibilityModes}
