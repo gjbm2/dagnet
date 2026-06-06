@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.7b
+**Released:** 6-Jun-26
+
+Added BE telemetry
+
+---
+
 ## Version 2.1.6b
 **Released:** 6-Jun-26
 
