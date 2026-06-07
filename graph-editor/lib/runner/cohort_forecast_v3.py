@@ -31,6 +31,7 @@ from .primitive_evidence import RequestPrimitiveRegistry
 from .primitives import ConditionedTransitionPrimitive
 from .subject_span_composer import ComposedPrimitiveSpan
 from . import model_span_spine
+from . import runtime_memory
 from .primitive_readout import (
     ComposedUnconditionedOverlay,
     _resolved_to_timing_transition,
@@ -2015,6 +2016,209 @@ def build_cohort_evidence_from_frames(
     )
 
 
+# Sentinel cohort chunk size: one chunk covers every cohort (no chunking).
+# Larger than any realistic cohort count, so ``range(0, C, _COHORT_CHUNK_ALL)``
+# yields a single chunk. The perimeter passes a smaller K to cap the
+# selected-cohort projection's transient ``O(C·S·T)`` peak at ``O(K·S·T)``.
+_COHORT_CHUNK_ALL = 1 << 30
+
+# Auto sentinel: the perimeter passes this to hand the chunk-size decision to
+# the engine's memory-budget K-solver (``_solve_cohort_chunk_size``), which
+# picks the largest K that fits the peak budget from (C, S, T). Distinct from
+# ``_COHORT_CHUNK_ALL`` (explicit unbounded / one chunk). Any value ``<= 0`` is
+# read as auto so the float request setting's ``0.0`` default maps cleanly.
+_COHORT_CHUNK_AUTO = 0
+
+# ── Cohort-chunk memory model ────────────────────────────────────────────────
+# Peak RSS during the selected-cohort projection, when ``K`` cohorts are run at
+# once, is:
+#
+#     peak ≈ current_rss + out·S·T·C + transient·S·T·min(K, C)
+#
+# ``current_rss`` is read live (everything already resident when the projection
+# starts: span resolution, earlier whole-graph analyses, allocator high-water).
+# ``out·S·T·C`` is the retained full-C ``(C·S·T)`` output the bundle must return
+# regardless of K. ``transient·S·T·min(K, C)`` is the per-chunk working set —
+# the only term K bounds. Both coefficients are array-size-driven (data- and
+# topology-independent): ``out`` is exact (8 float64 (C,S,T) surfaces = 64
+# bytes/cell); ``transient`` is the reducer's internal scratch per cohort,
+# measured at ~471 bytes/cell from the clean per-chunk slope (21 cohorts → +1213
+# MB, 17 → +969 MB at S=2000, T=57) and rounded up to 512 so the model
+# overstates cost (smaller, safer K). The memory ceiling and ``current_rss``
+# are read from the OS (``runtime_memory``), not guessed — see that module.
+_COHORT_CHUNK_OUT_BYTES_PER_CELL = 64              # retained full-C output: 8 (C,S,T) float64 surfaces
+_COHORT_CHUNK_TRANSIENT_BYTES_PER_CELL = 512       # per-chunk projection scratch (measured ~471, rounded up)
+
+
+def _solve_cohort_chunk_size(
+    *, total_cohorts, draw_count, horizon, budget_bytes, current_rss_bytes,
+):
+    """Largest cohort-chunk size K whose projected peak RSS fits the available
+    memory headroom, clamped to [1, C]. Pure arithmetic — the perimeter's
+    policy executed once before the chunk loop; the reducer and combine never
+    branch on it. The memory facts (``budget_bytes`` = the container ceiling,
+    ``current_rss_bytes`` = what is already resident) are supplied by the
+    caller from ``runtime_memory`` so this stays free of environment I/O.
+
+    Model:
+
+        peak ≈ current_rss + out·S·T·C + transient·S·T·min(K, C)
+
+    Solving ``peak ≤ budget`` for K:
+
+        K = clamp( floor((budget − current_rss − out·S·T·C) / (transient·S·T)), 1, C )
+
+    Degenerates to K = C (one chunk = unbounded = bit-identical) whenever the
+    projection already fits the headroom, so small requests — and any request on
+    a box with ample free memory — are never chunked. When the fixed part
+    (already-resident + retained output) alone exceeds the budget, ``affordable``
+    is non-positive and the clamp returns K = 1 (best effort — chunking cannot
+    shrink a request below what is already resident plus its mandatory output;
+    that case surfaces as an OOM, visibly, not silently). K ∈ [1, C] is a
+    structural domain constraint, not a defensive clamp.
+    """
+    cohorts = max(int(total_cohorts), 1)
+    draws = max(int(draw_count), 1)
+    st = draws * max(int(horizon), 1)
+    out_floor = _COHORT_CHUNK_OUT_BYTES_PER_CELL * st * cohorts
+    headroom = int(budget_bytes) - int(current_rss_bytes) - out_floor
+    per_cohort_transient = _COHORT_CHUNK_TRANSIENT_BYTES_PER_CELL * st
+    affordable = headroom // per_cohort_transient
+    return int(min(max(affordable, 1), cohorts))
+
+
+_BY_COHORT_CST_FIELDS = (
+    'f_x_draws_by_cohort', 'f_y_draws_by_cohort', 'f_rate_draws_by_cohort',
+    'ef_x_draws_by_cohort', 'ef_y_draws_by_cohort', 'ef_rate_draws_by_cohort',
+    'ef_forecast_x_by_cohort', 'ef_forecast_y_by_cohort',
+)
+_BY_COHORT_CT_FIELDS = (
+    'evidence_x_strict_by_cohort', 'evidence_y_strict_by_cohort',
+)
+
+
+def _combine_selected_cohort_projections(
+    chunk_projections, *, total_cohort_count, draw_count, horizon,
+):
+    """Stream per-cohort-chunk projections into one, branchlessly, with the
+    exact per-field algebra ``project_selected_cohort_rows`` uses for the
+    whole set.
+
+    Memory contract: the per-cohort ``(C, S, T)`` outputs are pre-allocated
+    once and each chunk's slice is written in place; the aggregate ``(S, T)``
+    / ``(T,)`` surfaces accumulate in place. ``chunk_projections`` is consumed
+    as it is iterated (the caller passes a generator), so only **one** chunk's
+    working set is live at a time — peak is one full-C output set plus one
+    ``(K, S, T)`` chunk, not ``2·(C, S, T)``. This is what makes the chunk
+    size a genuine lever on the projection peak.
+
+    Cross-cohort aggregates are additive — accumulate numerator and
+    denominator surfaces, then divide ONCE (never sum per-chunk rates), zeros
+    where the denominator is 0 for f_rate / rate_strict and NaN on 0/0 for
+    ef_rate, matching the reducer exactly. Denominators are sums of
+    non-negative mass, so a genuinely-zero cell stays exactly 0 across chunks
+    and the where-masks never flip on summation-order drift; only positive
+    cells differ at the ULP. Per-cohort surfaces are bit-identical to a
+    single-call projection (proven: ``test_cohort_chunk_separability``); with
+    one chunk every row-math field is bit-identical, so the unbounded default
+    chunk size preserves output exactly.
+
+    ``chunk_projections`` yields ≥1 projection by construction (the caller
+    always forms ≥1 chunk); the empty-cohort degeneracy flows through
+    ``project_selected_cohort_rows``'s own zero-cohort handling in a single
+    (empty) chunk, leaving ``(0, S, T)`` / ``(0, T)`` outputs.
+    """
+    C = int(total_cohort_count)
+    S = int(draw_count)
+    T = int(horizon) + 1
+
+    by_cohort = {f: np.empty((C, S, T), dtype=np.float64)
+                 for f in _BY_COHORT_CST_FIELDS}
+    by_cohort.update({f: np.empty((C, T), dtype=np.float64)
+                      for f in _BY_COHORT_CT_FIELDS})
+
+    f_x = np.zeros((S, T), dtype=np.float64)
+    f_y = np.zeros((S, T), dtype=np.float64)
+    ef_x = np.zeros((S, T), dtype=np.float64)
+    ef_y = np.zeros((S, T), dtype=np.float64)
+    ef_forecast_x = np.zeros((S, T), dtype=np.float64)
+    ef_forecast_y = np.zeros((S, T), dtype=np.float64)
+    evidence_x_strict = np.zeros(T, dtype=np.float64)
+    evidence_y_strict = np.zeros(T, dtype=np.float64)
+    applicable_cohort_count = np.zeros(T, dtype=np.float64)
+    evidence_x_strict_by_anchor_tau: Dict[Any, Any] = {}
+    evidence_y_strict_by_anchor_tau: Dict[Any, Any] = {}
+    last_diag: Dict[str, Any] = {}
+
+    offset = 0
+    for p in chunk_projections:
+        k = p.f_x_draws_by_cohort.shape[0]
+        sl = slice(offset, offset + k)
+        for f in _BY_COHORT_CST_FIELDS:
+            by_cohort[f][sl] = getattr(p, f)
+        for f in _BY_COHORT_CT_FIELDS:
+            by_cohort[f][sl] = getattr(p, f)
+        f_x += p.f_x_draws
+        f_y += p.f_y_draws
+        ef_x += p.ef_x_draws
+        ef_y += p.ef_y_draws
+        ef_forecast_x += p.ef_forecast_x
+        ef_forecast_y += p.ef_forecast_y
+        evidence_x_strict += p.evidence_x_strict
+        evidence_y_strict += p.evidence_y_strict
+        applicable_cohort_count += p.applicable_cohort_count
+        evidence_x_strict_by_anchor_tau.update(p.evidence_x_strict_by_anchor_tau)
+        evidence_y_strict_by_anchor_tau.update(p.evidence_y_strict_by_anchor_tau)
+        last_diag = p.diagnostics
+        offset += k
+
+    f_rate = np.divide(
+        f_y, f_x, out=np.zeros_like(f_y), where=f_x > 0.0,
+    )
+    rate_strict = np.divide(
+        evidence_y_strict, evidence_x_strict,
+        out=np.zeros_like(evidence_y_strict), where=evidence_x_strict > 0.0,
+    )
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ef_rate = ef_y / ef_x
+    applicability_row = np.divide(
+        applicable_cohort_count, float(C),
+        out=np.zeros_like(applicable_cohort_count), where=C > 0,
+    )
+
+    diagnostics = dict(last_diag)
+    diagnostics['cohort_count'] = C
+
+    return model_span_spine.SelectedCohortRowProjection(
+        f_rate_draws=f_rate,
+        f_x_draws=f_x,
+        f_y_draws=f_y,
+        f_x_draws_by_cohort=by_cohort['f_x_draws_by_cohort'],
+        f_y_draws_by_cohort=by_cohort['f_y_draws_by_cohort'],
+        f_rate_draws_by_cohort=by_cohort['f_rate_draws_by_cohort'],
+        applicability_row=applicability_row,
+        applicable_cohort_count=applicable_cohort_count,
+        evidence_x_strict_by_anchor_tau=evidence_x_strict_by_anchor_tau,
+        evidence_y_strict_by_anchor_tau=evidence_y_strict_by_anchor_tau,
+        evidence_x_strict=evidence_x_strict,
+        evidence_y_strict=evidence_y_strict,
+        rate_strict=rate_strict,
+        ef_x_draws=ef_x,
+        ef_y_draws=ef_y,
+        ef_rate_draws=ef_rate,
+        ef_forecast_x=ef_forecast_x,
+        ef_forecast_y=ef_forecast_y,
+        ef_x_draws_by_cohort=by_cohort['ef_x_draws_by_cohort'],
+        ef_y_draws_by_cohort=by_cohort['ef_y_draws_by_cohort'],
+        ef_rate_draws_by_cohort=by_cohort['ef_rate_draws_by_cohort'],
+        ef_forecast_x_by_cohort=by_cohort['ef_forecast_x_by_cohort'],
+        ef_forecast_y_by_cohort=by_cohort['ef_forecast_y_by_cohort'],
+        evidence_x_strict_by_cohort=by_cohort['evidence_x_strict_by_cohort'],
+        evidence_y_strict_by_cohort=by_cohort['evidence_y_strict_by_cohort'],
+        diagnostics=diagnostics,
+    )
+
+
 def build_cf_projection_bundle(
     frames: List[Dict[str, Any]],
     graph: Dict[str, Any],
@@ -2042,6 +2246,7 @@ def build_cf_projection_bundle(
     context_key: Optional[str] = None,
     context_selector: Optional[str] = None,
     mece_dimensions: Sequence[str] = (),
+    cohort_chunk_size: int = _COHORT_CHUNK_ALL,
 ):
     """Build the one shared CF projection bundle (73q Phase 2).
 
@@ -2264,14 +2469,58 @@ def build_cf_projection_bundle(
         selected_retrieval_frontier.paired_frontier_by_anchor,
         projection_horizon,
     )
-    selected_projection = model_span_spine.project_selected_cohort_rows(
-        composed_carrier=runtime.composed_carrier,
-        composed_subject=runtime.composed_subject,
-        composed_carrier_predictive=runtime.composed_carrier_predictive,
-        composed_subject_predictive=runtime.composed_subject_predictive,
-        composed_empirical_carrier=runtime.composed_empirical_carrier,
-        composed_empirical_subject=runtime.composed_empirical_subject,
-        selected_cohorts=selected_cohort_inputs,
+    # Cohort-axis batching (memory). Run the selected-cohort projection in
+    # contiguous cohort chunks of ``cohort_chunk_size`` over the SAME runtime
+    # spans (built once above), then combine. This caps the dominant transient
+    # peak — the ``(C·S·T)`` surfaces the reducer builds — at ``(K·S·T)``,
+    # while returning the full-C surfaces the bundle/reducers consume. The
+    # combine is sum-first / divide-once; per-cohort surfaces are bit-identical
+    # to a single-call projection (proven: test_cohort_chunk_separability).
+    # Branchless by construction: ``range`` iteration + a vectorised combine,
+    # with ``max(C, 1)`` guaranteeing one chunk so the empty-cohort case flows
+    # through the reducer's own zero-cohort handling. The perimeter picks the
+    # chunk size (engine just executes it); the unbounded default runs one
+    # chunk and is bit-identical to the un-chunked projection.
+    # Resolve the effective chunk size. The auto sentinel hands the decision to
+    # the memory-budget K-solver (largest K that fits the peak budget from
+    # C, S, T); any explicit positive K (manual request setting, or the
+    # unbounded ``_COHORT_CHUNK_ALL``) is used as-is. One ternary — config
+    # selection, not a mode fork; the reducer/combine below stay branchless.
+    _effective_chunk = (
+        _solve_cohort_chunk_size(
+            total_cohorts=len(selected_cohort_inputs),
+            draw_count=int(runtime.composed_carrier.draw_count),
+            horizon=int(projection_horizon),
+            budget_bytes=runtime_memory.projection_memory_budget_bytes(),
+            current_rss_bytes=runtime_memory.current_rss_bytes(),
+        )
+        if cohort_chunk_size <= _COHORT_CHUNK_AUTO
+        else cohort_chunk_size
+    )
+    _cohort_chunks = [
+        selected_cohort_inputs[_s:_s + _effective_chunk]
+        for _s in range(0, max(len(selected_cohort_inputs), 1), _effective_chunk)
+    ]
+    # Generator (not a list): each chunk projection is built, streamed into the
+    # combine, and freed before the next — so only one chunk's working set is
+    # live at a time.
+    _chunk_projection_stream = (
+        model_span_spine.project_selected_cohort_rows(
+            composed_carrier=runtime.composed_carrier,
+            composed_subject=runtime.composed_subject,
+            composed_carrier_predictive=runtime.composed_carrier_predictive,
+            composed_subject_predictive=runtime.composed_subject_predictive,
+            composed_empirical_carrier=runtime.composed_empirical_carrier,
+            composed_empirical_subject=runtime.composed_empirical_subject,
+            selected_cohorts=_chunk,
+            horizon=projection_horizon,
+        )
+        for _chunk in _cohort_chunks
+    )
+    selected_projection = _combine_selected_cohort_projections(
+        _chunk_projection_stream,
+        total_cohort_count=len(selected_cohort_inputs),
+        draw_count=int(runtime.composed_carrier.draw_count),
         horizon=projection_horizon,
     )
 

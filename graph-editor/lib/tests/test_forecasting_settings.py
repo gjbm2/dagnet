@@ -255,7 +255,9 @@ class TestSettingsSignature:
         """Persistent modelling fields must contribute to the signature."""
         base_sig = compute_settings_signature(ForecastingSettings())
         for field_name in ForecastingSettings.__dataclass_fields__:
-            if field_name == 'is_ess_threshold_enabled':
+            # Signature-excluded fields: request-only / memory-layout knobs
+            # that do not change modelling results (see compute_settings_signature).
+            if field_name in ('is_ess_threshold_enabled', 'cohort_chunk_size'):
                 continue
             default_val = getattr(ForecastingSettings(), field_name)
             modified_val = default_val + 1.0 if default_val != 0 else 1.0
@@ -269,6 +271,18 @@ class TestSettingsSignature:
             ForecastingSettings(is_ess_threshold_enabled=1.0)
         )
         assert flagged == base
+
+    def test_cohort_chunk_size_does_not_change_signature(self):
+        """cohort_chunk_size is a memory-layout knob only: chunking the
+        selected-cohort projection changes the projection's peak footprint,
+        not its results (sum-first / divide-once is bit-identical within
+        summation-order tolerance). So it must be excluded from the model
+        signature, exactly like is_ess_threshold_enabled."""
+        base = compute_settings_signature(ForecastingSettings())
+        chunked = compute_settings_signature(
+            ForecastingSettings(cohort_chunk_size=8.0)
+        )
+        assert chunked == base
 
     def test_same_values_different_construction_same_signature(self):
         s1 = ForecastingSettings(forecast_blend_lambda=0.3)

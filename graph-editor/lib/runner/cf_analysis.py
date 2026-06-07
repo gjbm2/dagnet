@@ -96,6 +96,7 @@ def prepare_cf_projection_bundle(
     use_prepared_resolved: bool,
     show_model_curve: bool,
     log_prefix: str,
+    cohort_chunk_size: int = 1 << 30,
 ) -> CFAnalysisPrepared:
     """Run preparation → projection for one resolved subject group.
 
@@ -125,11 +126,29 @@ def prepare_cf_projection_bundle(
     """
     from runner.forecast_preparation import _make_envelope_aware_upstream_fetcher
     from runner.forecast_runtime import prepare_forecast_runtime_inputs
+    from runner.forecasting_settings import current_settings
     from runner.cohort_forecast_v3 import (
+        _COHORT_CHUNK_ALL,
+        _COHORT_CHUNK_AUTO,
         build_carrier_superset_candidates_by_edge,
         build_cf_projection_bundle,
         build_superset_candidates_by_edge,
     )
+
+    # Perimeter policy: the per-request ``cohort_chunk_size`` setting governs.
+    # >0 pins a manual chunk size K; 0 (the default) hands the decision to the
+    # engine's memory-budget K-solver, which picks the largest K that fits the
+    # peak budget from (C, S, T). The engine just executes the chosen K; the
+    # decision lives here at the perimeter, never in the reducer. The
+    # ``cohort_chunk_size`` call default (unbounded) is honoured only when a
+    # caller passed it explicitly and no request setting is bound.
+    _setting_chunk = int(current_settings().cohort_chunk_size)
+    if _setting_chunk > 0:
+        _resolved_chunk_size = _setting_chunk
+    elif cohort_chunk_size != _COHORT_CHUNK_ALL:
+        _resolved_chunk_size = cohort_chunk_size
+    else:
+        _resolved_chunk_size = _COHORT_CHUNK_AUTO
 
     # Seed the caller-owned donor map with this group's per-edge results.
     for entry in preparation.per_edge_results:
@@ -222,6 +241,7 @@ def prepare_cf_projection_bundle(
         context_key=context_scope.context_key,
         context_selector=context_scope.context_selector,
         mece_dimensions=context_scope.mece_dimensions,
+        cohort_chunk_size=_resolved_chunk_size,
     )
 
     return CFAnalysisPrepared(
@@ -257,6 +277,7 @@ def prepare_cf_scalar_bundle(
     log_prefix: str,
     mc_draws_override: Optional[int] = None,
     include_epistemic_overlay: bool = False,
+    cohort_chunk_size: int = 1 << 30,
 ) -> CFAnalysisPrepared:
     """Scalar-only CF callsite (73q Phase 5e Step B).
 
@@ -307,6 +328,7 @@ def prepare_cf_scalar_bundle(
             use_prepared_resolved=False,
             show_model_curve=False,
             log_prefix=log_prefix,
+            cohort_chunk_size=cohort_chunk_size,
         )
 
     if mc_draws_override is None:

@@ -167,6 +167,18 @@ class ForecastingSettings:
     tempering path. 0 = full-likelihood IS (default); non-zero restores the
     previous λ search to keep ESS at the legacy floor."""
 
+    cohort_chunk_size: float = 0.0
+    """Cohort-axis chunk size K for the selected-cohort projection. 0 (the
+    default) = auto: the engine's memory-budget K-solver picks the largest K
+    that keeps the projection's peak RSS under the target budget, from
+    (C, S, T) — degenerating to one chunk (unbounded, bit-identical) whenever
+    the whole projection already fits, so small requests are never chunked. A
+    positive K pins a manual chunk size, capping the projection's transient
+    peak at O(K·S·T) by running the reducer over contiguous cohort chunks and
+    combining sum-first / divide-once. Memory-layout only — results are
+    unchanged within summation-order tolerance, so it is excluded from the
+    model signature (like ``is_ess_threshold_enabled``)."""
+
 
 # ── Request-scoped settings context ────────────────────────────
 
@@ -228,6 +240,7 @@ def compute_settings_signature(settings: ForecastingSettings) -> str:
     # Canonical JSON: sorted keys, no whitespace, full float precision.
     d = asdict(settings)
     d.pop('is_ess_threshold_enabled', None)
+    d.pop('cohort_chunk_size', None)  # memory-layout only; results unchanged
     canonical = json.dumps(d, sort_keys=True, separators=(',', ':'))
     digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
     return digest[:16]

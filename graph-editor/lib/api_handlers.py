@@ -3442,3 +3442,14 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ── TEMPORARY diagnostic instrumentation — per-phase peak-RSS probe ──────
+# Localises which CF phase owns the per-request memory peak (span resolution
+# vs projection vs scatter vs tau reduce). Reversible: delete this block and
+# lib/mem_phase_probe.py. Runtime off-switch: DAGNET_MEM_PHASE_PROBE=0.
+try:
+    import mem_phase_probe as _mem_phase_probe
+    _mem_phase_probe.install()
+except Exception as _mem_phase_exc:  # never let the probe break the server
+    print(f"[mem-phase] probe install failed: {_mem_phase_exc}", flush=True)
+
+
