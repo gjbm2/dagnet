@@ -555,7 +555,6 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
     expect(resWrong.success).toBe(true);
     expect(resWrong.count).toBe(0);
     expect(Array.isArray(resWrong.rows)).toBe(true);
-    expect(resWrong.has_any_rows).toBe(true);
     expect(resWrong.has_matching_core_hash).toBe(false);
   });
 

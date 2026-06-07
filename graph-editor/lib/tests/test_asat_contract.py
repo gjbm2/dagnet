@@ -163,7 +163,6 @@ class TestAsatEvidenceFiltering:
         No row from t2 or t3 should appear.
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 15, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 3),
@@ -186,7 +185,6 @@ class TestAsatEvidenceFiltering:
         cutoff), not t1 and not t3.
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 25, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 3),
@@ -207,7 +205,6 @@ class TestAsatEvidenceFiltering:
         A1 (strengthened): with asat before t1, no data should be returned.
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 9, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 3),
@@ -223,7 +220,6 @@ class TestAsatEvidenceFiltering:
         (latest available).
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 12, 1, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 3),
@@ -241,7 +237,6 @@ class TestAsatEvidenceFiltering:
         slice_key) — the latest as-of the cutoff. No duplicates.
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 12, 1, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 3),
@@ -301,7 +296,6 @@ class TestAsatSignatureExclusion:
         WITHOUT asat — so the same hash works for live and asat queries.
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 15, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 1),
@@ -363,7 +357,6 @@ class TestAsatWarningMetadata:
         compute freshness warnings.
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 15, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
@@ -379,7 +372,6 @@ class TestAsatWarningMetadata:
         K2: has_anchor_to is true when anchor_to day is in the result.
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 15, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
@@ -395,7 +387,6 @@ class TestAsatWarningMetadata:
         K2: has_anchor_to is false when anchor_to day is NOT in the result.
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 15, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 5),  # no data for 5-Oct
@@ -411,7 +402,6 @@ class TestAsatWarningMetadata:
         (not an error — absence is the true answer).
         """
         result = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 9, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
@@ -477,7 +467,6 @@ class TestAsatReadOnly:
 
         # Run virtual snapshot query
         query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 15, 23, 59, 59),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 1),

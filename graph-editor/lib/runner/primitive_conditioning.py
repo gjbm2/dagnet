@@ -117,6 +117,12 @@ _primitive_cache = result_cache.make_cache(
     'primitive',
     ttl_s=15 * 60,
     max_entries=1024,
+    # Per-request: holds draw-scaled conditioned primitives whose DrawFamilyKey
+    # carries per-request evidence identity, so it does not hit across requests.
+    # Flushed by result_cache.clear_request_scoped() at request end to bound a
+    # warm worker's memory to one request's working set (count-only eviction
+    # never fires for the handful of GB-sized entries a request produces).
+    request_scoped=True,
 )
 
 

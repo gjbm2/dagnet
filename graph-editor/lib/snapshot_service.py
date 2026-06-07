@@ -2312,7 +2312,6 @@ def query_batch_retrievals(
 # =============================================================================
 
 def query_virtual_snapshot(
-    param_id: str,
     as_at: datetime,
     anchor_from: date,
     anchor_to: date,
@@ -2327,10 +2326,9 @@ def query_virtual_snapshot(
     
     This implements the asat() DSL function for historical queries.
     
-    Performance invariant: executes at most ONE SQL query per param_id (not per slice).
-    
+    Performance invariant: executes at most ONE SQL query per call (not per slice).
+
     Args:
-        param_id: Workspace-prefixed parameter ID (required)
         as_at: Point-in-time for snapshot retrieval (required)
         anchor_from: Start of anchor date range (required)
         anchor_to: End of anchor date range (required)
@@ -2352,7 +2350,10 @@ def query_virtual_snapshot(
     if anchor_from > anchor_to:
         anchor_from, anchor_to = anchor_to, anchor_from
 
-    ck = _cache_key("query_virtual_snapshot", param_id, as_at, anchor_from,
+    # Read identity is purely semantic (key-fixes.md §2.2): param_id (repo/branch)
+    # must NOT take part in the lookup, so it is excluded from the cache key —
+    # identical core_hash results are shared across params instead of fragmented.
+    ck = _cache_key("query_virtual_snapshot", as_at, anchor_from,
                      anchor_to, core_hash, slice_keys, equivalent_hashes, limit)
     hit, cached = _cache_get(ck)
     if hit:
@@ -2404,7 +2405,7 @@ def query_virtual_snapshot(
                         onset_delta_days,
                         ROW_NUMBER() OVER (
                             PARTITION BY anchor_day, {_partition_key_match_sql_expr()}
-                            ORDER BY retrieved_at DESC, param_id DESC
+                            ORDER BY retrieved_at DESC, core_hash DESC
                         ) AS rn
                     FROM snapshots
                     WHERE {where_match_sql}
@@ -2415,7 +2416,6 @@ def query_virtual_snapshot(
                             FILTER (WHERE rm.rn = 1),
                         '[]'::jsonb
                     ) AS rows,
-                    (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_sql}) AS has_any_rows,
                     (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_match_sql}) AS has_matching_core_hash,
                     MAX(rm.retrieved_at) FILTER (WHERE rm.rn = 1) AS latest_retrieved_at_used,
                     COALESCE(BOOL_OR(rm.rn = 1 AND rm.anchor_day = %s), false) AS has_anchor_to
@@ -2428,7 +2428,6 @@ def query_virtual_snapshot(
                 """
                 params2 = (
                     params + [all_hashes] +
-                    params +
                     params + [all_hashes] +
                     [anchor_to]
                 )
@@ -2438,7 +2437,6 @@ def query_virtual_snapshot(
                 """
                 params2 = (
                     params + [core_hash] +
-                    params +
                     params + [core_hash] +
                     [anchor_to]
                 )
@@ -2452,11 +2450,10 @@ def query_virtual_snapshot(
                     'count': 0,
                     'latest_retrieved_at_used': None,
                     'has_anchor_to': False,
-                    'has_any_rows': False,
                     'has_matching_core_hash': False,
                 }
 
-            rows_json, has_any_rows, has_matching_core_hash, latest_retrieved_at_used, has_anchor_to = row
+            rows_json, has_matching_core_hash, latest_retrieved_at_used, has_anchor_to = row
             if isinstance(rows_json, (bytes, bytearray)):
                 rows_json = rows_json.decode('utf-8')
             if isinstance(rows_json, str):
@@ -2475,7 +2472,6 @@ def query_virtual_snapshot(
                 'count': len(rows_out),
                 'latest_retrieved_at_used': latest_retrieved_at_used.isoformat() if hasattr(latest_retrieved_at_used, 'isoformat') else latest_retrieved_at_used,
                 'has_anchor_to': bool(has_anchor_to),
-                'has_any_rows': bool(has_any_rows),
                 'has_matching_core_hash': bool(has_matching_core_hash),
             }
             _cache_put(ck, out)

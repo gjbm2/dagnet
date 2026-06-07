@@ -119,11 +119,20 @@ class ResultCache:
         ttl_s: int,
         max_entries: int,
         log_prints: bool = True,
+        request_scoped: bool = False,
     ):
         self.name = name
         self.ttl_s = int(ttl_s)
         self.max_entries = int(max_entries)
         self._log_prints = log_prints
+        # request_scoped caches hold per-request working state (e.g.
+        # draw-scaled arrays keyed by in-process object identity) that
+        # never yields cross-request hits. ``clear_request_scoped()``
+        # flushes them at the end of each request so a warm worker does
+        # not accumulate them unboundedly (count-only eviction lets
+        # GB-sized values sit far below the entry cap). See the
+        # ResultCache leak post-mortem.
+        self.request_scoped = bool(request_scoped)
         self._store: Dict[str, Tuple[float, Any]] = {}
         self._lock = threading.Lock()
         self._stats = {
@@ -204,13 +213,15 @@ def make_cache(
     ttl_s: int = DEFAULT_TTL_S,
     max_entries: int = DEFAULT_MAX_ENTRIES,
     log_prints: bool = True,
+    request_scoped: bool = False,
 ) -> ResultCache:
     """Create and register a named cache.
 
     Idempotent: if a cache with the same ``name`` is already
     registered, the existing instance is returned and the
-    ``ttl_s``/``max_entries``/``log_prints`` arguments on the second
-    call are ignored. This makes module re-imports under reload safe.
+    ``ttl_s``/``max_entries``/``log_prints``/``request_scoped``
+    arguments on the second call are ignored. This makes module
+    re-imports under reload safe.
     """
     with _registry_lock:
         existing = _registry.get(name)
@@ -221,6 +232,7 @@ def make_cache(
             ttl_s=ttl_s,
             max_entries=max_entries,
             log_prints=log_prints,
+            request_scoped=request_scoped,
         )
         _registry[name] = cache
         return cache
@@ -242,6 +254,33 @@ def clear_all() -> Dict[str, Any]:
     """
     with _registry_lock:
         caches = list(_registry.values())
+    aggregate = {
+        "caches_cleared": [],
+        "total_entries_cleared": 0,
+    }
+    for cache in caches:
+        s = cache.clear()
+        aggregate["caches_cleared"].append(s)
+        aggregate["total_entries_cleared"] += s["entries_cleared"]
+    return aggregate
+
+
+def clear_request_scoped() -> Dict[str, Any]:
+    """Flush every cache marked ``request_scoped=True``.
+
+    Called at the end of each analyze request. Request-scoped caches
+    (composed subject spans, conditioned primitives) hold draw-scaled
+    arrays keyed by per-request in-process object identity; they yield
+    no cross-request hits, yet count-only eviction (the entry cap is
+    512/1024) lets their GB-sized values sit indefinitely, so a warm
+    worker accumulates them request-on-request until it OOMs. Flushing
+    them per request bounds memory to a single request's working set
+    at zero hit-rate cost. Persistent caches (e.g. the snapshot DB
+    cache) are left untouched — they are invalidated on writes via
+    ``clear_all()``.
+    """
+    with _registry_lock:
+        caches = [c for c in _registry.values() if c.request_scoped]
     aggregate = {
         "caches_cleared": [],
         "total_entries_cleared": 0,

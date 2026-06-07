@@ -95,6 +95,12 @@ _subject_span_cache = result_cache.make_cache(
     'composed_subject_span',
     ttl_s=15 * 60,
     max_entries=512,
+    # Per-request: keyed by in-process primitive id() (see _subject_span_cache_key
+    # below), so it never hits across requests; its values are draw-scaled arrays.
+    # Flushed by result_cache.clear_request_scoped() at the end of each analyze /
+    # conditioned-forecast request so a warm worker does not accumulate them past
+    # the 512-count cap (which for GB-sized values means OOM long before 512).
+    request_scoped=True,
 )
 
 

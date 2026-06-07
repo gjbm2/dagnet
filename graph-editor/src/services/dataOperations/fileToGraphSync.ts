@@ -207,14 +207,14 @@ export async function getParameterFromFile(options: {
       asatDateUK = resolveRelativeDate(parsed.asat);
       console.log(`[DataOperationsService] asat(${asatDateUK}) — reconstructing evidence from snapshot DB`);
 
-      // Build workspace-prefixed param_id
+      // Resolve the parameter's workspace (repo/branch). Snapshot reads key on
+      // core_hash, not param_id, but the workspace gates whether we have a
+      // resolvable source at all.
       const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
       const workspaceRepo = paramFile?.source?.repository;
       const workspaceBranch = paramFile?.source?.branch;
 
       if (workspaceRepo && workspaceBranch) {
-        const dbParamId = `${workspaceRepo}-${workspaceBranch}-${paramId}`;
-
         // Resolve date range
         let anchorFrom: string | undefined;
         let anchorTo: string | undefined;
@@ -269,7 +269,6 @@ export async function getParameterFromFile(options: {
             const sigParsed = parseSignature(signatureStr);
             if (sigParsed.identityHash) {
               const virtualResult = await querySnapshotsVirtual({
-                param_id: dbParamId,
                 as_at: asAtISO,
                 anchor_from: anchorFromISO,
                 anchor_to: anchorToISO,

@@ -24,6 +24,7 @@ from result_cache import (
     cache_bypass_ctx,
     clear,
     clear_all,
+    clear_request_scoped,
     get_cache,
     is_cache_bypassed,
     make_cache,
@@ -275,6 +276,63 @@ class TestClear:
     def test_clear_unknown_name_raises(self, isolated_registry):
         with pytest.raises(KeyError):
             clear('does-not-exist')
+
+
+# ---------------------------------------------------------------------------
+# Request-scoped flush
+# ---------------------------------------------------------------------------
+
+
+class TestRequestScoped:
+    """`clear_request_scoped()` flushes only caches tagged
+    ``request_scoped=True`` (the draw-scaled runner caches) and leaves
+    persistent caches (e.g. the snapshot cache) intact. This is the
+    ResultCache memory-leak fix: per-request caches whose keys never
+    repeat across requests are flushed at request end so a warm worker
+    does not accumulate them past the count cap."""
+
+    def test_default_cache_is_not_request_scoped(self, isolated_registry):
+        c = make_cache('t', log_prints=False)
+        assert c.request_scoped is False
+
+    def test_request_scoped_flag_is_recorded(self, isolated_registry):
+        c = make_cache('t', request_scoped=True, log_prints=False)
+        assert c.request_scoped is True
+
+    def test_clears_only_request_scoped_caches(self, isolated_registry):
+        rs = make_cache('rs', request_scoped=True, log_prints=False)
+        persistent = make_cache('persistent', log_prints=False)
+        rs.put('k', 1)
+        persistent.put('k', 2)
+        clear_request_scoped()
+        assert len(rs._store) == 0          # flushed
+        assert len(persistent._store) == 1  # untouched
+
+    def test_returns_aggregate_pre_clear_stats(self, isolated_registry):
+        rs1 = make_cache('rs1', request_scoped=True, log_prints=False)
+        rs2 = make_cache('rs2', request_scoped=True, log_prints=False)
+        make_cache('persistent', log_prints=False)
+        rs1.put('a', 1)
+        rs1.put('b', 2)
+        rs2.put('c', 3)
+        result = clear_request_scoped()
+        assert result['total_entries_cleared'] == 3
+        names = {entry['name'] for entry in result['caches_cleared']}
+        assert names == {'rs1', 'rs2'}  # persistent not reported
+
+    def test_noop_when_no_request_scoped_caches(self, isolated_registry):
+        make_cache('persistent', log_prints=False)
+        result = clear_request_scoped()
+        assert result['total_entries_cleared'] == 0
+        assert result['caches_cleared'] == []
+
+    def test_idempotency_preserves_request_scoped_flag(self, isolated_registry):
+        a1 = make_cache('a', request_scoped=True, log_prints=False)
+        # Second make_cache for the same name returns the original and
+        # ignores the conflicting flag (matches the ttl/max_entries rule).
+        a2 = make_cache('a', request_scoped=False, log_prints=False)
+        assert a1 is a2
+        assert a2.request_scoped is True
 
 
 # ---------------------------------------------------------------------------

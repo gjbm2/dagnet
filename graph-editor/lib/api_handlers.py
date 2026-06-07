@@ -541,6 +541,7 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
         _mc_draws = int(getattr(settings, 'mc_draws', 0) or 0)
     except Exception:
         _mc_draws = 0
+    from result_cache import clear_request_scoped
     with request_telemetry(
         label=data.get('analysis_type') or 'analyze',
         trace_id=data.get('trace_id'),
@@ -553,11 +554,21 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
         # BaseHTTPRequestHandler, direct Python callers). The dev middleware already
         # handles ?no-cache=1 at the URL level; this covers the request body path.
         with use_request_settings(settings):
-            if data.get('no_cache'):
-                from snapshot_service import cache_bypass_ctx
-                with cache_bypass_ctx():
-                    return _handle_runner_analyze_impl(data)
-            return _handle_runner_analyze_impl(data)
+            # Request-scoped runner caches (composed spans, conditioned
+            # primitives) hold draw-scaled arrays keyed by per-request object
+            # identity: they never hit across requests, but count-only eviction
+            # lets their GB-sized values accumulate until a warm worker OOMs.
+            # Drop them at the end of every request so peak memory is bounded to
+            # one request's working set. Runs on the bypass path too (a no-op
+            # there, since nothing was stored) and on error.
+            try:
+                if data.get('no_cache'):
+                    from snapshot_service import cache_bypass_ctx
+                    with cache_bypass_ctx():
+                        return _handle_runner_analyze_impl(data)
+                return _handle_runner_analyze_impl(data)
+            finally:
+                clear_request_scoped()
 
 
 def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1461,9 +1472,17 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
     numbers to the cohort maturity v3 chart with zero new engine code.
     """
     from runner.forecasting_settings import settings_from_dict, use_request_settings
+    from result_cache import clear_request_scoped
     _request_settings = settings_from_dict(data.get('forecasting_settings'))
     with use_request_settings(_request_settings):
-        return _handle_conditioned_forecast_impl(data)
+        # Same request-scoped runner caches as the analyze path (composed spans,
+        # conditioned primitives). This endpoint shares the v3 machinery, so it
+        # accumulates the same draw-scaled arrays; flush them at request end so a
+        # warm worker's memory is bounded to one request's working set.
+        try:
+            return _handle_conditioned_forecast_impl(data)
+        finally:
+            clear_request_scoped()
 
 
 def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -3303,11 +3322,10 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
     as-of a given timestamp. This supports historical queries without
     returning raw snapshot rows.
     
-    Performance invariant: executes at most ONE SQL query per param_id.
-    
+    Performance invariant: executes at most ONE SQL query per call.
+
     Args:
         data: Request body containing:
-            - param_id: Parameter ID (required)
             - as_at: ISO datetime string for point-in-time (required)
             - anchor_from: Start date ISO string (required)
             - anchor_to: End date ISO string (required)
@@ -3326,10 +3344,6 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     from datetime import date, datetime
     from snapshot_service import query_virtual_snapshot, _require_core_hash
-    
-    param_id = data.get('param_id')
-    if not param_id:
-        raise ValueError("Missing 'param_id' field")
 
     # Semantic integrity requirement: historical reads MUST be keyed by the canonical signature.
     canonical_signature = data.get('canonical_signature')
@@ -3356,7 +3370,6 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
     anchor_to = date.fromisoformat(anchor_to_str)
     
     return query_virtual_snapshot(
-        param_id=param_id,
         as_at=as_at,
         anchor_from=anchor_from,
         anchor_to=anchor_to,

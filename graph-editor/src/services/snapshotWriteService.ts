@@ -484,8 +484,6 @@ export async function querySnapshotsFull(params: QuerySnapshotsFullParams): Prom
 // -----------------------------------------------------------------------------
 
 export interface QuerySnapshotsVirtualParams {
-  /** Exact workspace-prefixed parameter ID */
-  param_id: string;
   /** Point-in-time for snapshot retrieval (ISO datetime) */
   as_at: string;
   /** Start of anchor date range (ISO date) */
@@ -525,8 +523,6 @@ export interface QuerySnapshotsVirtualResult {
   latest_retrieved_at_used: string | null;
   /** Whether the result includes the requested anchor_to date */
   has_anchor_to: boolean;
-  /** Whether ANY virtual rows exist for this param/window (any core_hash) */
-  has_any_rows?: boolean;
   /** Whether ANY virtual rows exist for the requested core_hash */
   has_matching_core_hash?: boolean;
   error?: string;
@@ -589,7 +585,6 @@ export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams)
       count: 0,
       latest_retrieved_at_used: null,
       has_anchor_to: false,
-      has_any_rows: false,
       has_matching_core_hash: false,
     };
   }
@@ -602,7 +597,6 @@ export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams)
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        param_id: params.param_id,
         as_at: params.as_at,
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
@@ -629,7 +623,6 @@ export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams)
       count: typeof body.count === 'number' ? body.count : (Array.isArray(body.rows) ? body.rows.length : 0),
       latest_retrieved_at_used: body.latest_retrieved_at_used ?? null,
       has_anchor_to: !!body.has_anchor_to,
-      has_any_rows: typeof body.has_any_rows === 'boolean' ? body.has_any_rows : undefined,
       has_matching_core_hash: typeof body.has_matching_core_hash === 'boolean' ? body.has_matching_core_hash : undefined,
       error: body.error,
     };

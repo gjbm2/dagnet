@@ -266,7 +266,6 @@ class TestReadIntegrity:
         )
 
         res = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 12, 12, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
@@ -298,7 +297,6 @@ class TestReadIntegrity:
         Broad reads across all slices remain available via the empty selector "".
         """
         res = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 12, 12, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
@@ -319,7 +317,6 @@ class TestReadIntegrity:
         Read path must be defensive and treat bounds as unordered.
         """
         res = query_virtual_snapshot(
-            param_id=self.param_id,
             as_at=datetime(2025, 10, 12, 12, 0, 0),
             anchor_from=date(2025, 10, 2),
             anchor_to=date(2025, 10, 1),
@@ -403,7 +400,6 @@ class TestReadIntegrity:
         )
 
         res = query_virtual_snapshot(
-            param_id=pid,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
@@ -419,9 +415,9 @@ class TestReadIntegrity:
         assert by_day['2025-10-01']['x'] == 1
         assert by_day['2025-10-02']['x'] == 222
 
-        # Wrong signature => empty rows, but has_any_rows should be true
+        # Wrong signature => empty rows; has_matching_core_hash distinguishes
+        # "signature mismatch" from a genuine match.
         res_wrong = query_virtual_snapshot(
-            param_id=pid,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
@@ -432,7 +428,6 @@ class TestReadIntegrity:
         )
         assert res_wrong['success'] is True
         assert res_wrong['count'] == 0
-        assert res_wrong['has_any_rows'] is True
         assert res_wrong['has_matching_core_hash'] is False
 
     def test_ri007_retrievals_distinct_bounded_and_filtered(self):
@@ -535,7 +530,6 @@ class TestReadIntegrity:
 
         # Strict: core_hash A should NOT return B rows.
         strict = query_virtual_snapshot(
-            param_id=pid,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 1),
@@ -552,7 +546,6 @@ class TestReadIntegrity:
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
 
         closure = query_virtual_snapshot(
-            param_id=pid,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 1),
@@ -620,7 +613,6 @@ class TestReadIntegrity:
 
         # Virtual snapshot should "latest wins" to B's newer retrieval (even though stored under pid_b).
         closure = query_virtual_snapshot(
-            param_id=pid_a,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 1),
@@ -1236,7 +1228,6 @@ class TestTierE_NoDisappearance:
 
         # Virtual query also sees nothing with new hash
         virtual_strict = query_virtual_snapshot(
-            param_id=pid,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 5),
@@ -1245,7 +1236,6 @@ class TestTierE_NoDisappearance:
             
         )
         assert virtual_strict["count"] == 0
-        assert virtual_strict["has_any_rows"] is True
         assert virtual_strict["has_matching_core_hash"] is False
 
         # 4. Build FE-supplied closure (old ≡ new)
@@ -1258,7 +1248,6 @@ class TestTierE_NoDisappearance:
 
         # 5b. query_virtual_snapshot with equivalents: old data reappears
         virtual_equiv = query_virtual_snapshot(
-            param_id=pid,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 5),
@@ -1467,7 +1456,6 @@ class TestCrossParamDataContract:
         # Virtual snapshot as-at after both retrievals, with FE-supplied closure
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         result = query_virtual_snapshot(
-            param_id=pid_a,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 3),
