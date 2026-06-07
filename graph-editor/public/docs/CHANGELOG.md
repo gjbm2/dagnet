@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.9b
+**Released:** 7-Jun-26
+
+Memory fix
+
+---
+
 ## Version 2.1.8b
 **Released:** 7-Jun-26
 
