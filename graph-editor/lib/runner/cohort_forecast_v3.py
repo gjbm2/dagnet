@@ -676,6 +676,7 @@ def build_resolved_cf_runtime(
             scenario_id=scenario_id,
             context_key=context_key,
             context_selector=context_selector,
+            max_tau=min(int(max_tau), 400),
         )
     carrier_arrival_map = envelope_plan.carrier_arrival_map
     subject_arrival_map = envelope_plan.subject_arrival_map

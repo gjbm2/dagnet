@@ -1,316 +1,449 @@
-# Full-Likelihood Primitive Conditioning Proposal
+# Full-Likelihood Primitive Conditioning Plan
 
 **Date:** 30-May-26  
-**Status:** staged proposal, revised 6-Jun-26  
-**Scope:** Primitive conditioner importance-sampling quality in `graph-editor/lib/runner/primitive_conditioning.py`, with an escalation path into the shared timing-particle layer only if conditioner-local proposal improvements fail. Reducers, daily conversions, cohort maturity row projection, scalar reducers, chart code, and graph schemas should not change unless the final joint-proposal stage becomes necessary and exposes a new provenance field.
+**Status:** staged implementation plan, revised 7-Jun-26  
+**Scope:** Fix importance-sampling particle collapse in the primitive conditioner while preserving the full-likelihood posterior target. Stage 1 is fully drafted below and is the only stage intended for immediate implementation. Stages 2 and 3 are explicit escalation paths, not work to start by default.
+
+---
 
 ## 1. Purpose
 
-The primitive conditioner needs a pragmatic way to condition aggregate model priors on scoped evidence without silently biasing the posterior and without producing visibly over-confident forecast bands when the fixed particle set collapses.
+The primitive conditioner has the right statistical target but can approximate it badly. For latent primitives it samples candidate probability/timing worlds, scores them with the full maturity-aware likelihood, and resamples by the resulting weights. When the candidate set barely covers the scoped posterior, a few particles carry most of the mass and the forecaster can publish over-narrow or unstable bands.
 
-On 30-May-26 the legacy ESS-threshold tempering path was restored behind a request-only forensic flag, enabled by the `essthreshold` URL parameter and disabled by default. That flag is a diagnostic and rollback aid, not the target statistical design.
+The temporary `essthreshold` URL parameter restores the old ESS-tempering path. That path can make the answer look sensible, but it changes the target by weakening the likelihood. It is therefore a comparison and rollback aid only.
 
-The target design is not "make ESS high". The target is:
+The production target remains:
 
-- the target remains `prior × full_likelihood`;
-- `λ` remains `1` in production;
-- ESS remains a diagnostic, not a semantic control;
-- proposal quality is improved before compute budget is expanded;
-- downstream consumers continue to receive coherent primitive draw families.
+- full likelihood with `λ = 1`;
+- no ESS-controlled likelihood tempering;
+- preservation of the current probability basis selected by the existing conditioner (`proposal_alpha` / `proposal_beta` in the latent branch) unless a separate reviewed change deliberately retargets epistemic versus predictive basis semantics;
+- unchanged public primitive draw shape;
+- unchanged downstream CF projection, reducers, charts, and graph schema;
+- enough request/cache/provenance plumbing that flagged and unflagged answers never collide silently.
 
-The practical programme is an escalation ladder:
+The staged resolution is:
 
-1. first improve probability proposal placement inside the existing conditioner;
-2. then add conditioner-local adaptive candidate expansion if fixed placement is insufficient;
-3. only then move to a true joint probability/timing proposal at the shared timing-particle boundary.
+1. **Stage 1:** add a p-guided probability proposal behind a short-lived URL parameter.
+2. **Stage 2:** only if Stage 1 fails, add conditioner-local adaptive candidate expansion.
+3. **Stage 3:** only if Stage 2 fails, move to a true joint probability/timing proposal at the shared timing-particle boundary.
+4. **Stage 4:** retire `essthreshold` and the temporary p-guided URL flag once a full-likelihood proposal path is accepted.
 
-That ordering keeps the first implementation small and tests whether the known failure can be fixed without rewriting the timing/evidence-binding substrate.
+---
 
-## 2. Confirmed Problem
+## 2. Current Code Surface
 
-Two facts are now established:
+This section pins the code this plan is based on. Any implementation that discovers these surfaces have changed must update the plan before proceeding.
 
-- Removing the ESS threshold avoids the old systematic bias. The old path weakened scoped evidence by searching for a smaller likelihood temperature `λ` whenever too few particles survived. That changed the posterior toward the prior in exactly the cases where scoped evidence was sharp or surprising.
-- Running the current full-likelihood path with a fixed particle count can produce unreasonably narrowed forecast bands. The failure mode is particle degeneracy: after full-likelihood weighting, too few coherent `(p, CDF)` particles carry most of the mass, so the resampled posterior/fan can under-represent uncertainty.
+### 2.1 Browser request plumbing
 
-These facts are not contradictory. The threshold fixed a Monte Carlo degeneracy symptom by changing the statistical target. We need to fix the Monte Carlo approximation while preserving the target.
+`graph-editor/src/constants/latency.ts` defines `ForecastingSettings`, `buildForecastingSettings()`, and the current request-only `essthreshold` URL hook. `buildForecastingSettings()` is the browser choke point that sends forecast settings in API requests.
 
-Low ESS in this context means "the proposal particle set did not adequately cover the scoped posterior". It does not mean "there was little evidence", and it must not be used as a reason to dilute evidence.
+`graph-editor/src/services/conditionedForecastService.ts` sends `forecasting_settings: buildForecastingSettings()` to `/api/forecast/conditioned` for graph-mutating CF enrichment.
 
-## 3. Non-Goals
+`graph-editor/src/lib/graphComputeClient.ts` sends `forecasting_settings: { ...buildForecastingSettings(), ...overrides }` to `/api/runner/analyze` and `/api/forecast/conditioned` for read-only analysis paths. It already includes `essthreshold` in analysis result cache keys through `essThresholdCacheKeyPart()`.
 
-This proposal does not introduce a new forecast path, row reducer, daily-conversions rule, or cohort-maturity display rule.
+`graph-editor/src/services/forecastingSettingsService.ts` reads persisted forecasting model settings from `settings/settings.yaml`, but URL comparison flags are not persisted settings. Stage 1 should not add a persisted user-facing settings entry.
 
-It does not reintroduce default likelihood tempering. The `essthreshold` flag may remain temporarily for comparison runs, but it must stay visibly marked as a compatibility path.
+### 2.2 Python request settings
 
-It does not solve predictive dispersion structure generally. The kappa-realised FC proposal remains the separate plan for the unit at which realised-rate variation enters forecast bands. This proposal addresses the primitive conditioner's importance-sampling particle quality.
+`graph-editor/lib/runner/forecasting_settings.py` defines the Python `ForecastingSettings` dataclass. `settings_from_dict()` accepts numeric fields whose names match dataclass fields. `compute_settings_signature()` excludes `is_ess_threshold_enabled` so request-only comparison flags do not change persisted model signatures.
 
-It does not require per-primitive output draw counts to vary. Per-primitive variable output shapes would break draw-family coherence through composition.
+`graph-editor/lib/api_handlers.py` binds `forecasting_settings` with `use_request_settings()` in both `/api/runner/analyze` and `/api/forecast/conditioned`. The CF endpoint then temporarily reduces `mc_draws` for scalar graph-enrichment work by replacing the current settings object with a lower-draw copy. Any Stage 1 request-only flag must survive that dataclass replacement.
 
-## 4. Key Design Distinctions
+### 2.3 Primitive conditioner
 
-### 4.1 Target versus proposal
+`graph-editor/lib/runner/primitive_conditioning.py` is the Stage 1 implementation target.
 
-The posterior target is:
+The current latent branch of `_evaluate_likelihood_plan()`:
 
-`posterior(θ | evidence) ∝ prior(θ) × likelihood(evidence | θ)`
+- samples probability proposal particles from the current prior/predictive Beta proposal;
+- samples timing particles from `sample_timing_particles_from_params()`;
+- builds endpoint and row-aligned CDF surfaces;
+- computes the full maturity-aware multinomial likelihood over `_CohortLikelihoodPlan.cohort_buckets`;
+- normalises weights at `λ = 1` by default;
+- optionally searches for a tempered `λ` when `is_ess_threshold_enabled` is true;
+- resamples `cond_p_draws` and `cond_cdf_draws`;
+- records `mode`, `tempering_lambda`, `ess`, and `ess_threshold_enabled` in provenance notes.
 
-For latent primitives, `θ` includes probability and timing parameters. The current likelihood already conditions them jointly: each candidate `(p_s, CDF_s)` is scored against the full maturity-aware likelihood.
+`_build_cohort_likelihood_plan()` already gives Stage 1 the evidence summaries it needs: cohort latest totals, cohort buckets, weighted totals, per-draw weighted totals, row-level totals, and provenance. No new evidence read path is needed for Stage 1.
 
-The failure is in candidate generation, not in the target. When the proposal particle set barely covers the scoped posterior, a few particles carry most of the weight. Tempering fixes the symptom by changing the target. The replacement must improve proposal coverage while keeping full-likelihood scoring.
+### 2.4 Timing-particle invariant
 
-### 4.2 Probability proposal versus timing proposal
+`graph-editor/lib/runner/timing_particles.py` states the invariant that the same timing particles drive prefix-arrival evidence weighting and primitive-conditioning CDFs. Stage 1 must not change timing proposal generation. A timing-guided proposal belongs to Stage 3 because it must be introduced at the shared timing-particle boundary.
 
-Probability particles are currently sampled inside `primitive_conditioning.py`. Timing particles are different: they are shared with prefix-arrival and evidence binding through the timing-particle / `DrawFamilyKey` invariant. The same timing draw index must be used by:
+### 2.5 Tests already in scope
 
-- prefix-arrival weighting;
-- primitive evidence binding;
-- the latent likelihood inside primitive conditioning.
+`graph-editor/lib/tests/test_primitive_conditioning.py` already covers the default full-likelihood path and the existing `essthreshold` compatibility branch.
 
-Therefore a probability-only proposal improvement can be local to `primitive_conditioning.py`. A timing-guided or fully joint proposal cannot be local: it must be introduced at the shared timing-particle boundary so evidence binding and likelihood scoring use the same timing worlds.
+`graph-editor/lib/tests/test_forecasting_settings.py` already covers request settings, dict parsing, context binding, and exclusion of `is_ess_threshold_enabled` from the persistent settings signature.
 
-### 4.3 Public output count versus internal candidates
+---
 
-There are two different counts:
+## 3. Constraints
 
-- The public request draw count, currently `mc_draws`, is the shape downstream composition expects. All primitives in the request must expose coherent arrays of this size.
-- The internal candidate count, used only in later adaptive stages, is how many candidate particles the conditioner evaluates before it resamples the public draw family.
+These constraints are binding for Stage 1.
 
-Any adaptive mechanism must grow the internal candidate pool, not change the output draw count per primitive. After the conditioner has accumulated the weighted candidate pool, it resamples exactly the request draw count as the primitive's public draw family.
+1. Stage 1 must not introduce a new forecast path, reducer, chart builder, graph field, or analysis type.
+2. Stage 1 must not change timing particles, prefix-arrival maps, evidence binding, span composition, projection, or reducers.
+3. Stage 1 must keep the public primitive draw count equal to request `draw_count`.
+4. Stage 1 must keep `λ = 1` whenever the `essthreshold` compatibility path is not explicitly requested.
+5. Stage 1 must be guarded by a request-only URL parameter until accepted.
+6. Stage 1 must include URL/cache/request plumbing. A plan that only edits `primitive_conditioning.py` is incomplete.
+7. Stage 1 must expose provenance sufficient to distinguish default full-likelihood, p-guided full-likelihood, and legacy ESS-tempered runs.
+8. Stage 1 must preserve current default behaviour when the new URL parameter is absent.
 
-This keeps the change local:
+---
 
-- composition still sees the same `draw_count`;
-- `DrawFamilyKey` coherence still holds;
-- row projection and scalar consumers do not need shape logic;
-- cache identity only needs to include proposal algorithm/settings that can change the sampled posterior representation.
+## 4. Proposed URL And Settings Contract
 
-## 5. Proposed Runtime Behaviour
+### 4.1 URL parameter
 
-### 5.1 Stage 1 runtime: fixed p-guided proposal
+Use a short-lived URL parameter named `pguided`.
 
-For latent primitives, `_evaluate_likelihood_plan` should first replace the current probability proposal with an explicit proposal helper. In the default reproduction mode this helper returns the current proposal and the proposal correction cancels exactly.
+`pguided` means: enable the Stage 1 p-guided full-likelihood probability proposal for request-scoped CF/analysis calls. It does not mean "use ESS threshold", does not alter `λ`, and is not a product setting.
 
-Then add a p-guided mixture proposal:
+The existing `essthreshold` parameter remains separate:
 
-- one component is the current prior/predictive Beta proposal;
-- one component is a cheap evidence-guided Beta proposal derived from `_CohortLikelihoodPlan`;
-- the mixture density is used in the importance correction.
+- no URL parameter: current full-likelihood prior/predictive proposal;
+- `pguided`: p-guided full-likelihood proposal;
+- `essthreshold`: legacy ESS-tempered compatibility path;
+- both parameters together: p-guided proposal plus legacy ESS tempering applied to the corrected p-guided log weights. This combined mode exists only for forensic comparison. Provenance must show both flags, the proposal mode, and the final `λ`.
 
-The weight becomes:
+### 4.2 TypeScript settings field
 
-`log_weight_s = log_likelihood_s + log_prior_p(p_s) - log_q_p(p_s)`
+Add a numeric request-only field to `ForecastingSettings` in `graph-editor/src/constants/latency.ts`, for example `is_p_guided_proposal_enabled`.
 
-Timing particles are unchanged in Stage 1, so no timing-density correction is introduced. The latent likelihood still scores `(p_s, CDF_s)` jointly.
+Default value: `0`.
 
-The evidence guide should be intentionally simple. Use the plan's weighted evidence summaries to estimate an evidence-implied rate, for example by dividing observed weighted conversions by weighted denominator and a prior/timing-derived completeness summary. Clamp only at the perimeter of Beta-parameter construction to keep the guide valid; the correction term, not the guide, preserves the posterior target.
+`buildForecastingSettings()` should set it to `1` only when `window.location.search` contains `pguided`.
 
-### 5.2 Stage 2 runtime: adaptive conditioner-local candidate expansion
+This mirrors the current `is_ess_threshold_enabled` pattern and keeps URL interpretation at the browser settings boundary.
 
-If Stage 1 does not fix the known narrow-band case, extend the conditioner to evaluate additional candidate batches while still staying inside `primitive_conditioning.py`.
+### 4.3 Python settings field
 
-Important details:
+Add the same numeric field to `ForecastingSettings` in `graph-editor/lib/runner/forecasting_settings.py`.
 
-- each batch is deterministic under the primitive draw-family key plus a batch discriminator;
-- each batch evaluates full likelihood with `λ = 1`;
-- weights include the same proposal correction as Stage 1;
-- earlier batches are not regenerated;
-- resampling happens once from the final accumulated pool;
-- the public output remains exactly `draw_count`.
+`settings_from_dict()` will then accept it automatically.
 
-This stage may add more timing particles as part of extra candidate batches, but it does not re-bind evidence. It is still not a true timing-guided proposal. It only tests whether more conditioner-local joint candidates are enough.
+`compute_settings_signature()` must exclude it, just as it excludes `is_ess_threshold_enabled`, because this is a request-only comparison flag and does not change persisted Bayes model artefacts.
 
-### 5.3 Stage 3 runtime: true joint guided proposal
+The CF endpoint's dataclass replacement for reduced `mc_draws` must preserve the flag automatically. An explicit test should pin this.
 
-If Stage 2 still fails, the problem is likely joint timing/probability proposal coverage rather than probability placement alone. At that point the proposal must move upstream.
+### 4.4 Cache identity
 
-The shared proposal family should carry:
+Add `pguided` to `graphComputeClient` cache identity while the flag exists.
 
-- probability draws;
-- timing draws (`mu`, `sigma`, `onset`);
-- proposal log density;
-- prior log density;
+The existing `essThresholdCacheKeyPart()` should become a more general temporary forecast-flag cache suffix, or a sibling method should be added. It must be used in:
+
+- `analyzeSelection()` cache key;
+- `analyzeMultipleScenarios()` cache key;
+- any read-only conditioned forecast cache key if one exists or is added later.
+
+The graph-mutating CF enrichment path does not use the same result cache, but it still receives the settings flag through `buildForecastingSettings()`.
+
+---
+
+## 5. Stage 1 Design: Fixed p-Guided Proposal
+
+Stage 1 changes only probability proposal placement for latent primitives. It does not change the likelihood and does not change timing proposal generation.
+
+### 5.1 Current latent proposal
+
+The current latent proposal samples probability from the current prior/predictive Beta proposal and timing from the shared timing-particle prior. Because the probability proposal is treated as the probability prior/proposal family, weights are effectively likelihood-only in the default full-likelihood path.
+
+### 5.2 Stage 1 proposal shape
+
+Stage 1 introduces an explicit probability proposal helper in `primitive_conditioning.py`.
+
+That helper should return:
+
+- probability candidate draws;
+- per-draw log proposal density for those candidates;
+- per-draw log prior density for those candidates;
 - proposal provenance.
 
-The flow becomes:
+When p-guided mode is disabled, the helper returns the current proposal and the log prior/proposal correction cancels. This is the reproduction mode and must be tested.
 
-1. build a joint proposal particle family;
-2. build prefix-arrival maps from that same timing family;
-3. bind evidence using those arrival maps;
-4. run primitive conditioning using the same joint particles;
-5. weight by `log_likelihood + log_prior - log_q`.
+When p-guided mode is enabled, the helper returns a per-timing-draw Beta proposal for `p`:
 
-A practical implementation may need a two-pass guide: first bind evidence under the current prior proposal to construct a guide, then build the final guided proposal and re-bind evidence. This is the expensive architectural stage and should not be attempted unless the conditioner-local stages fail.
+- the current timing particles are unchanged;
+- for each timing draw, the helper derives a probability proposal from the p-dependent part of the full latent likelihood under that timing draw;
+- the proposal density is used in the importance correction.
 
-## 6. Adequacy And Escalation
+The likelihood remains the existing maturity-aware likelihood. The latent weight for each candidate becomes full likelihood plus the probability-basis/proposal correction. Timing contributes no proposal correction in Stage 1 because timing is still sampled from the current timing proposal.
 
-The staged programme uses acceptance against the known troublesome forecaster case, not an abstract ESS floor.
+### 5.3 Evidence guide construction
 
-Stage 1 is accepted if p-guided proposal:
+The guide is deliberately local and derived. It uses only `_CohortLikelihoodPlan` plus the timing CDF particles already built in `_evaluate_likelihood_plan`; it must not read graph fields, files, DB rows, or raw request payloads.
 
-- keeps `λ = 1`;
-- preserves the public output shape;
-- produces sensible bands on the known case;
-- does not pull the midpoint toward the prior in the way `essthreshold` does;
-- has runtime close to current full-likelihood IS.
+There must be no arbitrary guide concentration, mixture weight, or acceptance literal in Stage 1. The p proposal should be derived from the one-dimensional conditional p posterior induced by the existing timing draw.
 
-Stage 2 is entered only if Stage 1 fails the known case. It is accepted if bounded adaptive candidate expansion fixes the known case without unacceptable runtime.
+For one timing draw `s`, the existing latent likelihood has this p-dependent shape:
 
-Stage 3 is entered only if Stage 2 fails. Its acceptance must include a coherence test proving that the timing particles used for prefix-arrival/evidence binding are the same timing particles scored in the likelihood.
+`log L_s(p) = K_s log(p) + Σ_d R_{d,s} log(1 - p F_{d,s}) + const`
 
-ESS, ESS ratio, and top-weight share remain diagnostics. They may justify escalation or an additional candidate batch, but they must not change `λ` and must not define statistical correctness.
+where:
 
-## 7. Settings Surface
+- `K_s` is the draw-indexed total observed conversion increment across the cohort buckets;
+- `R_{d,s}` is the residual unconverted mass for cohort bucket `d` at its final observed age;
+- `F_{d,s}` is the timing CDF value for draw `s` at that final observed age.
 
-Add request-scoped settings only. They should not be part of persisted Bayes model signatures unless they change fitted model artefacts, which this proposal does not.
+The current probability basis contributes its own Beta log-density. Stage 1 should build a Beta proposal approximation to the one-dimensional conditional posterior:
 
-Suggested settings:
+`current_probability_basis(p) × L_s(p)`
 
-- probability proposal mode, if needed for tests (`prior`, `p_guided_mixture`);
-- probability-guide concentration or cap, if not hard-coded conservatively;
-- adaptive maximum candidate multiplier for Stage 2, if Stage 2 is implemented;
-- batch growth policy for Stage 2;
-- joint proposal mode/settings for Stage 3, if Stage 3 is implemented.
+The intended first implementation is a deterministic mode/curvature approximation:
 
-Stage 1 should be guarded by a short-lived request-only URL parameter while it is being proven against the known forecaster case. This is a comparison/rollout guard, not a product mode. It must be excluded from persisted Bayes model signatures, visibly named as temporary, and included in request/result cache identity while it exists so flagged and unflagged chart responses cannot collide.
+1. Find the conditional mode `m_s` of the p-dependent log posterior on the open interval `(0, 1)`.
+2. Evaluate the negative second derivative `H_s` at `m_s`.
+3. Convert mode and curvature into Beta parameters:
+   - `C_s = 2 + H_s m_s (1 - m_s)`
+   - `α_q,s = 1 + m_s (C_s - 2)`
+   - `β_q,s = 1 + (1 - m_s) (C_s - 2)`
+4. Sample `p_s ~ Beta(α_q,s, β_q,s)`.
+5. Use `log q_s(p_s)` in the importance correction.
 
-Once the p-guided proposal is accepted, flip it to the default and remove the temporary URL parameter. Do not leave a permanent alternate proposal mode.
+This uses the evidence and timing particles already present in the conditioning subsystem. It introduces no product-level tuning parameter. Numerical boundary constants used to keep logs finite should be named as numerical safety constants and kept local to the conditioner.
 
-The current `is_ess_threshold_enabled` compatibility switch remains separate and should not be conflated with adaptive full-likelihood sampling.
+Guide validity handling belongs at the helper perimeter:
 
-## 8. Provenance
+- invalid or empty evidence means use only the current probability proposal;
+- failure to find a finite conditional mode or curvature means use only the current probability proposal;
+- derived Beta parameters must be finite and positive;
+- provenance must say when the guide was skipped and why.
 
-Primitive notes/provenance should expose enough to compare full-likelihood, adaptive, and temporary thresholded runs:
+### 5.4 Proposal correction
 
-- algorithm mode: fixed prior proposal, p-guided proposal, adaptive p-guided candidate expansion, joint guided proposal, or legacy ESS-thresholded;
-- likelihood temperature, which should be `1.0` except in the legacy flag path;
-- public output draw count;
-- candidate count and batch count where relevant;
-- final ESS and ESS ratio;
-- top-weight share;
-- proposal guide summary, such as guide mean/concentration for Stage 1;
-- cap-hit flag for adaptive stages.
+The proposal density must be the density of the actual proposal that produced each draw. It is not acceptable to sample from the guide and weight by likelihood only.
 
-This turns low particle quality into an observable condition rather than a hidden semantic change.
+The helper should compute the current probability-basis density and proposal density using the same Beta parameterisation used for sampling. `numpy_stats.py` already contains `math.lgamma`-based Beta special-function support; Stage 1 can add a small vectorised Beta log-density helper either in `primitive_conditioning.py` or in `numpy_stats.py`. If added to `numpy_stats.py`, it should be narrowly scoped and covered by tests.
 
-## 9. Implementation Stages
+The existing `essthreshold` branch must apply after the corrected full-likelihood log weights are available. In p-guided mode, `essthreshold` must not accidentally temper uncorrected likelihood-only weights.
 
-### Stage 0 - Temporary Comparison Flag
+### 5.5 Provenance
 
-Already landed on 30-May-26:
+Primitive notes should include, at minimum:
 
-- `essthreshold` URL parameter enables the old ESS-threshold λ search.
-- Default remains full-likelihood `λ = 1`.
-- The flag is request-only and excluded from model settings signatures.
-- Focused tests prove the default and flagged branches differ.
+- proposal mode: current proposal or p-guided conditional Beta proposal;
+- whether `pguided` was enabled;
+- whether `essthreshold` was enabled;
+- derived guide mode and curvature/Beta parameters when used;
+- guide skip reason when not used;
+- final ESS and, if cheap, ESS ratio/top-weight share;
+- tempering lambda.
 
-Stage 0 is a forensic aid only. It should remain easy to delete after the full-likelihood proposal path is proven.
+Do not make chart UI dependent on this provenance in Stage 1. The provenance is for tests, CLI, and forensic comparison.
 
-### Stage 1 - Fixed p-Guided Proposal
+---
 
-Make proposal sampling explicit inside the latent branch of `_evaluate_likelihood_plan`.
+## 6. Stage 1 Implementation Atoms
 
-Atoms:
+Stage 1 is the immediate implementation plan. The atoms below should land together unless explicitly split by the maintainer.
 
-1. Add a helper that samples the current probability proposal and returns `proposal_p_draws`, `log_q_p`, and `log_prior_p`. In current mode, `log_q_p == log_prior_p`, so the output should match the existing path.
-2. Update the latent weight calculation to use `log_likelihood + log_prior_p - log_q_p`.
-3. Add a p-guided mixture proposal using `_CohortLikelihoodPlan` evidence summaries.
-4. Keep timing particles exactly as they are.
-5. Record proposal provenance in primitive notes.
+### Atom 1 - Request Flag Plumbing
 
-Acceptance:
+Edit `graph-editor/src/constants/latency.ts`.
 
-- prior-proposal reproduction mode matches current full-likelihood behaviour;
-- p-guided mode keeps `λ = 1`;
-- output arrays keep the original request draw shape;
-- the known forecaster case no longer needs `essthreshold` if Stage 1 is sufficient;
-- the temporary URL parameter cleanly separates flagged and unflagged cache entries;
-- no files outside `primitive_conditioning.py` need semantic changes.
+Add the Stage 1 request-only field to `ForecastingSettings`. Add a URL helper for `pguided`, mirroring the current `essthreshold` helper. Add a default constant set to disabled. Include the field in `buildForecastingSettings()`.
 
-### Stage 2 - Conditioner-Local Adaptive Candidate Expansion
+Edit `graph-editor/lib/runner/forecasting_settings.py`.
 
-Implement batched candidate-pool growth inside the latent branch of `_evaluate_likelihood_plan`, building directly on the Stage 1 proposal helper.
+Add the matching dataclass field. Exclude it from `compute_settings_signature()`. Confirm `settings_from_dict()` accepts it automatically.
 
-The public primitive draw family remains the request `draw_count`. Only the internal candidate pool grows. Cache identity includes adaptive settings.
+Edit `graph-editor/lib/tests/test_forecasting_settings.py`.
 
-Acceptance:
+Add tests that the field defaults to disabled, round-trips through `settings_from_dict()`, is visible through `use_request_settings()`, survives dataclass replacement where relevant, and does not change `compute_settings_signature()`.
 
-- Stage 1 behaviour remains available as the first batch / non-adaptive degeneration;
-- low-quality synthetic cases append at least one batch;
-- output arrays keep the original request draw shape;
-- resampling occurs once from the final accumulated weighted pool;
-- λ remains `1.0` in adaptive mode;
-- provenance reports candidate count, batch count, final ESS, ESS ratio, top-weight share, and cap-hit status;
-- no evidence rebinding is introduced in this stage.
+### Atom 2 - Result Cache Separation
 
-### Stage 3 - Shared Joint Probability/Timing Proposal
+Edit `graph-editor/src/lib/graphComputeClient.ts`.
 
-Only enter this stage if Stage 2 fails the known case or shows that timing proposal coverage is the dominant problem.
+Include `pguided` in the same cache-key family as `essthreshold`. The cache suffix should clearly distinguish:
 
-Move proposal generation to the shared particle boundary so timing particles used for prefix-arrival/evidence binding are identical to timing particles scored by primitive conditioning.
+- no temporary proposal flag;
+- `pguided`;
+- `essthreshold`;
+- combined `pguided` + `essthreshold`.
 
-Acceptance:
+Cover both single-scenario and multi-scenario analyse cache keys. If a relevant conditioned-forecast read-only cache key exists, include it there too.
 
-- a joint proposal object carries probability draws, timing draws, proposal log density, prior log density, and provenance;
-- evidence binding and likelihood scoring consume the same timing draw family;
-- latent weights use `log_likelihood + log_prior - log_q`;
-- output arrays keep the original request draw shape;
-- cache identity includes joint proposal identity/settings;
-- no projection or reducer performs fit/proposal selection.
+Add or update frontend tests if there is an existing graph compute client cache-key test harness. If no focused harness exists, record this as a Stage 1 manual verification item in the stage note rather than creating a broad FE test fixture.
 
-### Stage 4 - Comparison And `essthreshold` Retirement
+### Atom 3 - Conditioning Options And Cache Key
 
-Run representative troublesome queries in three modes:
+Edit `graph-editor/lib/runner/primitive_conditioning.py`.
 
-- current/default full-likelihood before the change, if still available in test harness;
-- temporary p-guided or adaptive full-likelihood URL path;
-- temporary `essthreshold`;
+Add a request-backed option on `ConditioningPolicyOptions` for the p-guided proposal flag, following the existing `is_ess_threshold_enabled` pattern.
 
-The desired outcome is that the new full-likelihood proposal path restores reasonable band width without matching the thresholded posterior's prior-biased midpoint when scoped evidence genuinely disagrees with the aggregate prior.
+Update `_primitive_cache_key()` so the p-guided proposal flag enters primitive cache identity. Otherwise a flagged request could reuse an unflagged primitive posterior or vice versa.
 
-If Stage 3 still produces unreasonably narrow bands, the issue is not fixed-pool proposal placement. At that point the next investigation should be likelihood shape or predictive-dispersion structure, not ESS tempering.
+Add tests in `test_primitive_conditioning.py` or `test_forecasting_settings.py` proving the option default follows request settings and cache identity distinguishes p-guided from unflagged. If directly inspecting cache keys is too brittle, use a behavioural cache test that would fail if the cached primitive were reused across modes.
 
-Once the full-likelihood proposal path is accepted, remove or hard-deprecate the `essthreshold` branch.
+### Atom 4 - Probability Proposal Helpers
 
-At the same time, remove the temporary p-guided/adaptive URL parameter by making the accepted full-likelihood proposal path the default. The only surviving runtime should be the accepted full-likelihood proposal, not a menu of proposal modes.
+Edit `graph-editor/lib/runner/primitive_conditioning.py`.
 
-## 10. Test Plan
+Add helper logic for:
 
-Focused primitive-conditioner tests should cover:
+- Beta log-density;
+- current proposal reproduction mode;
+- p-guided conditional Beta proposal;
+- guide construction from `_CohortLikelihoodPlan` plus the existing timing CDF particles;
+- guide skip provenance.
 
-- the default path uses full likelihood with `λ = 1`;
-- the temporary `essthreshold` path remains opt-in;
-- prior-proposal reproduction mode cancels `log_prior_p - log_q_p`;
-- p-guided proposal changes proposal placement but keeps `λ = 1`;
-- p-guided proposal preserves output draw shape;
-- the p-guided URL parameter is request-only and cache-keyed while it exists;
-- proposal provenance appears in primitive notes;
-- adaptive mode, if implemented, appends batches under a controlled low-quality diagnostic;
-- adaptive mode, if implemented, records cap-hit when the maximum pool is reached;
-- joint-proposal mode, if implemented, proves timing particles used for evidence binding and likelihood scoring are the same family;
-- cache identity separates prior, p-guided, adaptive, joint, and thresholded modes where those modes exist.
+Keep this helper private to the conditioner for Stage 1. Do not generalise it into the shared timing/proposal substrate yet.
 
-At least one synthetic or fixture-backed test should compare the known poor fixed proposal against the p-guided proposal and the temporary thresholded path. The full-likelihood proposal result should not be judged by matching `essthreshold`; it should preserve the full-likelihood midpoint while improving particle quality or visible bands.
+The helper should not mutate the plan or timing particles. It should use the existing keyed RNG seam. If it needs a distinct RNG derivation for guide draws, add a named derivation through the existing `make_rng()` pattern rather than using an unkeyed random source.
 
-Outside-in coverage should use one confirmed narrow-band query once the unit-level mechanics are stable. That test should assert user-visible band width or provenance, not internal particle arrays.
+### Atom 5 - Latent Weight Calculation
 
-## 11. Open Decisions
+Edit the latent branch of `_evaluate_likelihood_plan()`.
 
-1. **Guide construction for Stage 1.** The guide should be simple and local: derive a probability centre from `_CohortLikelihoodPlan` evidence summaries and a conservative completeness summary, then choose a moderate Beta concentration. This needs a concrete formula before implementation.
+Replace direct probability proposal sampling with the proposal helper. Compute the existing latent log likelihood exactly as before, using the returned probability draws and unchanged timing CDF draws.
 
-2. **Whether Stage 2 is needed.** Do not implement adaptive expansion unless Stage 1 fails the known case.
+Normalise full-likelihood weights using the corrected log weights. The default reproduction path should reduce to the current weights.
 
-3. **Whether Stage 3 is needed.** Do not move proposal generation into the shared timing-particle boundary unless Stage 2 fails or timing coverage is clearly the limiting issue.
+Keep the `essthreshold` compatibility branch opt-in. If it remains supported alongside `pguided`, it must temper the corrected log weights rather than the raw likelihood-only vector.
 
-4. **How much provenance should be public.** Primitive notes may be enough for CLI/forensics; chart-level warning UI is separate and should not block the conditioner fix.
+Do not touch the non-latent conjugate path except for shared provenance structures if unavoidable.
+
+### Atom 6 - Provenance And Notes
+
+Extend `_ConditioningOutcome.provenance` and the final primitive notes to include Stage 1 proposal provenance.
+
+The existing note starting with `maturity_aware_mode=` should remain readable by existing tests, but tests should be updated to check the new fields where relevant.
+
+No chart or UI work is required.
+
+### Atom 7 - Focused Tests
+
+Update `graph-editor/lib/tests/test_primitive_conditioning.py`.
+
+Minimum tests:
+
+- default latent path remains full-likelihood with `λ = 1` and p-guided disabled;
+- current-proposal reproduction mode cancels the probability-basis/proposal correction;
+- p-guided mode records proposal provenance and keeps `λ = 1`;
+- p-guided mode preserves output draw shape;
+- p-guided mode changes proposal placement under a controlled evidence case;
+- p-guided mode derives proposal parameters from conditional p mode/curvature rather than from a hard-coded concentration or mixture share;
+- p-guided mode and `essthreshold` are distinguishable in notes;
+- `essthreshold`, if combined with p-guided, tempers corrected p-guided weights and reports both flags;
+- primitive cache identity separates p-guided and unflagged requests.
+
+Add one targeted synthetic or fixture-backed test for the known failure shape if it can be expressed at primitive level. If not, record an outside-in acceptance run as a Stage 1 manual verification item rather than blocking the unit implementation on a large fixture build.
+
+### Atom 8 - Documentation And Stage Note
+
+Update this plan if implementation discovers a different guide formula or URL name is needed.
+
+Record the Stage 1 outcome:
+
+- URL parameter used;
+- guide formula;
+- tests run;
+- known forecaster case result versus default and `essthreshold`;
+- decision: accept Stage 1, proceed to Stage 2, or revise.
+
+---
+
+## 7. Stage 1 Acceptance
+
+Stage 1 is complete only when all of the following are true:
+
+- `pguided` enables p-guided full-likelihood proposal from the browser request path.
+- The flag is request-only and excluded from persistent Bayes model signatures.
+- FE analyse cache keys separate flagged and unflagged responses.
+- Primitive cache keys separate flagged and unflagged primitive posteriors.
+- Default behaviour without `pguided` matches current full-likelihood behaviour.
+- P-guided mode keeps `λ = 1` unless `essthreshold` is explicitly also requested, in which case tempering applies to corrected p-guided weights and provenance reports the combined mode.
+- Public primitive output arrays remain at request `draw_count`.
+- Timing particles, prefix-arrival maps, evidence binding, span composition, projection, reducers, chart builders, and graph schemas are unchanged.
+- Focused tests cover settings, cache identity, proposal correction, provenance, and output shape.
+- The known forecaster case has been compared in default, `pguided`, and `essthreshold` modes.
+
+Acceptance does not require Stage 1 to solve every possible particle-collapse case. It must decide whether the p-guided proposal is sufficient for the known case. If it is not, Stage 2 becomes justified.
+
+---
+
+## 8. Stage 2 - Conditioner-Local Adaptive Candidate Expansion
+
+Do not implement Stage 2 until Stage 1 has been tried against the known case.
+
+Stage 2 extends the Stage 1 proposal helper so the conditioner can evaluate additional candidate batches under the same full-likelihood target.
+
+Stage 2 stays inside `primitive_conditioning.py` as far as possible:
+
+- no evidence rebinding;
+- no prefix-arrival change;
+- no reducer or chart change;
+- public output remains `draw_count`;
+- batches are deterministic under the primitive draw-family key plus a batch discriminator;
+- resampling happens once from the accumulated weighted candidate pool;
+- provenance reports candidate count, batch count, final ESS, top-weight share, and cap-hit status.
+
+Stage 2 may sample extra timing particles for extra conditioner-local candidate batches, but because evidence binding is not recomputed it remains an approximation to "try more joint candidates", not a true timing-guided proposal. If this distinction becomes unacceptable, proceed to Stage 3 rather than stretching Stage 2.
+
+---
+
+## 9. Stage 3 - Shared Joint Probability/Timing Proposal
+
+Do not implement Stage 3 until Stage 2 fails or evidence shows timing proposal coverage is the dominant issue.
+
+Stage 3 moves proposal generation to the shared particle boundary so the same timing worlds are used by prefix-arrival weighting, primitive evidence binding, and latent likelihood scoring.
+
+Required shape:
+
+- a shared proposal object carrying probability draws, timing draws, proposal log density, prior log density, and provenance;
+- prefix-arrival maps built from the proposal's timing draws;
+- evidence binding performed under those arrival maps;
+- primitive conditioning consuming the same proposal particles;
+- latent weights using the full prior/proposal correction;
+- cache identity including proposal identity/settings;
+- no projection or reducer selecting fits or proposals.
+
+A two-pass guide may be required: first bind evidence under the current proposal to build a guide, then build the final guided proposal, rebuild arrival maps, rebind evidence, and condition. That is a substantial substrate change and is outside the Stage 1 implementation budget.
+
+---
+
+## 10. Stage 4 - Flag Retirement
+
+Once a full-likelihood proposal path is accepted:
+
+- make the accepted proposal path the default;
+- remove the temporary `pguided` URL parameter;
+- remove or hard-deprecate `essthreshold`;
+- remove temporary cache-key suffixes for deleted flags;
+- update tests so the accepted path is the default expectation;
+- update this plan or replace it with a completion note.
+
+The intended end state is one production full-likelihood proposal path, not a permanent menu of proposal modes.
+
+---
+
+## 11. Non-Goals
+
+This plan does not:
+
+- change the posterior target;
+- introduce default ESS tempering;
+- modify chart rendering;
+- modify projection or reducer semantics;
+- solve kappa-realised predictive dispersion;
+- introduce per-primitive variable public draw counts;
+- replace the shared timing-particle invariant in Stage 1;
+- make p-guided proposal a permanent user-facing feature.
+
+---
 
 ## 12. Success Criteria
 
-The proposal succeeds when:
+The programme succeeds when:
 
 - full-likelihood conditioning remains the default statistical target;
-- confirmed narrow-band cases no longer depend on `essthreshold` for reasonable bands;
-- scoped evidence is not systematically pulled back toward the prior by hidden tempering;
-- all downstream consumers continue to read the same primitive shape;
-- the first sufficient stage in the escalation ladder is the one that ships;
-- low particle quality is visible in provenance rather than silently repaired.
+- the known narrow-band forecaster case no longer depends on `essthreshold` for sensible output;
+- scoped evidence is not pulled back toward the prior by hidden tempering;
+- downstream consumers continue to read the same primitive shapes;
+- the first sufficient stage in the escalation ladder is the stage that ships;
+- temporary URL flags are removed after acceptance;
+- low particle quality is visible in provenance rather than silently repaired by changing the likelihood.

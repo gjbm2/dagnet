@@ -42,6 +42,14 @@ class ForecastPreparation:
     # builder so carrier-side fetches and prebuilt arrival maps stay
     # consistent with the subject-side fetch.
     envelope_plan: Optional[Any] = None
+    # The per-query calc horizon this preparation was sized to, picked by
+    # `compute_request_extent` from the request's visibility mode / axis /
+    # path t95 (render-calc policy doc). The internally-built envelope grid
+    # is sized to `min(compute_extent, 400)`, and analysis handlers read
+    # this value back as the engine boundary for the projection bundle —
+    # so the grid and the projection share one horizon. `None` only for the
+    # empty-subjects degenerate.
+    compute_extent: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -539,51 +547,24 @@ def prepare_forecast_subject_entry(
     }
 
 
-def prepare_forecast_subject_group(
-    *,
-    graph_data: Dict[str, Any],
+def resolve_request_nodes(
     subjects: List[Dict[str, Any]],
-    is_window: bool,
-    log_prefix: str,
-    envelope_plan: Optional[Any] = None,
-    as_at: Optional[str] = None,
-    scenario_id: Optional[str] = None,
-    context_scope: Optional[ForecastContextScope] = None,
-) -> ForecastPreparation:
-    """Build the shared subject/frame bundle for one forecast query path.
+    graph_data: Dict[str, Any],
+) -> "tuple[str, str, Optional[str], Optional[str]]":
+    """Resolve `(query_from_node, query_to_node, last_edge_id, anchor_node)`
+    from the request subjects.
 
-    `envelope_plan` is an optional pre-built `RequestEnvelopePlan` from
-    `runner.request_envelope.build_request_envelope_plan`. When not
-    supplied, this function constructs one internally from the subjects'
-    request shape (graph + query_from_node + query_to_node +
-    anchor_node + anchor_from + anchor_to + is_window) and uses it to
-    bound each subject's `query_snapshots_for_sweep` call. This is the
-    structural replacement for the 73n in-runtime widening and the
-    carrier-side `lookback_days` heuristic; see
-    `docs/current/snapshot-fetch-envelope-design.md`.
+    Behaviour-preserving extraction of the derivation that
+    `prepare_forecast_subject_group` runs before building the envelope
+    plan. It is shared so an analysis handler can pick `compute_extent`
+    (which sizes the envelope/arrival-map grid) *before* preparation runs
+    without duplicating the subject-shape derivation. The values returned
+    here are exactly those preparation derives — `anchor_from` / `sweep_to`
+    are read off `subjects[0]` identically by the handler.
     """
-    from runner.span_evidence import compose_path_maturity_frames
-
-    if not subjects:
-        return ForecastPreparation(
-            query_from_node="",
-            query_to_node="",
-            anchor_node=None,
-            last_edge_id=None,
-            is_multi_hop=False,
-            anchor_from="",
-            anchor_to="",
-            sweep_to="",
-            total_rows=0,
-            cohorts_analysed=0,
-            per_edge_results=[],
-            composed_frames=[],
-            regime_diagnostics=[],
-        )
-
     query_from_node = ""
     query_to_node = ""
-    last_edge_id = None
+    last_edge_id: Optional[str] = None
     for subj in subjects:
         role = subj.get("path_role") or "only"
         if role in ("first", "only"):
@@ -602,7 +583,285 @@ def prepare_forecast_subject_group(
     )
     if not anchor_node:
         anchor_node = _resolve_anchor_node(graph_data, last_edge_id)
+    return query_from_node, query_to_node, last_edge_id, anchor_node
+
+
+def _compose_subject_span_t95(
+    graph_data: Dict[str, Any],
+    source_node: str,
+    target_node: str,
+    *,
+    temporal_mode: str = 'window',
+    graph_preference: Optional[str] = None,
+    forecasting_settings: Any = None,
+) -> Optional[float]:
+    """Return t95 of the deterministic ``source_node → target_node`` span,
+    or ``None`` when the span is empty / has zero asymptotic mass.
+
+    Used by ``compute_request_extent`` to size the request horizon when the
+    rightmost edge's stored ``path_t95`` doesn't match the actual subject
+    span:
+
+      * window queries — the subject span is ``query_from → query_to``,
+        which differs from the stored anchor-rooted ``path_t95`` once
+        ``query_from`` sits downstream of the graph anchor.
+      * cohort queries with a DSL-overridden anchor — the subject span is
+        ``override_anchor → query_to``, which the stored
+        ``anchor-default → query_to.path_t95`` likewise overstates (or
+        understates) by the chain of carrier edges that sit outside the
+        request.
+
+    The compositional grid is sized off ``snapshot_observation_path_t95_multiplier``
+    × the per-edge ``t95`` sum (the convolved t95 is bounded by the sum;
+    the multiplier is the same headroom budget used in
+    ``compute_request_extent`` for compute_extent itself). The kernel is
+    composed once with no Bayesian draws — this is a budget read, not the
+    projection itself.
+    """
+    import math as _math
+
+    from runner.forecast_runtime import build_prepared_span_execution
+    from runner.span_kernel import compose_span_kernel
+
+    exec_inputs = build_prepared_span_execution(
+        graph_data,
+        source_node,
+        target_node,
+        temporal_mode=temporal_mode,
+        graph_preference=graph_preference,
+    )
+    if exec_inputs is None:
+        return None
+
+    edge_t95_sum = 0.0
+    for _from, _to, e in getattr(exec_inputs.topo, 'edge_list', []) or []:
+        lat = (e.get('p', {}) or {}).get('latency', {}) or {}
+        et = lat.get('promoted_t95') or lat.get('t95')
+        if isinstance(et, (int, float)) and et > 0:
+            edge_t95_sum += float(et)
+
+    path_mult = float(
+        getattr(forecasting_settings, 'snapshot_observation_path_t95_multiplier', 1.5)
+        if forecasting_settings is not None else 1.5
+    )
+    grid_tau = int(_math.ceil(path_mult * edge_t95_sum)) if edge_t95_sum > 0 else 0
+    if grid_tau <= 0:
+        return None
+
+    try:
+        kernel = compose_span_kernel(
+            topo=exec_inputs.topo,
+            edge_params=exec_inputs.edge_params,
+            max_tau=grid_tau,
+        )
+    except Exception:
+        return None
+    if kernel is None or kernel.span_p <= 0:
+        return None
+
+    import numpy as _np
+    threshold = 0.95 * float(kernel.span_p)
+    idx = int(_np.searchsorted(kernel.K, threshold))
+    if idx >= len(kernel.K):
+        return None
+    return float(idx)
+
+
+def compute_request_extent(
+    *,
+    display_settings: Dict[str, Any],
+    visibility_mode: str,
+    anchor_from: str,
+    sweep_to: str,
+    graph_data: Dict[str, Any],
+    last_edge_id: Optional[str],
+    forecasting_settings: Any,
+    is_window: bool,
+    query_from_node: Optional[str] = None,
+    query_to_node: Optional[str] = None,
+    anchor_node: Optional[str] = None,
+) -> int:
+    """Pick the engine boundary ``compute_extent`` for one request per the
+    span/calc scoping policy in
+    ``docs/current/cohort-maturity-render-calc-policy.md``.
+
+    This is the single horizon-picking authority for every CF analysis type
+    (cohort_maturity, daily_conversions, conditioned_forecast, surprise
+    gauge). It is called from one place — ``prepare_forecast_subject_group``
+    — so every analysis type sizes its envelope grid and projection from one
+    rule, parameterised by ``visibility_mode`` / ``display_settings`` /
+    ``forecasting_settings``, never by a per-handler copy.
+
+    The three cases:
+
+    - **Manual** (``display_settings['tau_extent']`` is a positive number,
+      not the literal ``'auto'`` / ``'Auto'``): ``compute_extent = user_axis``.
+    - **Auto, F or F+E mode**: the t95 of the convolved subject span
+      ``source → query_to`` scaled by
+      ``forecasting_settings.snapshot_observation_path_t95_multiplier``
+      (default 1.5). Composition source is the request CDF root —
+      ``query_from`` for window, ``anchor`` for cohort. Fallbacks (in
+      order): target edge ``t95`` × ``snapshot_observation_t95_multiplier``
+      (default 2.0); then ``tau_future_max``.
+    - **Auto, E only mode**: ``compute_extent = tau_future_max``.
+
+    ``compute_extent`` is ≥ 0; ``(sweep_to - anchor_from).days`` is the
+    final floor so the engine has at least the calendar reach to project
+    against.
+    """
+    import math
+    from datetime import date as _date
+
+    def _safe_calendar_days() -> int:
+        try:
+            af = _date.fromisoformat(str(anchor_from)[:10])
+            st = _date.fromisoformat(str(sweep_to)[:10])
+            return max(int((st - af).days), 0)
+        except (ValueError, TypeError):
+            return 0
+
+    # Manual override always wins.
+    tau_extent_raw = display_settings.get('tau_extent')
+    if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
+        try:
+            user_axis = int(math.ceil(float(tau_extent_raw)))
+            if user_axis > 0:
+                return user_axis
+        except (ValueError, TypeError):
+            pass
+
+    tau_future_max = _safe_calendar_days()
+
+    # Auto, E-only: just enough to cover the calendar reach.
+    if visibility_mode == 'e':
+        return max(tau_future_max, 0)
+
+    # Auto, F / F+E: compose ``source → query_to`` and use its t95 with the
+    # path-headroom multiplier. The composition source is the request CDF
+    # root — ``query_from`` for window, ``anchor`` for cohort.
+    path_mult = float(
+        getattr(forecasting_settings, 'snapshot_observation_path_t95_multiplier', 1.5)
+        if forecasting_settings is not None else 1.5
+    )
+    edge_mult = float(
+        getattr(forecasting_settings, 'snapshot_observation_t95_multiplier', 2.0)
+        if forecasting_settings is not None else 2.0
+    )
+
+    source_node = query_from_node if is_window else anchor_node
+    reference_t95: Optional[float] = None
+    if source_node and query_to_node and source_node != query_to_node:
+        reference_t95 = _compose_subject_span_t95(
+            graph_data,
+            source_node,
+            query_to_node,
+            temporal_mode='window' if is_window else 'cohort',
+            graph_preference=graph_data.get('model_source_preference'),
+            forecasting_settings=forecasting_settings,
+        )
+
+    if reference_t95 is not None and reference_t95 > 0:
+        return max(int(math.ceil(path_mult * reference_t95)), tau_future_max, 0)
+
+    # Fallback: own-edge t95 on the target edge when composition failed.
+    if last_edge_id:
+        from runner.forecast_runtime import find_edge_by_id
+
+        edge = find_edge_by_id(graph_data, last_edge_id)
+        if edge:
+            lat = (edge.get('p', {}) or {}).get('latency', {}) or {}
+            _et = lat.get('promoted_t95') or lat.get('t95')
+            if isinstance(_et, (int, float)) and _et > 0:
+                return max(int(math.ceil(edge_mult * float(_et))), tau_future_max, 0)
+
+    # No latency fit available — calendar reach is all we have.
+    return max(tau_future_max, 0)
+
+
+def prepare_forecast_subject_group(
+    *,
+    graph_data: Dict[str, Any],
+    subjects: List[Dict[str, Any]],
+    is_window: bool,
+    log_prefix: str,
+    envelope_plan: Optional[Any] = None,
+    as_at: Optional[str] = None,
+    scenario_id: Optional[str] = None,
+    context_scope: Optional[ForecastContextScope] = None,
+    visibility_mode: str = 'f+e',
+    display_settings: Optional[Dict[str, Any]] = None,
+    forecasting_settings: Any = None,
+) -> ForecastPreparation:
+    """Build the shared subject/frame bundle for one forecast query path.
+
+    `envelope_plan` is an optional pre-built `RequestEnvelopePlan` from
+    `runner.request_envelope.build_request_envelope_plan`. When not
+    supplied, this function constructs one internally from the subjects'
+    request shape (graph + query_from_node + query_to_node +
+    anchor_node + anchor_from + anchor_to + is_window) and uses it to
+    bound each subject's `query_snapshots_for_sweep` call. This is the
+    structural replacement for the 73n in-runtime widening and the
+    carrier-side `lookback_days` heuristic; see
+    `docs/current/snapshot-fetch-envelope-design.md`.
+
+    `visibility_mode` / `display_settings` / `forecasting_settings` are the
+    request's calc-scope policy inputs. This function is the single place
+    that turns them into the per-query `compute_extent` (via
+    `compute_request_extent`) for every CF analysis type — so the
+    internally-built envelope grid is sized to `min(compute_extent, 400)`
+    rather than the legacy 400-day default, and the chosen `compute_extent`
+    is returned on `ForecastPreparation.compute_extent` for the handler to
+    feed straight into its projection bundle. Grid horizon and projection
+    horizon are therefore one value, picked once, here. The defaults
+    (`f+e`, no display settings) reproduce the Auto / saturation-seeking
+    posture for callers that do not specialise.
+    """
+    from runner.span_evidence import compose_path_maturity_frames
+
+    if not subjects:
+        return ForecastPreparation(
+            query_from_node="",
+            query_to_node="",
+            anchor_node=None,
+            last_edge_id=None,
+            is_multi_hop=False,
+            anchor_from="",
+            anchor_to="",
+            sweep_to="",
+            total_rows=0,
+            cohorts_analysed=0,
+            per_edge_results=[],
+            composed_frames=[],
+            regime_diagnostics=[],
+            compute_extent=None,
+        )
+
+    query_from_node, query_to_node, last_edge_id, anchor_node = resolve_request_nodes(
+        subjects, graph_data
+    )
     is_multi_hop = len(subjects) > 1
+
+    # Single horizon authority: pick compute_extent from the request's calc
+    # policy (Manual axis / Auto-F+E saturation / Auto-E calendar) using the
+    # nodes just resolved and the subjects' own anchor/sweep dates. The
+    # envelope grid below is then sized to min(compute_extent, 400) — 400 is
+    # the absolute ceiling, never the operating value — and the same
+    # compute_extent rides back on the ForecastPreparation so the handler's
+    # projection bundle and this grid share one horizon.
+    compute_extent = compute_request_extent(
+        display_settings=display_settings or {},
+        visibility_mode=visibility_mode,
+        anchor_from=subjects[0].get("anchor_from", ""),
+        sweep_to=subjects[0].get("sweep_to") or subjects[0].get("anchor_to", ""),
+        graph_data=graph_data,
+        last_edge_id=last_edge_id,
+        forecasting_settings=forecasting_settings,
+        is_window=is_window,
+        query_from_node=query_from_node or None,
+        query_to_node=query_to_node or None,
+        anchor_node=anchor_node,
+    )
+    envelope_max_tau = min(int(compute_extent), 400)
 
     # Build the per-request fetch envelope plan from the resolved request
     # shape if the caller did not supply one. This drives every subject's
@@ -635,6 +894,7 @@ def prepare_forecast_subject_group(
                 context_selector=(
                     context_scope.context_selector if context_scope is not None else None
                 ),
+                max_tau=envelope_max_tau,
             )
         except Exception as _env_exc:
             print(
@@ -735,6 +995,7 @@ def prepare_forecast_subject_group(
         composed_frames=composed_frames,
         regime_diagnostics=regime_diagnostics,
         envelope_plan=envelope_plan,
+        compute_extent=compute_extent,
     )
 
 

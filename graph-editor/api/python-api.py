@@ -238,9 +238,12 @@ class handler(BaseHTTPRequestHandler):
     def handle_runner_analyze(self, data):
         """Handle runner/analyze endpoint."""
         try:
+            from concurrency_gate import ConcurrencyLimitExceeded
             from api_handlers import handle_runner_analyze as handler_func
             response = handler_func(data)
             self.send_success_response(response)
+        except ConcurrencyLimitExceeded as e:
+            self.send_error_response(503, str(e))
         except ValueError as e:
             self.send_error_response(400, str(e))
         except Exception as e:
@@ -436,9 +439,12 @@ class handler(BaseHTTPRequestHandler):
     def handle_forecast_conditioned(self, data):
         """Handle forecast/conditioned endpoint - conditioned forecast (doc 45)."""
         try:
+            from concurrency_gate import ConcurrencyLimitExceeded
             from api_handlers import handle_conditioned_forecast as handler_func
             response = handler_func(data)
             self.send_success_response(response)
+        except ConcurrencyLimitExceeded as e:
+            self.send_error_response(503, str(e))
         except ValueError as e:
             self.send_error_response(400, str(e))
         except Exception as e:

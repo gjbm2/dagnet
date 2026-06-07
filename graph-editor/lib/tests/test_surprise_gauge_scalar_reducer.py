@@ -168,6 +168,10 @@ def _stub_bundle_pipeline(
     preparation.anchor_node = 'node-a'
     preparation.envelope_plan = None
     preparation.composed_frames = []
+    # Preparation now picks compute_extent (via compute_request_extent) and
+    # surfaces it here; the gauge reads preparation.compute_extent rather than
+    # recomputing. A small fixed value keeps the canned bundle path simple.
+    preparation.compute_extent = 60
 
     def _fake_prepare_subject_group(**kwargs):
         if capture is not None:
@@ -202,14 +206,6 @@ def _stub_bundle_pipeline(
     )
     monkeypatch.setattr(
         cohort_forecast_v3, 'reduce_cf_scalars', _fake_reduce,
-    )
-
-    # ``_compute_extent_for_scenario`` consults the graph + display
-    # settings to compute the compose horizon; bypass it with a small
-    # fixed value so we don't need a full graph to be wired up.
-    monkeypatch.setattr(
-        api_handlers, '_compute_extent_for_scenario',
-        lambda **_kwargs: 60,
     )
 
 

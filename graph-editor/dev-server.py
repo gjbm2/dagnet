@@ -431,8 +431,11 @@ async def lag_recompute_models_alias(request: Request):
 async def forecast_conditioned(request: Request):
     try:
         data = await request.json()
+        from concurrency_gate import ConcurrencyLimitExceeded
         from api_handlers import handle_conditioned_forecast
         return handle_conditioned_forecast(data)
+    except ConcurrencyLimitExceeded as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -752,12 +755,15 @@ async def runner_analyze_endpoint(request: Request):
         # Delegate to the centralised handler (api_handlers.py) which correctly
         # routes snapshot-based analysis vs standard analysis.
         # DO NOT duplicate the routing logic here — see .cursorrules §2.
+        from concurrency_gate import ConcurrencyLimitExceeded
         from api_handlers import handle_runner_analyze
         response = handle_runner_analyze(data)
         return response
 
     except HTTPException:
         raise
+    except ConcurrencyLimitExceeded as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

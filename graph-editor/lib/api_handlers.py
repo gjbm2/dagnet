@@ -269,6 +269,12 @@ def _compute_surprise_gauge(
         combined_temporal_dsl_full,
         mece_dimensions=data.get('mece_dimensions') or [],
     )
+    # The gauge always reads through to saturation (it needs p@∞), so it
+    # picks compute_extent on the F/F+E branch. Preparation owns the pick and
+    # sizes the envelope grid to it — one path, parameterised by visibility.
+    _sg_settings = __import__(
+        'runner.forecasting_settings', fromlist=['current_settings'],
+    ).current_settings()
     try:
         preparation = prepare_forecast_subject_group(
             graph_data=graph_data,
@@ -278,6 +284,13 @@ def _compute_surprise_gauge(
             as_at=sg_as_at,
             scenario_id=scenario_id,
             context_scope=context_scope,
+            visibility_mode='f+e',
+            display_settings=(
+                scenario.get('display_settings')
+                or data.get('display_settings')
+                or {}
+            ),
+            forecasting_settings=_sg_settings,
         )
     except Exception as e:
         print(f"[surprise_gauge] forecast preparation failed: {e}")
@@ -299,25 +312,9 @@ def _compute_surprise_gauge(
     retrieved_at = str(last_frame.get('snapshot_date', ''))[:10] or None
 
     # ── Build the shared scalar bundle (FC + unc epistemic overlay) ──
-    cf_compute_extent = _compute_extent_for_scenario(
-        display_settings=(
-            scenario.get('display_settings')
-            or data.get('display_settings')
-            or {}
-        ),
-        visibility_mode='f+e',
-        anchor_from=preparation.anchor_from,
-        sweep_to=preparation.sweep_to,
-        graph_data=graph_data,
-        last_edge_id=preparation.last_edge_id,
-        forecasting_settings=__import__(
-            'runner.forecasting_settings', fromlist=['current_settings'],
-        ).current_settings(),
-        is_window=is_window,
-        query_from_node=preparation.query_from_node or '',
-        query_to_node=preparation.query_to_node or '',
-        anchor_node=preparation.anchor_node,
-    )
+    # compute_extent was picked by preparation (F+E branch) and sized its
+    # envelope grid; reuse it for the scalar bundle.
+    cf_compute_extent = preparation.compute_extent
     try:
         prepared = prepare_cf_scalar_bundle(
             preparation,
@@ -541,34 +538,33 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
         _mc_draws = int(getattr(settings, 'mc_draws', 0) or 0)
     except Exception:
         _mc_draws = 0
-    from result_cache import clear_request_scoped
-    with request_telemetry(
-        label=data.get('analysis_type') or 'analyze',
-        trace_id=data.get('trace_id'),
-        analysis_type=data.get('analysis_type') or '',
-        mc_draws=_mc_draws,
-        scenarios=len(data.get('scenarios') or []),
-        no_cache=bool(data.get('no_cache')),
-    ):
-        # Body-level cache bypass — works on every transport (dev FastAPI, Vercel
-        # BaseHTTPRequestHandler, direct Python callers). The dev middleware already
-        # handles ?no-cache=1 at the URL level; this covers the request body path.
-        with use_request_settings(settings):
-            # Request-scoped runner caches (composed spans, conditioned
-            # primitives) hold draw-scaled arrays keyed by per-request object
-            # identity: they never hit across requests, but count-only eviction
-            # lets their GB-sized values accumulate until a warm worker OOMs.
-            # Drop them at the end of every request so peak memory is bounded to
-            # one request's working set. Runs on the bypass path too (a no-op
-            # there, since nothing was stored) and on error.
-            try:
+    from concurrency_gate import concurrency_gate
+    # Process-global admission gate (outermost). Fluid co-locates invocations in
+    # one shared memory pool; an OOM crashes the whole instance. The gate bounds
+    # how many heavy requests run at once (default 1 = single-flight), and on
+    # exit flushes the request-scoped runner caches (draw-scaled composed-span /
+    # primitive arrays — they never hit across requests) and returns freed arenas
+    # to the OS. Outermost so a request blocked waiting for a slot holds no
+    # working set and is not yet counted as in-flight compute. Covers normal
+    # completion, the no_cache bypass path, and errors.
+    with concurrency_gate():
+        with request_telemetry(
+            label=data.get('analysis_type') or 'analyze',
+            trace_id=data.get('trace_id'),
+            analysis_type=data.get('analysis_type') or '',
+            mc_draws=_mc_draws,
+            scenarios=len(data.get('scenarios') or []),
+            no_cache=bool(data.get('no_cache')),
+        ):
+            # Body-level cache bypass — works on every transport (dev FastAPI, Vercel
+            # BaseHTTPRequestHandler, direct Python callers). The dev middleware already
+            # handles ?no-cache=1 at the URL level; this covers the request body path.
+            with use_request_settings(settings):
                 if data.get('no_cache'):
                     from snapshot_service import cache_bypass_ctx
                     with cache_bypass_ctx():
                         return _handle_runner_analyze_impl(data)
                 return _handle_runner_analyze_impl(data)
-            finally:
-                clear_request_scoped()
 
 
 def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -642,211 +638,14 @@ def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
 # The two CF handlers below import them where used.
 #
 # Span/calc scoping (the former ``_compute_axis_tau_max`` policy blend) is
-# now perimeter-owned per ``docs/current/cohort-maturity-render-calc-policy.md``:
-# each handler picks ``compute_extent`` via the helper below and passes it
-# into the shared bundle boundary, which exposes the latent ``saturation_τ``
-# and the projection horizon (= ``min(compute_extent, saturation_τ)``)
-# back on the bundle for the handler to use for chart axis / pad-out.
-
-
-def _compose_subject_span_t95(
-    graph_data: Dict[str, Any],
-    source_node: str,
-    target_node: str,
-    *,
-    temporal_mode: str = 'window',
-    graph_preference: Optional[str] = None,
-    forecasting_settings: Any = None,
-) -> Optional[float]:
-    """Return t95 of the deterministic ``source_node → target_node`` span,
-    or ``None`` when the span is empty / has zero asymptotic mass.
-
-    Used by ``_compute_extent_for_scenario`` to size the request horizon
-    when the rightmost edge's stored ``path_t95`` doesn't match the actual
-    subject span:
-
-      * window queries — the subject span is ``query_from → query_to``,
-        which differs from the stored anchor-rooted ``path_t95`` once
-        ``query_from`` sits downstream of the graph anchor.
-      * cohort queries with a DSL-overridden anchor — the subject span is
-        ``override_anchor → query_to``, which the stored
-        ``anchor-default → query_to.path_t95`` likewise overstates (or
-        understates) by the chain of carrier edges that sit outside the
-        request.
-
-    The compositional grid is sized off ``snapshot_observation_path_t95_multiplier``
-    × the per-edge ``t95`` sum (the convolved t95 is bounded by the sum;
-    the multiplier is the same headroom budget used in
-    ``_compute_extent_for_scenario`` for compute_extent itself). The kernel
-    is composed once with no Bayesian draws — this is a budget read, not
-    the projection itself.
-    """
-    import math as _math
-
-    from runner.forecast_runtime import build_prepared_span_execution
-    from runner.span_kernel import compose_span_kernel
-
-    exec_inputs = build_prepared_span_execution(
-        graph_data,
-        source_node,
-        target_node,
-        temporal_mode=temporal_mode,
-        graph_preference=graph_preference,
-    )
-    if exec_inputs is None:
-        return None
-
-    edge_t95_sum = 0.0
-    for _from, _to, e in getattr(exec_inputs.topo, 'edge_list', []) or []:
-        lat = (e.get('p', {}) or {}).get('latency', {}) or {}
-        et = lat.get('promoted_t95') or lat.get('t95')
-        if isinstance(et, (int, float)) and et > 0:
-            edge_t95_sum += float(et)
-
-    path_mult = float(
-        getattr(forecasting_settings, 'snapshot_observation_path_t95_multiplier', 1.5)
-        if forecasting_settings is not None else 1.5
-    )
-    grid_tau = int(_math.ceil(path_mult * edge_t95_sum)) if edge_t95_sum > 0 else 0
-    if grid_tau <= 0:
-        return None
-
-    try:
-        kernel = compose_span_kernel(
-            topo=exec_inputs.topo,
-            edge_params=exec_inputs.edge_params,
-            max_tau=grid_tau,
-        )
-    except Exception:
-        return None
-    if kernel is None or kernel.span_p <= 0:
-        return None
-
-    import numpy as _np
-    threshold = 0.95 * float(kernel.span_p)
-    idx = int(_np.searchsorted(kernel.K, threshold))
-    if idx >= len(kernel.K):
-        return None
-    return float(idx)
-
-
-def _compute_extent_for_scenario(
-    *,
-    display_settings: Dict[str, Any],
-    visibility_mode: str,
-    anchor_from: str,
-    sweep_to: str,
-    graph_data: Dict[str, Any],
-    last_edge_id: Optional[str],
-    forecasting_settings: Any,
-    is_window: bool,
-    query_from_node: Optional[str] = None,
-    query_to_node: Optional[str] = None,
-    anchor_node: Optional[str] = None,
-) -> int:
-    """Pick the engine boundary ``compute_extent`` for one scenario per the
-    span/calc scoping policy in
-    ``docs/current/cohort-maturity-render-calc-policy.md``.
-
-    The three cases:
-
-    - **Manual** (``display_settings['tau_extent']`` is a positive number,
-      not the literal ``'auto'`` / ``'Auto'``): ``compute_extent = user_axis``.
-      The chart axis matches and the engine works only what the user asked
-      for.
-    - **Auto, F or F+E mode**: the t95 of the convolved subject span
-      ``source → query_to`` (composed via ``compose_span_kernel``), scaled
-      by ``forecasting_settings.snapshot_observation_path_t95_multiplier``
-      (default 1.5). The composition source is the same node the engine
-      uses as the request CDF root:
-
-      * **Window** — ``query_from_node``.
-      * **Cohort** — ``anchor_node`` (the effective anchor for the
-        request, incl. DSL overrides via ``cohort(<anchor>, …)``). The
-        rightmost edge's stored ``path_t95`` is anchored at the graph
-        default, so composing from the effective anchor handles default
-        and DSL-overridden anchors uniformly.
-
-      Fallbacks (in order): target edge ``t95`` ×
-      ``snapshot_observation_t95_multiplier`` (default 2.0); then
-      ``tau_future_max`` (= ``(sweep_to - anchor_from).days``).
-    - **Auto, E only mode**: ``compute_extent = tau_future_max``. E-mode
-      reads strict evidence only; saturation discovery is not needed.
-
-    ``compute_extent`` must be ≥ 0; ``(sweep_to - anchor_from).days`` is
-    used as a final floor so the engine has at least the calendar reach
-    to project against.
-    """
-    import math
-    from datetime import date as _date
-
-    def _safe_calendar_days() -> int:
-        try:
-            af = _date.fromisoformat(str(anchor_from)[:10])
-            st = _date.fromisoformat(str(sweep_to)[:10])
-            return max(int((st - af).days), 0)
-        except (ValueError, TypeError):
-            return 0
-
-    # Manual override always wins.
-    tau_extent_raw = display_settings.get('tau_extent')
-    if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
-        try:
-            user_axis = int(math.ceil(float(tau_extent_raw)))
-            if user_axis > 0:
-                return user_axis
-        except (ValueError, TypeError):
-            pass
-
-    tau_future_max = _safe_calendar_days()
-
-    # Auto, E-only: just enough to cover the calendar reach. The engine
-    # composes only to its window; no saturation read needed.
-    if visibility_mode == 'e':
-        return max(tau_future_max, 0)
-
-    # Auto, F / F+E: compose ``source → query_to`` and use its t95 with
-    # the path-headroom multiplier. The composition source is the request
-    # CDF root — ``query_from`` for window, ``anchor`` for cohort. One
-    # rule for every hop count and every (default / overridden) anchor.
-    path_mult = float(
-        getattr(forecasting_settings, 'snapshot_observation_path_t95_multiplier', 1.5)
-        if forecasting_settings is not None else 1.5
-    )
-    edge_mult = float(
-        getattr(forecasting_settings, 'snapshot_observation_t95_multiplier', 2.0)
-        if forecasting_settings is not None else 2.0
-    )
-
-    source_node = query_from_node if is_window else anchor_node
-    reference_t95: Optional[float] = None
-    if source_node and query_to_node and source_node != query_to_node:
-        reference_t95 = _compose_subject_span_t95(
-            graph_data,
-            source_node,
-            query_to_node,
-            temporal_mode='window' if is_window else 'cohort',
-            graph_preference=graph_data.get('model_source_preference'),
-            forecasting_settings=forecasting_settings,
-        )
-
-    if reference_t95 is not None and reference_t95 > 0:
-        return max(int(math.ceil(path_mult * reference_t95)), tau_future_max, 0)
-
-    # Fallback: own-edge t95 on the target edge when composition failed
-    # (missing source / target, no path, or no per-edge latency fit).
-    if last_edge_id:
-        from runner.forecast_runtime import find_edge_by_id
-
-        edge = find_edge_by_id(graph_data, last_edge_id)
-        if edge:
-            lat = (edge.get('p', {}) or {}).get('latency', {}) or {}
-            _et = lat.get('promoted_t95') or lat.get('t95')
-            if isinstance(_et, (int, float)) and _et > 0:
-                return max(int(math.ceil(edge_mult * float(_et))), tau_future_max, 0)
-
-    # No latency fit available — calendar reach is all we have.
-    return max(tau_future_max, 0)
+# now perimeter-owned per ``docs/current/cohort-maturity-render-calc-policy.md``
+# and centralised in ``runner.forecast_preparation``: a single
+# ``compute_request_extent`` is called once inside
+# ``prepare_forecast_subject_group``, which sizes the envelope grid to
+# ``min(compute_extent, 400)`` and returns the chosen extent on
+# ``ForecastPreparation.compute_extent``. Every CF analysis type (cohort
+# maturity, daily conversions, conditioned forecast, surprise gauge) reads
+# that one value rather than picking its own — see the handlers below.
 
 
 def _apply_temporal_regime_selection(
@@ -955,6 +754,15 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             mece_dimensions=data.get('mece_dimensions') or [],
         )
 
+        # Single shared path: preparation picks ``compute_extent`` per the
+        # render-calc policy (Manual axis / Auto-F+E saturation / Auto-E
+        # calendar) and sizes the envelope / arrival-map grid to
+        # ``min(compute_extent, 400)`` — so the buffers are
+        # ``(S, compute_extent+1)``, not ``(S, 401)``. The chosen extent
+        # rides back on ``preparation.compute_extent`` and feeds the
+        # projection bundle below: grid and projection share one horizon,
+        # picked once, here. 400 survives only as the absolute ceiling.
+        visibility_mode = scenario.get('visibility_mode', 'f+e')
         from runner.forecast_runtime import parse_asat_from_dsl as _parse_asat_for_envelope
         _envelope_as_at = _parse_asat_for_envelope(temporal_dsl)
         preparation = prepare_forecast_subject_group(
@@ -965,7 +773,11 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             as_at=_envelope_as_at,
             scenario_id=scenario_id,
             context_scope=context_scope,
+            visibility_mode=visibility_mode,
+            display_settings=display_settings,
+            forecasting_settings=forecasting_settings,
         )
+        compute_extent = preparation.compute_extent
         query_from_node = preparation.query_from_node or None
         query_to_node = preparation.query_to_node or None
         anchor_node = preparation.anchor_node
@@ -1001,29 +813,13 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         from runner.model_resolver import resolve_model_params
         from runner.cf_analysis import prepare_cf_projection_bundle, reducer_for
 
-        # Per-scenario visibility mode drives the compute_extent policy in
-        # Auto. Default 'f+e' matches the snapshot scenario default and the
-        # v1 handler's read (api_handlers.py:683 for `visibility_mode`).
-        visibility_mode = scenario.get('visibility_mode', 'f+e')
-
+        # ``compute_extent`` came back on ``preparation`` (picked once there,
+        # same value that sized the envelope grid). Feed it straight into the
+        # projection bundle — no recompute.
         maturity_rows = []
         prepared = None
-        compute_extent: Optional[int] = None
         saturation_tau: Optional[int] = None
         if composed_frames and last_edge_id:
-            compute_extent = _compute_extent_for_scenario(
-                display_settings=display_settings,
-                visibility_mode=visibility_mode,
-                anchor_from=anchor_from_str,
-                sweep_to=sweep_to_final,
-                graph_data=graph_data,
-                last_edge_id=last_edge_id,
-                forecasting_settings=forecasting_settings,
-                is_window=is_window,
-                query_from_node=query_from_node,
-                query_to_node=query_to_node,
-                anchor_node=anchor_node,
-            )
             prepared = prepare_cf_projection_bundle(
                 preparation,
                 graph_data=graph_data,
@@ -1333,6 +1129,9 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
             query_dsl=query_dsl,
             mece_dimensions=mece_dimensions,
             log_prefix='[daily_conv]',
+            visibility_mode=scenario.get('visibility_mode', 'f+e'),
+            display_settings=display_settings,
+            forecasting_settings=forecasting_settings,
         )
         if preparation is None:
             per_scenario_results.append({
@@ -1363,20 +1162,10 @@ def _handle_daily_conversions(data: Dict[str, Any]) -> Dict[str, Any]:
             })
             continue
 
+        # compute_extent was picked inside admit_forecast_evidence (which sized
+        # the envelope grid to it); reuse it for the projection bundle.
         visibility_mode = scenario.get('visibility_mode', 'f+e')
-        compute_extent = _compute_extent_for_scenario(
-            display_settings=display_settings,
-            visibility_mode=visibility_mode,
-            anchor_from=preparation.anchor_from,
-            sweep_to=preparation.sweep_to,
-            graph_data=graph_data,
-            last_edge_id=preparation.last_edge_id,
-            forecasting_settings=forecasting_settings,
-            is_window=is_window,
-            query_from_node=preparation.query_from_node or None,
-            query_to_node=preparation.query_to_node or None,
-            anchor_node=preparation.anchor_node,
-        )
+        compute_extent = preparation.compute_extent
         prepared = prepare_cf_projection_bundle(
             preparation,
             graph_data=graph_data,
@@ -1472,17 +1261,15 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
     numbers to the cohort maturity v3 chart with zero new engine code.
     """
     from runner.forecasting_settings import settings_from_dict, use_request_settings
-    from result_cache import clear_request_scoped
+    from concurrency_gate import concurrency_gate
     _request_settings = settings_from_dict(data.get('forecasting_settings'))
-    with use_request_settings(_request_settings):
-        # Same request-scoped runner caches as the analyze path (composed spans,
-        # conditioned primitives). This endpoint shares the v3 machinery, so it
-        # accumulates the same draw-scaled arrays; flush them at request end so a
-        # warm worker's memory is bounded to one request's working set.
-        try:
+    # Shares the v3 machinery with the analyze path, so it accumulates the same
+    # draw-scaled caches and contends for the same memory pool — gate it
+    # identically. The gate flushes the request-scoped caches and trims arenas
+    # on exit.
+    with concurrency_gate():
+        with use_request_settings(_request_settings):
             return _handle_conditioned_forecast_impl(data)
-        finally:
-            clear_request_scoped()
 
 
 def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1591,6 +1378,15 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
         _cf_endpoint_mc_draws = max(64, int(_cs().mc_draws) // 10)
         _cf_endpoint_settings = _dc.replace(_cs(), mc_draws=float(_cf_endpoint_mc_draws))
         for subj_group in subject_groups:
+            display_settings = (
+                scenario.get('display_settings')
+                or data.get('display_settings')
+                or {}
+            )
+            # The CF endpoint always reads through to saturation (p@∞ needs the
+            # plateau), so preparation picks compute_extent on the F/F+E branch
+            # and sizes the envelope grid to it. visibility_mode is fixed here
+            # regardless of the FE's charting mode.
             with _urs(_cf_endpoint_settings):
                 preparation = prepare_forecast_subject_group(
                     graph_data=graph_data,
@@ -1600,6 +1396,9 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
                     as_at=_cf_envelope_as_at,
                     scenario_id=scenario_id,
                     context_scope=context_scope,
+                    visibility_mode='f+e',
+                    display_settings=display_settings,
+                    forecasting_settings=_cs(),
                 )
             query_from_node = preparation.query_from_node or None
             query_to_node = preparation.query_to_node or None
@@ -1626,11 +1425,6 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
             last_edge_id = preparation.last_edge_id
             anchor_from_str = preparation.anchor_from
             sweep_to_final = preparation.sweep_to
-            display_settings = (
-                scenario.get('display_settings')
-                or data.get('display_settings')
-                or {}
-            )
             # Build the one shared CF projection bundle and reduce it with
             # the registry-selected reducer. Whole-graph conditioned
             # forecast reads the same tau reducer as cohort_maturity and
@@ -1643,26 +1437,9 @@ def _handle_conditioned_forecast_impl(data: Dict[str, Any]) -> Dict[str, Any]:
             from runner.cohort_forecast_v3 import reduce_cf_scalars
 
             if last_edge_id:
-                from runner.forecasting_settings import current_settings as _current_settings
-                # CF endpoint is the whole-graph enrichment surface; per
-                # the policy doc, visibility_mode is irrelevant here — the
-                # endpoint always reads through to saturation (p@∞ requires
-                # the plateau). Use the F/F+E branch of the compute_extent
-                # policy so the composed CDF reaches plateau even when the
-                # FE happens to be in E mode for charting.
-                cf_compute_extent = _compute_extent_for_scenario(
-                    display_settings=display_settings,
-                    visibility_mode='f+e',
-                    anchor_from=preparation.anchor_from,
-                    sweep_to=preparation.sweep_to,
-                    graph_data=graph_data,
-                    last_edge_id=last_edge_id,
-                    forecasting_settings=_current_settings(),
-                    is_window=is_window,
-                    query_from_node=query_from_node,
-                    query_to_node=query_to_node,
-                    anchor_node=anchor_node,
-                )
+                # compute_extent was picked by preparation (F+E branch) and
+                # sized its envelope grid; reuse it for the scalar bundle.
+                cf_compute_extent = preparation.compute_extent
                 # 73q Phase 5e Step B/C: scalar-only CF callsite. The CF
                 # endpoint builds its own bundle (not the cohort_maturity
                 # tau reducer's) and reads every per-edge scalar from the

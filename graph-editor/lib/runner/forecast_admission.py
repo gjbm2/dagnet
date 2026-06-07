@@ -52,12 +52,21 @@ def admit_forecast_evidence(
     mece_dimensions: Optional[List[Dict[str, Any]]] = None,
     path_analysis_type: str = 'cohort_maturity',
     log_prefix: str = '[forecast_admission]',
+    visibility_mode: str = 'f+e',
+    display_settings: Optional[Dict[str, Any]] = None,
+    forecasting_settings: Any = None,
 ) -> Optional[ForecastPreparation]:
     """Admit forecast evidence using the shared cohort-maturity read semantics.
 
     Returns the ``ForecastPreparation`` for the scenario, or ``None`` when
     subject resolution yields no subjects (the caller owns the empty-scenario
     response, exactly as the handlers do today).
+
+    ``visibility_mode`` / ``display_settings`` / ``forecasting_settings`` are
+    the calc-scope policy inputs forwarded to
+    ``prepare_forecast_subject_group``, which picks ``compute_extent`` and
+    sizes the envelope grid to it. The chosen extent rides back on the
+    returned ``ForecastPreparation.compute_extent``.
     """
     from runner.forecast_preparation import (
         extract_forecast_context_scope,
@@ -93,6 +102,9 @@ def admit_forecast_evidence(
         as_at=as_at,
         scenario_id=scenario.get('scenario_id', 'unknown'),
         context_scope=context_scope,
+        visibility_mode=visibility_mode,
+        display_settings=display_settings,
+        forecasting_settings=forecasting_settings,
     )
 
 
