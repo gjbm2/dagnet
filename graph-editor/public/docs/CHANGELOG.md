@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.8b
+**Released:** 7-Jun-26
+
+Further asat fixes
+
+---
+
 ## Version 2.1.7b
 **Released:** 6-Jun-26
 
