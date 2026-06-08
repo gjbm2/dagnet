@@ -75,6 +75,16 @@ def _read_int_file(path):
         return None
 
 
+def _parse_float_env(name):
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == '':
+        return raw, None
+    try:
+        return raw, float(raw)
+    except ValueError:
+        return raw, None
+
+
 def _physical_memory_bytes():
     """Total physical RAM from /proc/meminfo MemTotal (kB), or the default."""
     try:
@@ -157,6 +167,19 @@ def projection_memory_budget_bytes():
     return int(_cached_limit_bytes * fraction)
 
 
+def _status_memory_bytes(field_name):
+    """Read one kB memory field from /proc/self/status as bytes."""
+    prefix = f'{field_name}:'
+    try:
+        with open('/proc/self/status') as fh:
+            for line in fh:
+                if line.startswith(prefix):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
 def current_rss_bytes():
     """This process's resident set size right now, in bytes.
 
@@ -171,3 +194,65 @@ def current_rss_bytes():
     except (OSError, ValueError, IndexError):
         return 0
     return resident_pages * os.sysconf('SC_PAGE_SIZE')
+
+
+def current_hwm_bytes():
+    """This process's high-water resident set size, in bytes."""
+    return _status_memory_bytes('VmHWM')
+
+
+def memory_budget_diagnostics():
+    """Flat diagnostics for the projection memory-budget decision.
+
+    This is telemetry-only perimeter data: raw cgroup/env/proc inputs, the
+    resolved detected limit, the final projection budget, and live RSS/HWM. It
+    intentionally returns plain scalar fields so callers can print one
+    kill-survivable line before a heavy allocation.
+    """
+    global _cached_limit_bytes
+
+    override_raw, override_mb = _parse_float_env('DAGNET_COHORT_CHUNK_BUDGET_MB')
+    fraction_raw, fraction_value = _parse_float_env('DAGNET_COHORT_CHUNK_SAFETY_FRACTION')
+    if fraction_value is None:
+        fraction_value = _DEFAULT_SAFETY_FRACTION
+
+    cgroup_v2 = _read_int_file('/sys/fs/cgroup/memory.max')
+    cgroup_v1 = _read_int_file('/sys/fs/cgroup/memory/memory.limit_in_bytes')
+    lambda_raw = os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE')
+    lambda_bytes = None
+    if lambda_raw:
+        try:
+            lambda_bytes = int(lambda_raw) * _MIB
+        except ValueError:
+            lambda_bytes = None
+
+    physical = _physical_memory_bytes()
+    detected_limit = _cached_limit_bytes
+    if detected_limit is None:
+        detected_limit = _container_memory_limit_bytes()
+
+    if override_mb is not None:
+        if override_mb <= 0:
+            budget_source = 'override_unlimited'
+        else:
+            budget_source = 'override_mb'
+    elif override_raw is not None and override_raw.strip() != '':
+        budget_source = 'auto_invalid_override'
+    else:
+        budget_source = 'auto_detected_limit'
+
+    return {
+        'budget_source': budget_source,
+        'budget_bytes': int(projection_memory_budget_bytes()),
+        'detected_limit_bytes': int(detected_limit),
+        'safety_fraction': float(fraction_value),
+        'safety_fraction_raw': fraction_raw or '',
+        'override_mb_raw': override_raw or '',
+        'cgroup_v2_memory_max_bytes': int(cgroup_v2 or 0),
+        'cgroup_v1_memory_limit_bytes': int(cgroup_v1 or 0),
+        'aws_lambda_memory_size_mb': lambda_raw or '',
+        'aws_lambda_memory_bytes': int(lambda_bytes or 0),
+        'physical_memory_bytes': int(physical),
+        'current_rss_bytes': int(current_rss_bytes()),
+        'current_hwm_bytes': int(current_hwm_bytes()),
+    }

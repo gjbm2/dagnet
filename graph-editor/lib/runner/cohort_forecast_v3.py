@@ -2050,6 +2050,52 @@ _COHORT_CHUNK_OUT_BYTES_PER_CELL = 64              # retained full-C output: 8 (
 _COHORT_CHUNK_TRANSIENT_BYTES_PER_CELL = 512       # per-chunk projection scratch (measured ~471, rounded up)
 
 
+def _cf_memory_bytes_per_mib(value: int) -> int:
+    return int(round(int(value) / (1024 * 1024)))
+
+
+def _normalise_telemetry_value(value: Any) -> Any:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return float(value)
+        return str(value)
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        return value.replace(' ', '_')
+    return value
+
+
+def _emit_cf_memory_telemetry(phase: str, **extra: Any) -> None:
+    """Emit one kill-survivable CF memory line before heavy allocations."""
+    payload = {
+        k: _normalise_telemetry_value(v)
+        for k, v in extra.items()
+    }
+    try:
+        from request_telemetry import mark as _request_telemetry_mark
+        _request_telemetry_mark(f'CF_MEM_{phase}', **payload)
+    except Exception as exc:
+        print(
+            f'[cf-memory] phase={phase} telemetry_mark_failed={type(exc).__name__}',
+            flush=True,
+        )
+    parts = [f'[cf-memory] phase={phase}']
+    for key in sorted(payload):
+        parts.append(f'{key}={payload[key]}')
+    print(' '.join(parts), flush=True)
+
+
+def _memory_diag_with_mib() -> Dict[str, Any]:
+    diag = dict(runtime_memory.memory_budget_diagnostics())
+    for key, value in list(diag.items()):
+        if key.endswith('_bytes') and isinstance(value, int):
+            diag[f'{key[:-6]}_mib'] = _cf_memory_bytes_per_mib(value)
+    return diag
+
+
 def _solve_cohort_chunk_size(
     *, total_cohorts, draw_count, horizon, budget_bytes, current_rss_bytes,
 ):
@@ -2336,6 +2382,21 @@ def build_cf_projection_bundle(
     # and the tau reducer reads the projection at ``min(compute_extent,
     # saturation_τ)``: past saturation the math is flat by construction, so
     # the engine doesn't bother projecting past it.
+    _emit_cf_memory_telemetry(
+        'before_runtime',
+        scenario_id=scenario_id or '',
+        target_edge_id=str(target_edge_id),
+        query_from_node=str(query_from_node),
+        query_to_node=str(query_to_node),
+        population_root=population_root,
+        temporal_mode=temporal_mode,
+        compute_extent=int(compute_extent),
+        request_candidates=len(request_candidates),
+        per_edge_subject_candidate_edges=len(per_edge_subject_candidates or {}),
+        per_edge_upstream_candidate_edges=len(per_edge_upstream_candidates or {}),
+        composed_frames=len(frames or []),
+        **_memory_diag_with_mib(),
+    )
     runtime = build_resolved_cf_runtime(
         graph=graph,
         target_edge_id=str(target_edge_id),
@@ -2362,6 +2423,16 @@ def build_cf_projection_bundle(
         context_key=context_key,
         context_selector=context_selector,
         mece_dimensions=tuple(mece_dimensions or ()),
+    )
+    _emit_cf_memory_telemetry(
+        'after_runtime',
+        scenario_id=scenario_id or '',
+        target_edge_id=str(target_edge_id),
+        draw_count=int(runtime.composed_carrier.draw_count),
+        runtime_candidates=len(runtime.request_evidence_candidates),
+        composed_carrier_present=int(runtime.composed_carrier is not None),
+        composed_subject_present=int(runtime.composed_subject is not None),
+        **_memory_diag_with_mib(),
     )
 
     # Per-anchor base mass + skip-reason provenance. ``_root_window_...``
@@ -2486,16 +2557,53 @@ def build_cf_projection_bundle(
     # C, S, T); any explicit positive K (manual request setting, or the
     # unbounded ``_COHORT_CHUNK_ALL``) is used as-is. One ternary — config
     # selection, not a mode fork; the reducer/combine below stay branchless.
+    _chunk_diag = _memory_diag_with_mib()
+    _chunk_budget_bytes = int(_chunk_diag['budget_bytes'])
+    _chunk_rss_bytes = int(_chunk_diag['current_rss_bytes'])
+    _chunk_c = len(selected_cohort_inputs)
+    _chunk_s = int(runtime.composed_carrier.draw_count)
+    _chunk_t = int(projection_horizon) + 1
+    _chunk_out_floor_bytes = (
+        _COHORT_CHUNK_OUT_BYTES_PER_CELL * _chunk_s * _chunk_t * max(_chunk_c, 1)
+    )
+    _chunk_per_cohort_transient_bytes = (
+        _COHORT_CHUNK_TRANSIENT_BYTES_PER_CELL * _chunk_s * _chunk_t
+    )
+    _chunk_headroom_bytes = _chunk_budget_bytes - _chunk_rss_bytes - _chunk_out_floor_bytes
     _effective_chunk = (
         _solve_cohort_chunk_size(
-            total_cohorts=len(selected_cohort_inputs),
-            draw_count=int(runtime.composed_carrier.draw_count),
+            total_cohorts=_chunk_c,
+            draw_count=_chunk_s,
             horizon=int(projection_horizon),
-            budget_bytes=runtime_memory.projection_memory_budget_bytes(),
-            current_rss_bytes=runtime_memory.current_rss_bytes(),
+            budget_bytes=_chunk_budget_bytes,
+            current_rss_bytes=_chunk_rss_bytes,
         )
         if cohort_chunk_size <= _COHORT_CHUNK_AUTO
         else cohort_chunk_size
+    )
+    _emit_cf_memory_telemetry(
+        'chunk_decision',
+        scenario_id=scenario_id or '',
+        target_edge_id=str(target_edge_id),
+        compute_extent=int(compute_extent),
+        saturation_tau=int(saturation_tau),
+        projection_horizon=int(projection_horizon),
+        selected_cohorts=_chunk_c,
+        frame_cohorts=len(fe.cohort_list),
+        draw_count=_chunk_s,
+        horizon_cells=_chunk_t,
+        cohort_chunk_requested=int(cohort_chunk_size),
+        cohort_chunk_effective=int(_effective_chunk),
+        cohort_chunk_source='auto' if cohort_chunk_size <= _COHORT_CHUNK_AUTO else 'manual',
+        chunk_out_floor_bytes=int(_chunk_out_floor_bytes),
+        chunk_out_floor_mib=_cf_memory_bytes_per_mib(_chunk_out_floor_bytes),
+        chunk_per_cohort_transient_bytes=int(_chunk_per_cohort_transient_bytes),
+        chunk_per_cohort_transient_mib=_cf_memory_bytes_per_mib(_chunk_per_cohort_transient_bytes),
+        chunk_headroom_bytes=int(_chunk_headroom_bytes),
+        chunk_headroom_mib=_cf_memory_bytes_per_mib(_chunk_headroom_bytes),
+        chunk_fixed_over_budget=int(_chunk_headroom_bytes <= 0),
+        chunk_affordable_raw=int(_chunk_headroom_bytes // _chunk_per_cohort_transient_bytes),
+        **_chunk_diag,
     )
     _cohort_chunks = [
         selected_cohort_inputs[_s:_s + _effective_chunk]
@@ -2517,11 +2625,34 @@ def build_cf_projection_bundle(
         )
         for _chunk in _cohort_chunks
     )
+    _emit_cf_memory_telemetry(
+        'before_combine',
+        scenario_id=scenario_id or '',
+        target_edge_id=str(target_edge_id),
+        selected_cohorts=_chunk_c,
+        draw_count=_chunk_s,
+        horizon_cells=_chunk_t,
+        cohort_chunk_effective=int(_effective_chunk),
+        combine_cst_fields=len(_BY_COHORT_CST_FIELDS),
+        combine_ct_fields=len(_BY_COHORT_CT_FIELDS),
+        combine_prealloc_bytes=int(_chunk_out_floor_bytes),
+        combine_prealloc_mib=_cf_memory_bytes_per_mib(_chunk_out_floor_bytes),
+        **_memory_diag_with_mib(),
+    )
     selected_projection = _combine_selected_cohort_projections(
         _chunk_projection_stream,
         total_cohort_count=len(selected_cohort_inputs),
         draw_count=int(runtime.composed_carrier.draw_count),
         horizon=projection_horizon,
+    )
+    _emit_cf_memory_telemetry(
+        'after_combine',
+        scenario_id=scenario_id or '',
+        target_edge_id=str(target_edge_id),
+        selected_cohorts=_chunk_c,
+        draw_count=_chunk_s,
+        horizon_cells=_chunk_t,
+        **_memory_diag_with_mib(),
     )
 
     # Ordered per-Cohort projection status, aligned 1:1 with
@@ -2557,6 +2688,26 @@ def build_cf_projection_bundle(
         _pk = _status['projection_index']
         if _pk is not None:
             _positions[_pk] = _i
+    _scatter_cst_fields = 8
+    _scatter_ct_fields = 2
+    _scatter_prealloc_bytes = (
+        (_scatter_cst_fields * _c_all * _chunk_s * _chunk_t * 8)
+        + (_scatter_ct_fields * _c_all * _chunk_t * 8)
+    )
+    _emit_cf_memory_telemetry(
+        'before_scatter',
+        scenario_id=scenario_id or '',
+        target_edge_id=str(target_edge_id),
+        frame_cohorts=_c_all,
+        selected_cohorts=_chunk_c,
+        draw_count=_chunk_s,
+        horizon_cells=_chunk_t,
+        scatter_cst_fields=_scatter_cst_fields,
+        scatter_ct_fields=_scatter_ct_fields,
+        scatter_prealloc_bytes=int(_scatter_prealloc_bytes),
+        scatter_prealloc_mib=_cf_memory_bytes_per_mib(_scatter_prealloc_bytes),
+        **_memory_diag_with_mib(),
+    )
 
     def _scatter_to_cohort_list(arr):
         a = np.asarray(arr, dtype=np.float64)
@@ -2579,6 +2730,16 @@ def build_cf_projection_bundle(
         evidence_y_strict=_scatter_to_cohort_list(_sp.evidence_y_strict_by_cohort),
         reason=[s['reason'] for s in cohort_projection_status],
     )
+    _emit_cf_memory_telemetry(
+        'after_scatter',
+        scenario_id=scenario_id or '',
+        target_edge_id=str(target_edge_id),
+        frame_cohorts=_c_all,
+        selected_cohorts=_chunk_c,
+        draw_count=_chunk_s,
+        horizon_cells=_chunk_t,
+        **_memory_diag_with_mib(),
+    )
 
     # Per-Cohort completeness = the FC frontier/terminal rate ratio (mean
     # over draws): the realised fraction of the conditioned terminal rate
@@ -2599,6 +2760,17 @@ def build_cf_projection_bundle(
         np.asarray(cohort_eval_ages, dtype=np.int64), _sat_idx,
     )
     _c_n = _da_rate.shape[0]
+    _ratio_prealloc_bytes = 3 * _c_n * _chunk_s * 8
+    _emit_cf_memory_telemetry(
+        'before_completeness_ratio',
+        scenario_id=scenario_id or '',
+        target_edge_id=str(target_edge_id),
+        frame_cohorts=_c_n,
+        draw_count=_chunk_s,
+        ratio_prealloc_bytes=int(_ratio_prealloc_bytes),
+        ratio_prealloc_mib=_cf_memory_bytes_per_mib(_ratio_prealloc_bytes),
+        **_memory_diag_with_mib(),
+    )
     _front = _da_rate[np.arange(_c_n), :, _ea_idx]       # (C_all, S)
     _term = _da_rate[:, :, _sat_idx]                     # (C_all, S)
     with np.errstate(divide='ignore', invalid='ignore'):

@@ -485,8 +485,13 @@ def test_runtime_memory_readings_are_sane():
     from runner import runtime_memory
     budget = runtime_memory.projection_memory_budget_bytes()
     rss = runtime_memory.current_rss_bytes()
+    diag = runtime_memory.memory_budget_diagnostics()
     assert budget > 256 * 1024 * 1024, f'budget implausibly small: {budget}'
     assert rss > 0, f'current RSS should be readable on Linux, got {rss}'
+    assert diag['budget_bytes'] == budget
+    assert diag['current_rss_bytes'] > 0
+    assert diag['current_hwm_bytes'] >= diag['current_rss_bytes']
+    assert 'budget_source' in diag
 
 
 def test_runtime_memory_budget_env_override():
@@ -499,8 +504,12 @@ def test_runtime_memory_budget_env_override():
     try:
         os.environ[key] = '2000'
         assert runtime_memory.projection_memory_budget_bytes() == 2000 * 1024 * 1024
+        diag = runtime_memory.memory_budget_diagnostics()
+        assert diag['budget_source'] == 'override_mb'
+        assert diag['budget_bytes'] == 2000 * 1024 * 1024
         os.environ[key] = '0'
         assert runtime_memory.projection_memory_budget_bytes() >= (1 << 62)
+        assert runtime_memory.memory_budget_diagnostics()['budget_source'] == 'override_unlimited'
     finally:
         if saved is None:
             os.environ.pop(key, None)
