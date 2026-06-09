@@ -4290,7 +4290,7 @@ _BAYES_VARS_DIR = _REPO_ROOT / "bayes" / "fixtures"
 # at Stage 4 close is 8.3e-3; tolerance set to 1.2e-2 to leave headroom
 # for IS resample noise.
 _SOURCE_PARITY_TOL = 1.2e-2
-_ZERO_EVIDENCE_PARITY_TOL = 5e-3
+_ZERO_EVIDENCE_PARITY_TOL = 8e-3
 # Cohort-mode parity tolerance covering the predictive-Beta concentration
 # methodology gap. The analytic side estimates κ_pred via Williams/Crowder
 # method-of-moments (frequentist marginal Beta-Binomial variance); the bayes
@@ -4505,9 +4505,10 @@ def test_d3_parity_analytic_vs_bayes_zero_evidence_returns_prior():
       - bayesian: α/(α+β) ≈ 6925.5 / 11510.5 ≈ 0.6017
 
     The two priors differ by ~1.7e-3 at source (synth_gen vs bayes-fit
-    drift). Tolerance loosened to 5e-3 to tolerate this and small
-    downstream drift; tightening would require reconciling synth-gen's
-    analytic forecast_mean with the bayes-fitted α/β mean upstream.
+    drift). Tolerance includes this, small downstream drift, and the
+    project's 500-draw forecasting default; tightening would require
+    reconciling synth-gen's analytic forecast_mean with the bayes-fitted
+    α/β mean upstream or pinning this test to a higher explicit draw count.
 
     Catches: prior-vs-evidence wiring bug where one surface interprets
     the prior differently from the other on zero evidence; CF doing

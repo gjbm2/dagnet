@@ -82,8 +82,8 @@ class TestMcDrawsOverrideMechanism:
         bundle = _build_inline_bundle()
         composed = bundle.runtime.composed_subject
         assert composed is not None, "fixture must produce a composed subject"
-        # The default `mc_draws` is 1000 (per ForecastingSettings).
-        assert composed.span_p_draws.shape == (1000,)
+        # The default `mc_draws` from ForecastingSettings drives runtime shape.
+        assert composed.span_p_draws.shape == (int(current_settings().mc_draws),)
 
     def test_runtime_draws_follow_use_request_settings_override(self):
         overridden = dataclasses.replace(current_settings(), mc_draws=128.0)
@@ -92,13 +92,13 @@ class TestMcDrawsOverrideMechanism:
         composed = bundle.runtime.composed_subject
         assert composed is not None
         # The override propagates: the composed span carries 128 draws,
-        # not 1000. This is the load-bearing assertion — if it fails,
+        # not the request-wide default. This is the load-bearing assertion — if it fails,
         # the helper's mc_draws_override is functionally inert.
         assert composed.span_p_draws.shape == (128,)
 
     def test_override_is_request_scoped_and_does_not_leak(self):
         """After the ``with`` block exits, the global default returns —
-        the next bundle built without an override sees S=1000 again."""
+        the next bundle built without an override sees the default S again."""
         baseline = float(current_settings().mc_draws)
         with use_request_settings(
             dataclasses.replace(current_settings(), mc_draws=64.0)
