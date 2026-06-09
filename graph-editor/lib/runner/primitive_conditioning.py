@@ -95,7 +95,7 @@ from .timing_particles import (
     build_row_aligned_lognormal_cdf_from_draws,
     sample_timing_particles_from_params,
 )
-from .numpy_stats import normal_cdf
+from .numpy_stats import expit, normal_cdf
 
 
 LEGACY_IS_TARGET_ESS = 20.0
@@ -104,6 +104,26 @@ LEGACY_IS_TARGET_ESS = 20.0
 def current_is_ess_threshold_enabled() -> bool:
     """Return whether the request opted into legacy ESS tempering."""
     return bool(current_settings().is_ess_threshold_enabled)
+
+
+def current_is_rb_conditioning_enabled() -> bool:
+    """Return whether the request opted into Rao-Blackwellised conditioning."""
+    return bool(current_settings().is_rb_conditioning_enabled)
+
+
+# ── Rao-Blackwellised latent conditioning: numerical-resolution constants ──
+#
+# Accuracy knobs (quadrature grid sizing / windowing), NOT statistical
+# tuning: refining them changes integration error, never the posterior
+# target. Validated by the conjugate-degeneracy and dense-reference tests
+# in test_primitive_conditioning.py. Design:
+# docs/current/project-generalise/
+# primitive-conditioning-particle-collapse-options-9-Jun-26.md §3, §7.
+_RB_COARSE_GRID_POINTS = 160
+_RB_REFINED_GRID_POINTS = 160
+_RB_WINDOW_Z_SDS = 12.0     # bounding-Beta window half-width (logit sds)
+_RB_REFINE_SPAN_SDS = 10.0  # refined window half-width around coarse mode
+_RB_LOGIT_BOUND = 27.631021  # |logit(1e-12)|: grid never reaches p ∈ {0, 1}
 
 
 # ─── Process-memory cache ──────────────────────────────────────────────
@@ -212,6 +232,7 @@ def _primitive_cache_key(
         path_latency=path_lat_summary,
         timing_cdf_max_tau=options.timing_cdf_max_tau,
         is_ess_threshold_enabled=options.is_ess_threshold_enabled,
+        is_rb_conditioning_enabled=options.is_rb_conditioning_enabled,
         prior_source=prior_source,
         resolved_source=resolved_model.source,
         dispersion_basis=dispersion_basis,
@@ -236,6 +257,9 @@ class ConditioningPolicyOptions:
     timing_cdf_max_tau: int = 90
     is_ess_threshold_enabled: bool = field(
         default_factory=current_is_ess_threshold_enabled,
+    )
+    is_rb_conditioning_enabled: bool = field(
+        default_factory=current_is_rb_conditioning_enabled,
     )
 
 
@@ -446,6 +470,7 @@ def _condition_primitive_uncached(
         draw_count=options.draw_count,
         draw_family_key=draw_family_key,
         is_ess_threshold_enabled=options.is_ess_threshold_enabled,
+        is_rb_conditioning_enabled=options.is_rb_conditioning_enabled,
         mu_sd_override=mu_sd_override,
     )
 
@@ -590,6 +615,15 @@ def _condition_primitive_uncached(
                 f'ess={outcome.provenance["ess"]:.2f} '
                 f'ess_threshold_enabled='
                 f'{int(bool(outcome.provenance.get("ess_threshold_enabled")))}'
+            ),
+            *(
+                (
+                    f'rb_marginal: top_weight_share='
+                    f'{outcome.provenance["rb_top_weight_share"]:.4f} '
+                    f'grid={outcome.provenance["rb_grid_points"]}',
+                )
+                if outcome.provenance.get('rb_conditioning_enabled')
+                else ()
             ),
             *(f'plan_provenance: {entry}' for entry in plan.provenance),
         ),
@@ -1246,6 +1280,7 @@ def _evaluate_likelihood_plan(
     draw_count: int,
     draw_family_key: DrawFamilyKey,
     is_ess_threshold_enabled: bool = False,
+    is_rb_conditioning_enabled: bool = False,
     mu_sd_override: Optional[float] = None,
 ) -> _ConditioningOutcome:
     """Evaluate the plan and emit one ``_ConditioningOutcome``.
@@ -1260,7 +1295,13 @@ def _evaluate_likelihood_plan(
     - latent timing → multinomial IS over ``plan.cohort_buckets``.
       By default ESS is reported as a diagnostic on the full-likelihood
       weights and does not temper the posterior. A request-only forensic
-      flag can restore the legacy ESS-threshold λ search.
+      flag can restore the legacy ESS-threshold λ search; a second
+      request-only rollout flag (``is_rb_conditioning_enabled``) routes to
+      the Rao-Blackwellised marginal scheme
+      (``_evaluate_latent_rb_marginal``), which marginalises ``p`` against
+      the basis prior per timing particle and draws ``p`` from its exact
+      conditional. The legacy ESS flag takes precedence when both are set
+      (it selects the whole legacy joint branch as the comparison surface).
 
     The non-latent path is the only remaining caller of
     ``_conjugate_p_only`` after this refactor (AP53: dead-caller residue
@@ -1389,6 +1430,24 @@ def _evaluate_likelihood_plan(
         horizon_len=T,
     )
 
+    # ── RB marginal dispatch (request-only rollout flag) ──
+    # The legacy ESS-threshold flag takes precedence: it exists to
+    # reproduce the old joint branch exactly as a comparison surface.
+    # The envelope proposal draws sampled above are unused on the RB
+    # path (deleted with the envelope at cutover); leaving them keeps
+    # the default joint path's RNG stream bit-identical.
+    if is_rb_conditioning_enabled and not is_ess_threshold_enabled:
+        return _evaluate_latent_rb_marginal(
+            plan,
+            prior_alpha=prior_alpha_safe,
+            prior_beta=prior_beta_safe,
+            proposal_cdf_draws=proposal_cdf_draws,
+            prior_p_draws=prior_p_draws,
+            draw_count=draw_count,
+            draw_family_key=draw_family_key,
+            cohort_aggregate=cohort_aggregate,
+        )
+
     # Per-cohort multinomial likelihood over τ-cells (proposal §3):
     # For one cohort with size n_d and retrievals (τ₁ < … < τₘ) with
     # cumulative counts (k₁, …, kₘ),
@@ -1502,6 +1561,226 @@ def _evaluate_likelihood_plan(
             'tempering_lambda': 0.0,
             'ess': 0.0,
             'ess_threshold_enabled': bool(is_ess_threshold_enabled),
+        },
+    )
+
+
+def _evaluate_latent_rb_marginal(
+    plan: _CohortLikelihoodPlan,
+    *,
+    prior_alpha: float,
+    prior_beta: float,
+    proposal_cdf_draws: np.ndarray,
+    prior_p_draws: np.ndarray,
+    draw_count: int,
+    draw_family_key: DrawFamilyKey,
+    cohort_aggregate: Tuple[float, float],
+) -> _ConditioningOutcome:
+    """Rao-Blackwellised latent conditioning: marginalise ``p``, sample timing.
+
+    Design: docs/current/project-generalise/
+    primitive-conditioning-particle-collapse-options-9-Jun-26.md §3.
+
+    Conditional on timing particle ``s`` the latent likelihood factorises:
+
+        log L_s(p) = K_s·log p + C(θ_s) + Σ_d R_{d,s}·log(1 − p·F_{d,s})
+
+    with every exponent particle-indexed (per-draw arrival-weighted
+    evidence). The scheme:
+
+      1. keeps the timing particles exactly as sampled by the caller
+         (Phase 6 §3.2 shared-particle invariant untouched);
+      2. weights each timing particle by its p-marginalised likelihood
+         ``m_s = e^{C_s}·∫ Beta(p; a₀, b₀)·p^{K_s}·Π_d(1−p·F_{d,s})^{R_{d,s}} dp``
+         against the basis prior ``(a₀, b₀)`` — NOT the legacy predictive
+         envelope (§3.5 basis decision, 9-Jun-26);
+      3. resamples timing indices systematically (low-variance,
+         target-preserving) on the marginal weights;
+      4. draws ``p`` per resampled particle from its exact 1-D conditional
+         posterior by inverse-CDF on the quadrature grid.
+
+    The quadrature is two-stage in logit space: a coarse window from
+    bounding Betas (the conditional lies stochastically between
+    ``Beta(a₀+K, b₀+ΣR)`` and ``Beta(a₀+K, b₀)`` because
+    ``(1−p) ≤ (1−p·F) ≤ 1``), then a refined window around the coarse
+    mode sized by local curvature. All grid constants are
+    numerical-resolution knobs validated by the conjugate-degeneracy and
+    dense-reference tests; the target is exactly
+    ``basis prior × full likelihood`` at λ = 1.
+
+    Output contract is unchanged: coherent ``(p_s, CDF_s)`` pairs of
+    shape ``(S,)`` / ``(S, T)``; doc-52 blending and composition are
+    untouched downstream. ESS in provenance is the marginal ESS — the
+    meaningful particle-quality diagnostic; residual collapse here means
+    "no sampled timing curve explains the trajectory".
+    """
+    S = int(draw_count)
+    D = len(plan.cohort_buckets)
+
+    # ── p-likelihood coefficients per particle (float64 throughout) ──
+    K_s = np.zeros(S, dtype=np.float64)
+    C_s = np.zeros(S, dtype=np.float64)
+    res_r: list = []
+    res_f: list = []
+    with np.errstate(divide='ignore', invalid='ignore'):
+        for bucket in plan.cohort_buckets:
+            prev_F = np.zeros(S, dtype=np.float64)
+            for tau_idx, inc_k_draws in bucket.increments_draws:
+                cur_F = proposal_cdf_draws[:, tau_idx].astype(np.float64)
+                inc = np.asarray(inc_k_draws, dtype=np.float64)
+                K_s += inc
+                log_dF = np.log(cur_F - prev_F)  # ΔF = 0 → −inf (honest)
+                # 0·log(0) limit is 0: a zero-increment cell contributes
+                # nothing to the multinomial regardless of cell mass.
+                C_s += np.where(inc > 0.0, inc * log_dF, 0.0)
+                prev_F = cur_F
+            res_r.append(
+                np.asarray(bucket.n_weighted_draws, dtype=np.float64)
+                - np.asarray(bucket.last_k_weighted_draws, dtype=np.float64)
+            )  # ≥ 0 by plan construction (monotone-k clamp + min(n, k))
+            res_f.append(
+                proposal_cdf_draws[:, bucket.last_observed_tau_idx]
+                .astype(np.float64)
+            )
+    R_mat = (np.stack(res_r) if res_r
+             else np.zeros((0, S), dtype=np.float64))
+    F_mat = (np.stack(res_f) if res_f
+             else np.zeros((0, S), dtype=np.float64))
+
+    # x-space (logit) integrand exponents: substituting p = expit(x)
+    # absorbs the Beta kernel's (−1)s into the Jacobian p(1−p):
+    #   f(x) = p^{a₀+K_s} · (1−p)^{b₀} · Π_d (1−p·F_{d,s})^{R_{d,s}}
+    a_exp = prior_alpha + K_s          # (S,)
+    b_exp = float(prior_beta)          # scalar
+
+    def _log_density(x: np.ndarray) -> np.ndarray:
+        p = expit(x)
+        logf = a_exp[:, None] * np.log(p) + b_exp * np.log1p(-p)
+        for d in range(D):
+            logf = logf + R_mat[d][:, None] * np.log1p(-p * F_mat[d][:, None])
+        return logf
+
+    # ── Coarse window from bounding Betas (logit space) ──
+    sum_r = R_mat.sum(axis=0) if D else np.zeros(S, dtype=np.float64)
+    b_lo = prior_beta + sum_r
+    mu_lo = np.log(a_exp / b_lo)
+    sd_lo = np.sqrt(1.0 / a_exp + 1.0 / b_lo)
+    mu_hi = np.log(a_exp / prior_beta)
+    sd_hi = np.sqrt(1.0 / a_exp + 1.0 / prior_beta)
+    lo1 = np.maximum(mu_lo - _RB_WINDOW_Z_SDS * sd_lo, -_RB_LOGIT_BOUND)
+    hi1 = np.minimum(mu_hi + _RB_WINDOW_Z_SDS * sd_hi, _RB_LOGIT_BOUND)
+    # Degenerate priors (a₀/b₀ at the 1e-12 floor) blow the sds up and
+    # both ends clamp; full-range window is the correct degeneracy.
+    inverted = lo1 >= hi1
+    lo1 = np.where(inverted, -_RB_LOGIT_BOUND, lo1)
+    hi1 = np.where(inverted, _RB_LOGIT_BOUND, hi1)
+
+    G1 = _RB_COARSE_GRID_POINTS
+    unit1 = np.linspace(0.0, 1.0, G1, dtype=np.float64)
+    x1 = lo1[:, None] + (hi1 - lo1)[:, None] * unit1[None, :]
+    logf1 = _log_density(x1)
+
+    # ── Refined window around the coarse mode ──
+    g_star = np.argmax(logf1, axis=1)
+    h1 = (hi1 - lo1) / (G1 - 1)
+    gi = np.clip(g_star, 1, G1 - 2)
+    f_lo = np.take_along_axis(logf1, (gi - 1)[:, None], 1)[:, 0]
+    f_md = np.take_along_axis(logf1, gi[:, None], 1)[:, 0]
+    f_hi = np.take_along_axis(logf1, (gi + 1)[:, None], 1)[:, 0]
+    curv = f_lo - 2.0 * f_md + f_hi  # ≤ 0 at an interior maximum
+    # Flat curvature → huge σ̂ → refined window stays at the coarse
+    # window (the easy-to-integrate case); the maximum() implements
+    # that limit, it does not repair data.
+    sigma_hat = h1 * np.sqrt(1.0 / np.maximum(-curv, 1e-12))
+    x_star = np.take_along_axis(x1, g_star[:, None], 1)[:, 0]
+    lo2 = np.maximum(x_star - _RB_REFINE_SPAN_SDS * sigma_hat, lo1)
+    hi2 = np.minimum(x_star + _RB_REFINE_SPAN_SDS * sigma_hat, hi1)
+    lo2 = np.where(g_star == 0, lo1, lo2)
+    hi2 = np.where(g_star == G1 - 1, hi1, hi2)
+    narrow = (hi2 - lo2) < 2.0 * h1
+    centre = 0.5 * (lo2 + hi2)
+    lo2 = np.where(narrow, centre - h1, lo2)
+    hi2 = np.where(narrow, centre + h1, hi2)
+
+    G2 = _RB_REFINED_GRID_POINTS
+    unit2 = np.linspace(0.0, 1.0, G2, dtype=np.float64)
+    x2 = lo2[:, None] + (hi2 - lo2)[:, None] * unit2[None, :]
+    logf2 = _log_density(x2)
+
+    # ── Marginal weights (trapezoid in log space) ──
+    peak = logf2.max(axis=1)
+    rel = np.exp(logf2 - peak[:, None])
+    trap = rel.sum(axis=1) - 0.5 * (rel[:, 0] + rel[:, -1])
+    dx2 = (hi2 - lo2) / (G2 - 1)
+    log_m = C_s + peak + np.log(trap) + np.log(dx2)
+
+    weights = _normalise_log_weights(log_m)
+    if weights is None:
+        # No timing particle has finite marginal mass — same perimeter
+        # outcome as the joint path's underflow case.
+        return _ConditioningOutcome(
+            status='prior_only',
+            reason='is_failed',
+            provenance={
+                'mode': 'prior_only_is_failed',
+                'cohorts_used': D,
+                'tempering_lambda': 0.0,
+                'ess': 0.0,
+                'ess_threshold_enabled': False,
+                'rb_conditioning_enabled': True,
+            },
+        )
+    marginal_ess = float(1.0 / np.sum(np.square(weights)))
+
+    # ── Systematic resampling of timing indices ──
+    res_rng = make_rng(draw_family_key, 'primitive_is_resampling')
+    u0 = float(res_rng.random())
+    positions = (u0 + np.arange(S, dtype=np.float64)) / S
+    cum = np.cumsum(weights)
+    cum[-1] = 1.0  # float-drift normalisation; keeps searchsorted in range
+    idx = np.searchsorted(cum, positions, side='left')
+
+    # ── Exact conditional p draw per resampled particle ──
+    cond_rng = make_rng(draw_family_key, 'primitive_p_conditional_draws')
+    u = cond_rng.random(S)
+    rel2 = np.exp(logf2 - logf2.max(axis=1, keepdims=True))
+    cell = 0.5 * (rel2[:, 1:] + rel2[:, :-1])  # per-cell mass; dx cancels
+    cdf = np.cumsum(cell, axis=1)
+    cdf = cdf / cdf[:, -1:]
+    rows = cdf[idx]
+    x_rows_lo = x2[idx, 0]
+    dx_rows = (x2[idx, -1] - x_rows_lo) / (G2 - 1)
+    pos = np.minimum((rows < u[:, None]).sum(axis=1), G2 - 2)
+    left = np.where(
+        pos > 0,
+        np.take_along_axis(rows, np.maximum(pos - 1, 0)[:, None], 1)[:, 0],
+        0.0,
+    )
+    right = np.take_along_axis(rows, pos[:, None], 1)[:, 0]
+    seg = right - left
+    # Zero-mass cell ⇒ any point in the cell is equivalent; midpoint is
+    # the limit of the inverse CDF, not a repair.
+    frac = np.where(seg > 0.0, (u - left) / np.where(seg > 0.0, seg, 1.0), 0.5)
+    x_draw = x_rows_lo + (pos.astype(np.float64) + frac) * dx_rows
+    cond_p_draws = expit(x_draw)
+    cond_cdf_draws = proposal_cdf_draws[idx, :]
+
+    return _ConditioningOutcome(
+        status='conditioned',
+        cond_p_draws=cond_p_draws,
+        cond_cdf_draws=cond_cdf_draws,
+        prior_p_draws=prior_p_draws,
+        prior_cdf_draws=proposal_cdf_draws,
+        cohort_aggregate=cohort_aggregate,
+        provenance={
+            'mode': 'maturity_aware_rb_marginal',
+            'cohorts_used': D,
+            'tempering_lambda': 1.0,
+            'ess': marginal_ess,
+            'ess_threshold_enabled': False,
+            'rb_conditioning_enabled': True,
+            'rb_top_weight_share': float(weights.max()),
+            'rb_grid_points': (G1, G2),
         },
     )
 

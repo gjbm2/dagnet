@@ -143,6 +143,8 @@ _DERIVATIONS = {
     "primitive_p_draws": "73n.derivation.primitive_p_draws.v1",
     "primitive_timing_draws": "73n.derivation.primitive_timing_draws.v1",
     "primitive_is_resampling": "73n.derivation.primitive_is_resampling.v1",
+    "primitive_p_conditional_draws":
+        "rb.derivation.primitive_p_conditional_draws.v1",
     "primitive_drift": "73n.derivation.primitive_drift.v1",
     "primitive_completeness_sd": "73n.derivation.primitive_completeness_sd.v1",
     "doc52_blend_permutation": "73n.derivation.doc52_blend_permutation.v1",

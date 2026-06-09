@@ -814,11 +814,14 @@ def test_doc52_blend_uses_keyed_rng_not_fixed_seed():
     )
 
 
-def test_latent_is_uses_full_likelihood_without_ess_tempering():
-    """Maturity-aware IS reports ESS but does not weaken the likelihood.
+def test_latent_default_uses_full_likelihood_without_ess_tempering():
+    """The default latent path keeps the full-likelihood target at λ = 1.
 
     The posterior is defined by the full likelihood. ESS is a diagnostic of
-    particle quality, not a control target that changes the answer.
+    particle quality, not a control target that changes the answer. Since
+    the 9-Jun-26 default flip the default scheme is the Rao-Blackwellised
+    marginal (``norbcond`` restores the legacy joint path); the load-bearing
+    assertions — no tempering, no ESS control — are unchanged.
     """
     draw_count = 50
     res = _build_resolution(
@@ -845,11 +848,47 @@ def test_latent_is_uses_full_likelihood_without_ess_tempering():
 
     assert prim.status == ConditioningStatus.CONDITIONED
     assert any(
+        'maturity_aware_mode=maturity_aware_rb_marginal' in note
+        and 'tempering_lambda=1.0000' in note
+        and 'ess_threshold_enabled=0' in note
+        for note in prim.notes
+    ), f"expected full-likelihood RB provenance; notes={list(prim.notes)}"
+
+
+def test_latent_norbcond_restores_joint_full_likelihood_path():
+    """The kill switch (is_rb_conditioning_enabled=0, the norbcond URL
+    parameter) restores the legacy joint full-likelihood path at λ = 1."""
+    draw_count = 50
+    res = _build_resolution(
+        candidates=[_candidate(
+            observed_date='2026-03-15', n=50, k=20,
+            retrieved_at='2026-03-25',
+        )],
+        draw_count=draw_count,
+    )
+    rm = _resolved_model(
+        alpha=2.0, beta=3.0,
+        alpha_pred=2.0, beta_pred=3.0,
+        mu=2.0, sigma=0.5, mu_sd=1.0,
+        n_effective=None,
+    )
+    prim = condition_primitive(
+        resolution=res,
+        resolved_model=rm,
+        scenario_seed=12345,
+        options=ConditioningPolicyOptions(
+            draw_count=draw_count, timing_cdf_max_tau=30,
+            is_rb_conditioning_enabled=False,
+        ),
+    )
+
+    assert prim.status == ConditioningStatus.CONDITIONED
+    assert any(
         'maturity_aware_mode=maturity_aware_is_joint' in note
         and 'tempering_lambda=1.0000' in note
         and 'ess_threshold_enabled=0' in note
         for note in prim.notes
-    ), f"expected full-likelihood IS provenance; notes={list(prim.notes)}"
+    ), f"expected legacy joint IS provenance; notes={list(prim.notes)}"
 
 
 def test_latent_is_ess_target_is_legacy_flag_only():
@@ -926,6 +965,256 @@ def test_latent_is_ess_threshold_flag_restores_tempering(monkeypatch):
     assert 'ess_threshold_enabled=1' in flagged_note
     assert 'ess=25.00' in flagged_note
     assert 'tempering_lambda=1.0000' not in flagged_note
+
+
+# ─── Rao-Blackwellised marginal conditioning (rbcond rollout flag) ─────
+
+
+def _maturity_note(prim) -> str:
+    return next(
+        n for n in prim.notes if n.startswith('maturity_aware_mode=')
+    )
+
+
+def _ess_from_notes(prim) -> float:
+    m = re.search(r' ess=([0-9.]+)', _maturity_note(prim))
+    assert m is not None
+    return float(m.group(1))
+
+
+def _rb_latent_fixture(*, draw_count, n=200, k=60, tau_days=15,
+                       mu=0.0, sigma=0.05, mu_sd=0.0, sigma_sd=0.0,
+                       alpha=2.0, beta=3.0):
+    """Latent fixture: one cohort observed once at age ``tau_days``.
+
+    ``tau_days`` must keep ``retrieved_at`` ≤ the helper scope's
+    ``as_at`` (1-Apr-26) or the row is rejected by admission and the
+    test silently degenerates to the prior (AP17 vacuity) — guarded by
+    the assert below.
+    """
+    from datetime import date, timedelta
+    observed = '2026-03-15'
+    retrieved = (
+        date.fromisoformat(observed) + timedelta(days=tau_days)
+    ).isoformat()
+    res = _build_resolution(
+        candidates=[_candidate(
+            observed_date=observed, n=n, k=k, retrieved_at=retrieved,
+        )],
+        draw_count=draw_count,
+    )
+    assert res.weighted_view.n_weighted_total > 0.0, (
+        f'fixture evidence not admitted '
+        f'(skipped={dict(res.weighted_view.skipped_counts_by_reason)})'
+    )
+    rm = _resolved_model(
+        alpha=alpha, beta=beta,
+        mu=mu, sigma=sigma, mu_sd=mu_sd,
+        n_effective=None,
+    )
+    # ResolvedLatency in _resolved_model carries sigma_sd=0.0; rebuild with
+    # the requested dispersion where a test needs distinct timing particles.
+    if sigma_sd:
+        import dataclasses as _dc
+        rm = _dc.replace(
+            rm,
+            edge_latency=_dc.replace(rm.edge_latency, sigma_sd=sigma_sd),
+        )
+    return res, rm
+
+
+def test_rb_flag_routes_latent_to_marginal_scheme():
+    """rbcond on → latent conditioning runs the RB marginal scheme with
+    λ = 1, preserved output shapes, and explicit provenance."""
+    S = 400
+    res, rm = _rb_latent_fixture(draw_count=S, mu=2.0, sigma=0.5, mu_sd=1.0)
+    prim = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=12345,
+        options=ConditioningPolicyOptions(
+            draw_count=S, timing_cdf_max_tau=60,
+            is_rb_conditioning_enabled=True,
+        ),
+    )
+    assert prim.status == ConditioningStatus.CONDITIONED
+    note = _maturity_note(prim)
+    assert 'maturity_aware_mode=maturity_aware_rb_marginal' in note
+    assert 'tempering_lambda=1.0000' in note
+    assert 'ess_threshold_enabled=0' in note
+    assert any(n.startswith('rb_marginal:') for n in prim.notes)
+    assert prim.probability_posterior.draws.shape == (S,)
+    assert prim.timing_posterior.cdf_draws.shape == (S, 61)
+    draws = prim.probability_posterior.draws
+    assert np.all((draws > 0.0) & (draws < 1.0))
+
+
+def test_rb_ess_threshold_flag_takes_precedence_over_rb():
+    """Both flags set → the legacy joint comparison branch runs."""
+    S = 100
+    res, rm = _rb_latent_fixture(draw_count=S, mu=2.0, sigma=0.5, mu_sd=1.0)
+    prim = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=12345,
+        options=ConditioningPolicyOptions(
+            draw_count=S, timing_cdf_max_tau=60,
+            is_ess_threshold_enabled=True,
+            is_rb_conditioning_enabled=True,
+        ),
+    )
+    note = _maturity_note(prim)
+    assert 'maturity_aware_rb_marginal' not in note
+    assert 'ess_threshold_enabled=1' in note
+
+
+def test_rb_cache_identity_separates_modes():
+    """Same inputs, rb flag flipped → must not reuse the cached joint
+    primitive (the flag is part of primitive cache identity)."""
+    S = 100
+    res, rm = _rb_latent_fixture(draw_count=S, mu=2.0, sigma=0.5, mu_sd=1.0)
+    prim_joint = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=777,
+        options=ConditioningPolicyOptions(
+            draw_count=S, timing_cdf_max_tau=60,
+            is_rb_conditioning_enabled=False,
+        ),
+    )
+    prim_rb = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=777,
+        options=ConditioningPolicyOptions(
+            draw_count=S, timing_cdf_max_tau=60,
+            is_rb_conditioning_enabled=True,
+        ),
+    )
+    assert 'maturity_aware_is_joint' in _maturity_note(prim_joint)
+    assert 'maturity_aware_rb_marginal' in _maturity_note(prim_rb)
+
+
+def test_rb_deterministic_under_same_key():
+    """Keyed-RNG determinism: recomputing (cache cleared) reproduces the
+    identical draw family."""
+    import result_cache
+    S = 200
+    res, rm = _rb_latent_fixture(draw_count=S, mu=2.0, sigma=0.5, mu_sd=1.0)
+    opts = ConditioningPolicyOptions(
+        draw_count=S, timing_cdf_max_tau=60,
+        is_rb_conditioning_enabled=True,
+    )
+    prim_a = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=999, options=opts,
+    )
+    result_cache.clear_all()
+    prim_b = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=999, options=opts,
+    )
+    assert np.array_equal(
+        prim_a.probability_posterior.draws,
+        prim_b.probability_posterior.draws,
+    )
+    assert np.array_equal(
+        prim_a.timing_posterior.cdf_draws,
+        prim_b.timing_posterior.cdf_draws,
+    )
+
+
+def test_rb_conjugate_degeneracy_matches_beta_analytic():
+    """F ≡ 1 degeneracy: a fully mature observation must reproduce the
+    textbook conjugate update against the basis prior — Beta(α+K, β+R).
+
+    mu=0, sigma=0.05, age 15 ⇒ completeness Φ((ln15)/0.05) = 1 to double
+    precision. Zero timing dispersion ⇒ identical particles ⇒ uniform
+    marginal weights (ESS = S). Expected posterior Beta(62, 143):
+    mean ≈ 0.30244, sd ≈ 0.03200.
+    """
+    S = 2000
+    res, rm = _rb_latent_fixture(
+        draw_count=S, n=200, k=60, tau_days=15,
+        mu=0.0, sigma=0.05, mu_sd=0.0, alpha=2.0, beta=3.0,
+    )
+    prim = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=2026,
+        options=ConditioningPolicyOptions(
+            draw_count=S, timing_cdf_max_tau=60,
+            is_rb_conditioning_enabled=True,
+        ),
+    )
+    assert 'maturity_aware_rb_marginal' in _maturity_note(prim)
+    assert _ess_from_notes(prim) == pytest.approx(S, rel=1e-6)
+    draws = prim.probability_posterior.draws
+    expected_mean = 62.0 / 205.0
+    expected_sd = float(np.sqrt(62.0 * 143.0 / (205.0 ** 2 * 206.0)))
+    assert float(np.mean(draws)) == pytest.approx(expected_mean, abs=5e-3)
+    assert float(np.std(draws)) == pytest.approx(expected_sd, abs=5e-3)
+
+
+def test_rb_immature_conditional_matches_dense_reference():
+    """Immature evidence (F ≈ 0.2): the conditional p posterior must match
+    a dense brute-force quadrature of basis_prior × p^K (1−pF)^R — the
+    weak-identification case where the conditional is wide, not collapsed."""
+    from runner.numpy_stats import normal_cdf as _ncdf
+    S = 1500
+    n, k, tau, mu, sigma = 100, 15, 5, float(np.log(7.0)), 0.4
+    a0, b0 = 2.0, 6.0
+    res, rm = _rb_latent_fixture(
+        draw_count=S, n=n, k=k, tau_days=tau,
+        mu=mu, sigma=sigma, mu_sd=0.0, alpha=a0, beta=b0,
+    )
+    prim = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=31337,
+        options=ConditioningPolicyOptions(
+            draw_count=S, timing_cdf_max_tau=60,
+            is_rb_conditioning_enabled=True,
+        ),
+    )
+    draws = prim.probability_posterior.draws
+
+    # Dense reference on the identical likelihood: F from the same shifted
+    # lognormal endpoint CDF the engine evaluates at integer age tau.
+    F = float(_ncdf((np.log(float(tau)) - mu) / sigma))
+    p_grid = np.linspace(1e-9, 1.0 - 1e-9, 400_001)
+    log_dens = (
+        (a0 - 1.0 + k) * np.log(p_grid)
+        + (b0 - 1.0) * np.log1p(-p_grid)
+        + (n - k) * np.log1p(-p_grid * F)
+    )
+    dens = np.exp(log_dens - log_dens.max())
+    ref_mean = float(np.sum(p_grid * dens) / np.sum(dens))
+    ref_sd = float(np.sqrt(
+        np.sum((p_grid - ref_mean) ** 2 * dens) / np.sum(dens)
+    ))
+
+    assert float(np.mean(draws)) == pytest.approx(ref_mean, abs=0.01)
+    assert float(np.std(draws)) == pytest.approx(ref_sd, abs=0.01)
+    # Weak identification must surface as honest width: the conditional
+    # under F≈0.2 is far wider than a mature-evidence posterior would be.
+    assert float(np.std(draws)) > 0.04
+
+
+def test_rb_marginal_ess_not_below_joint_ess():
+    """Rao-Blackwell guarantee, realised on a collapsing fixture: the
+    marginal ESS must not be lower than the joint scheme's ESS on the
+    same evidence and keys (deterministic given fixed derivations)."""
+    S = 300
+    res, rm = _rb_latent_fixture(
+        draw_count=S, n=400, k=120, tau_days=10,
+        mu=float(np.log(12.0)), sigma=0.4, mu_sd=0.6,
+    )
+    opts_joint = ConditioningPolicyOptions(
+        draw_count=S, timing_cdf_max_tau=60,
+        is_rb_conditioning_enabled=False,
+    )
+    opts_rb = ConditioningPolicyOptions(
+        draw_count=S, timing_cdf_max_tau=60,
+        is_rb_conditioning_enabled=True,
+    )
+    prim_joint = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=4242,
+        options=opts_joint,
+    )
+    prim_rb = condition_primitive(
+        resolution=res, resolved_model=rm, scenario_seed=4242,
+        options=opts_rb,
+    )
+    ess_joint = _ess_from_notes(prim_joint)
+    ess_rb = _ess_from_notes(prim_rb)
+    assert ess_rb >= ess_joint
 
 
 # ─── Health diagnostic exposed (ESS-equivalent) ────────────────────────

@@ -130,6 +130,11 @@ class TestForecastingSettingsDefaults:
     def test_is_ess_threshold_disabled_by_default(self):
         assert ForecastingSettings().is_ess_threshold_enabled == 0.0
 
+    def test_is_rb_conditioning_enabled_by_default(self):
+        """RB conditioning is default-on (9-Jun-26); the norbcond URL
+        parameter is the request-only kill switch."""
+        assert ForecastingSettings().is_rb_conditioning_enabled == 1.0
+
 
 class TestRequestSettingsContext:
     """The contextvar binding threads request settings into engine call sites."""
@@ -153,10 +158,14 @@ class TestRequestSettingsContext:
         s = settings_from_dict({
             'mc_draws': 750.0,
             'is_ess_threshold_enabled': 1,
+            'is_rb_conditioning_enabled': 0,
         })
         with use_request_settings(s):
             assert current_settings().mc_draws == 750.0
             assert current_settings().is_ess_threshold_enabled == 1.0
+            # The kill switch round-trips: explicit 0 overrides the
+            # enabled-by-default value.
+            assert current_settings().is_rb_conditioning_enabled == 0.0
 
     def test_primitive_current_mc_draws_honours_context(self):
         # The engine seam: primitives.current_mc_draws reads the bound value.
@@ -257,7 +266,11 @@ class TestSettingsSignature:
         for field_name in ForecastingSettings.__dataclass_fields__:
             # Signature-excluded fields: request-only / memory-layout knobs
             # that do not change modelling results (see compute_settings_signature).
-            if field_name in ('is_ess_threshold_enabled', 'cohort_chunk_size'):
+            if field_name in (
+                'is_ess_threshold_enabled',
+                'is_rb_conditioning_enabled',
+                'cohort_chunk_size',
+            ):
                 continue
             default_val = getattr(ForecastingSettings(), field_name)
             modified_val = default_val + 1.0 if default_val != 0 else 1.0
@@ -269,6 +282,13 @@ class TestSettingsSignature:
         base = compute_settings_signature(ForecastingSettings())
         flagged = compute_settings_signature(
             ForecastingSettings(is_ess_threshold_enabled=1.0)
+        )
+        assert flagged == base
+
+    def test_request_only_rb_conditioning_flag_does_not_change_signature(self):
+        base = compute_settings_signature(ForecastingSettings())
+        flagged = compute_settings_signature(
+            ForecastingSettings(is_rb_conditioning_enabled=1.0)
         )
         assert flagged == base
 

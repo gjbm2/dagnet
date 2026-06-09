@@ -254,8 +254,16 @@ export class GraphComputeClient {
     }
   }
 
-  private essThresholdCacheKeyPart(): string {
-    return this.getUrlSearchParams().has('essthreshold') ? '|essthreshold:1' : '';
+  /**
+   * Cache-key suffix for the request-only forecast comparison/rollback URL
+   * flags (essthreshold, norbcond). These flags change the BE conditioning
+   * scheme, so flagged and unflagged responses must never share a cache
+   * entry. Delete each part when its flag is retired.
+   */
+  private forecastFlagsCacheKeyPart(): string {
+    const params = this.getUrlSearchParams();
+    return (params.has('essthreshold') ? '|essthreshold:1' : '')
+      + (params.has('norbcond') ? '|norbcond:1' : '');
   }
 
   /**
@@ -1723,7 +1731,7 @@ export class GraphComputeClient {
       + `|vis:${visibilityMode}`
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (displaySig ? `|ds:${this.hashString(displaySig)}` : '')
-      + this.essThresholdCacheKeyPart()
+      + this.forecastFlagsCacheKeyPart()
       + (testFixture ? `|tf:${testFixture}:${this.getUrlSearchParams().toString()}` : '');
     if (!bypassCache) {
       const cached = this.analysisCache.get(cacheKey);
@@ -1953,7 +1961,7 @@ export class GraphComputeClient {
       + `|vis:${visibilityModes}`
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '')
-      + this.essThresholdCacheKeyPart()
+      + this.forecastFlagsCacheKeyPart()
       + (multiTestFixture ? `|tf:${multiTestFixture}:${this.getUrlSearchParams().toString()}` : '');
     
     // Check cache first (unless explicitly bypassed via URL params for debugging).

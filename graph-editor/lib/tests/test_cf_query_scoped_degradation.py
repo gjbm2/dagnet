@@ -1102,10 +1102,16 @@ def test_daily_conversions_uses_shared_sweep_surface(
     assert cohort_row['forecast_bands']
     assert cohort_row['projected_x'] > 0
     assert cohort_row['projected_y'] > 0
-    assert cohort_row['projected_rate'] == pytest.approx(
-        cohort_row['forecast_bands']['80'][0],
-        rel=1e-9,
-    )
+    # Shared-surface contract: projected_rate is the median of the same
+    # ef_rate_draws slice the forecast bands are quantiled from, so it
+    # must lie inside the 80% band. The pre-RB assertion here pinned
+    # median == q10 at rel=1e-9 — true only when joint-IS particle
+    # collapse degenerated the draw family to duplicates (the defect the
+    # 9-Jun-26 RB conditioning default removes). The band must now be
+    # non-degenerate: a collapse regression would re-collapse it.
+    band_lo, band_hi = cohort_row['forecast_bands']['80']
+    assert band_lo < band_hi
+    assert band_lo <= cohort_row['projected_rate'] <= band_hi
 
     assert cohort_row['latency_bands']
     for tau_label, payload in cohort_row['latency_bands'].items():

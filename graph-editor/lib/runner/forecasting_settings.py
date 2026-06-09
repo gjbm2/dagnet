@@ -167,6 +167,17 @@ class ForecastingSettings:
     tempering path. 0 = full-likelihood IS (default); non-zero restores the
     previous λ search to keep ESS at the legacy floor."""
 
+    is_rb_conditioning_enabled: float = 1.0
+    """Request-only kill switch for the Rao-Blackwellised primitive
+    conditioning scheme (see docs/current/project-generalise/
+    primitive-conditioning-particle-collapse-options-9-Jun-26.md).
+    Non-zero (the default) marginalises the probability dimension against
+    the basis prior and draws p from its exact per-timing-particle
+    conditional; 0 (the ``norbcond`` URL parameter) restores the legacy
+    joint-IS latent path for comparison/rollback. Ignored when the legacy
+    ``is_ess_threshold_enabled`` comparison path is requested — that flag
+    selects the whole legacy tempered branch and takes precedence."""
+
     cohort_chunk_size: float = 0.0
     """Cohort-axis chunk size K for the selected-cohort projection. 0 (the
     default) = auto: the engine's memory-budget K-solver picks the largest K
@@ -238,8 +249,12 @@ def compute_settings_signature(settings: ForecastingSettings) -> str:
     when any setting value changes, enabling stale-model detection.
     """
     # Canonical JSON: sorted keys, no whitespace, full float precision.
+    # Request-only comparison/rollout flags are excluded: they change the
+    # sampling approximation, not the fitted model artefacts the signature
+    # exists to fingerprint.
     d = asdict(settings)
     d.pop('is_ess_threshold_enabled', None)
+    d.pop('is_rb_conditioning_enabled', None)
     d.pop('cohort_chunk_size', None)  # memory-layout only; results unchanged
     canonical = json.dumps(d, sort_keys=True, separators=(',', ':'))
     digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()

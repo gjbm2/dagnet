@@ -557,12 +557,22 @@ export interface ForecastingSettings {
   // Forecast Monte Carlo sampling
   mc_draws: number;
   is_ess_threshold_enabled: number;
+  is_rb_conditioning_enabled: number;
 }
 
 function isEssThresholdUrlParamEnabled(): boolean {
   if (typeof window === 'undefined') return false;
   try {
     return new URLSearchParams(window.location.search).has('essthreshold');
+  } catch {
+    return false;
+  }
+}
+
+function isRbConditioningDisabledByUrlParam(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return new URLSearchParams(window.location.search).has('norbcond');
   } catch {
     return false;
   }
@@ -603,6 +613,7 @@ export const BAYES_TARGET_ACCEPT = 0.90;            // NUTS target acceptance
 // and every engine site reads from it.
 export const MC_DRAWS = 500;                        // request-scope S
 export const IS_ESS_THRESHOLD_ENABLED = 0;           // request-only URL flag
+export const IS_RB_CONDITIONING_ENABLED = 1;         // default ON; norbcond URL param disables
 
 
 export function buildForecastingSettings(): ForecastingSettings {
@@ -642,6 +653,7 @@ export function buildForecastingSettings(): ForecastingSettings {
     bayes_target_accept: BAYES_TARGET_ACCEPT,
     mc_draws: MC_DRAWS,
     is_ess_threshold_enabled: isEssThresholdUrlParamEnabled() ? 1 : IS_ESS_THRESHOLD_ENABLED,
+    is_rb_conditioning_enabled: isRbConditioningDisabledByUrlParam() ? 0 : IS_RB_CONDITIONING_ENABLED,
   };
 }
 
