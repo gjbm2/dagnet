@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.14b
+**Released:** 9-Jun-26
+
+Changed ESS thresholding to Rao-Blackwellised p as the core fix
+
+---
+
 ## Version 2.1.13b
 **Released:** 9-Jun-26
 
