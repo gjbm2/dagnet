@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.12b
+**Released:** 9-Jun-26
+
+draws @ 500 (for memory reasons)
+
+---
+
 ## Version 2.1.11b
 **Released:** 9-Jun-26
 
