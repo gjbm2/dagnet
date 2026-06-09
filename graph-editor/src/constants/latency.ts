@@ -601,7 +601,7 @@ export const BAYES_TARGET_ACCEPT = 0.90;            // NUTS target acceptance
 // confidence bands, funnel sweep). Threaded to the Python backend via
 // forecasting_settings.mc_draws; the BE sets a request-scoped contextvar
 // and every engine site reads from it.
-export const MC_DRAWS = 1000;                       // request-scope S
+export const MC_DRAWS = 500;                        // request-scope S
 export const IS_ESS_THRESHOLD_ENABLED = 0;           // request-only URL flag
 
 

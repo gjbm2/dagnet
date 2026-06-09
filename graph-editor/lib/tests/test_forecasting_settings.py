@@ -125,7 +125,7 @@ class TestForecastingSettingsDefaults:
 
     # ── Forecast Monte Carlo sampling ──
     def test_mc_draws(self):
-        assert ForecastingSettings().mc_draws == 1000.0
+        assert ForecastingSettings().mc_draws == 500.0
 
     def test_is_ess_threshold_disabled_by_default(self):
         assert ForecastingSettings().is_ess_threshold_enabled == 0.0
@@ -137,7 +137,7 @@ class TestRequestSettingsContext:
     def test_default_when_unbound(self):
         # Outside any use_request_settings block the reader returns defaults.
         s = current_settings()
-        assert s.mc_draws == 1000.0
+        assert s.mc_draws == 500.0
 
     def test_bound_value_visible(self):
         with use_request_settings(ForecastingSettings(mc_draws=500.0)):
@@ -146,7 +146,7 @@ class TestRequestSettingsContext:
     def test_unbinds_on_exit(self):
         with use_request_settings(ForecastingSettings(mc_draws=4242.0)):
             assert current_settings().mc_draws == 4242.0
-        assert current_settings().mc_draws == 1000.0
+        assert current_settings().mc_draws == 500.0
 
     def test_round_trip_from_dict(self):
         # The API handler path: dict → settings → context → engine read.

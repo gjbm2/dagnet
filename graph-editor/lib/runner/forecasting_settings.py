@@ -156,7 +156,7 @@ class ForecastingSettings:
 
     # ── Forecast Monte Carlo sampling ─────────────────────────
 
-    mc_draws: float = 1000.0
+    mc_draws: float = 500.0
     """Request-scope MC draw count S used by the forecast / CF runtime
     (primitive substrate, span CDF MC, cohort sweep, confidence bands,
     funnel sweep). Draw-family coherence requires every consumer of a

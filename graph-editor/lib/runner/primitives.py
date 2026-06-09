@@ -59,7 +59,7 @@ def current_mc_draws() -> int:
     (cohort sweep, span CDF MC, confidence bands, funnel sweep, primitive
     substrate) reads this. The API handler binds the per-request settings
     via ``use_request_settings`` before any engine call; outside a request
-    the call returns the dataclass default (1000).
+    the call returns the dataclass default (500).
 
     Draw-family coherence (plan §141, §585-589) requires every consumer of
     a primitive under the same ``DrawFamilyKey`` and scope to use the same
@@ -79,7 +79,7 @@ def current_mc_draws() -> int:
 # cannot easily call a function at class-definition time). Equals the
 # ``ForecastingSettings.mc_draws`` default. New code should call
 # ``current_mc_draws()`` to honour the request-scope override.
-DEFAULT_DRAW_COUNT: int = 1000
+DEFAULT_DRAW_COUNT: int = 500
 
 
 # ─── Status / family enums ─────────────────────────────────────────────
