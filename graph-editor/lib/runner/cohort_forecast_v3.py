@@ -1170,7 +1170,7 @@ def _completeness_from_cdf_draws(
     adds nothing when there is population and a flat 1 per Cohort when there
     is none, so the reduction is always defined with no branch.
     """
-    weights = np.asarray(cohort_weights, dtype=np.float64)
+    weights = np.asarray(cohort_weights, dtype=np.float32)
     weights = weights + float(weights.sum() == 0.0)
     per_cohort_per_draw = cdf[:, np.asarray(cohort_eval_ages, dtype=np.int64)]
     per_cohort = per_cohort_per_draw.mean(axis=0)
@@ -1414,7 +1414,7 @@ def _forecast_rate_bands(rate_draws_1d, band_levels):
     every draw is NaN (the rate is undefined at this slice — X_total = 0).
     Quantiles are the same ``(1 ± bl) / 2`` pair the tau reducer uses.
     """
-    d = np.asarray(rate_draws_1d, dtype=np.float64)
+    d = np.asarray(rate_draws_1d, dtype=np.float32)
     if not np.isfinite(d).any():
         return None
     return {
@@ -1428,13 +1428,13 @@ def _forecast_rate_bands(rate_draws_1d, band_levels):
 
 def _nan_mean_or_none(draws_1d):
     """Mean of a 1-D draw slice, or ``None`` when every draw is NaN."""
-    d = np.asarray(draws_1d, dtype=np.float64)
+    d = np.asarray(draws_1d, dtype=np.float32)
     return float(np.nanmean(d)) if np.isfinite(d).any() else None
 
 
 def _nan_median_or_none(draws_1d):
     """Median of a 1-D draw slice, or ``None`` when every draw is NaN."""
-    d = np.asarray(draws_1d, dtype=np.float64)
+    d = np.asarray(draws_1d, dtype=np.float32)
     return float(np.nanmedian(d)) if np.isfinite(d).any() else None
 
 
@@ -2178,20 +2178,23 @@ def _combine_selected_cohort_projections(
     S = int(draw_count)
     T = int(horizon) + 1
 
-    by_cohort = {f: np.empty((C, S, T), dtype=np.float64)
+    by_cohort = {f: np.empty((C, S, T), dtype=np.float32)
                  for f in _BY_COHORT_CST_FIELDS}
-    by_cohort.update({f: np.empty((C, T), dtype=np.float64)
+    by_cohort.update({f: np.empty((C, T), dtype=np.float32)
                       for f in _BY_COHORT_CT_FIELDS})
 
-    f_x = np.zeros((S, T), dtype=np.float64)
-    f_y = np.zeros((S, T), dtype=np.float64)
-    ef_x = np.zeros((S, T), dtype=np.float64)
-    ef_y = np.zeros((S, T), dtype=np.float64)
-    ef_forecast_x = np.zeros((S, T), dtype=np.float64)
-    ef_forecast_y = np.zeros((S, T), dtype=np.float64)
-    evidence_x_strict = np.zeros(T, dtype=np.float64)
-    evidence_y_strict = np.zeros(T, dtype=np.float64)
-    applicable_cohort_count = np.zeros(T, dtype=np.float64)
+    # Aggregate surfaces are small (S,T) or (T) and are the public chart/scalar
+    # authority. Keep them in float64 while retaining large per-cohort arrays in
+    # the lower runtime dtype.
+    f_x = np.zeros((S, T), dtype=np.float32)
+    f_y = np.zeros((S, T), dtype=np.float32)
+    ef_x = np.zeros((S, T), dtype=np.float32)
+    ef_y = np.zeros((S, T), dtype=np.float32)
+    ef_forecast_x = np.zeros((S, T), dtype=np.float32)
+    ef_forecast_y = np.zeros((S, T), dtype=np.float32)
+    evidence_x_strict = np.zeros(T, dtype=np.float32)
+    evidence_y_strict = np.zeros(T, dtype=np.float32)
+    applicable_cohort_count = np.zeros(T, dtype=np.float32)
     evidence_x_strict_by_anchor_tau: Dict[Any, Any] = {}
     evidence_y_strict_by_anchor_tau: Dict[Any, Any] = {}
     last_diag: Dict[str, Any] = {}
@@ -2461,13 +2464,13 @@ def build_cf_projection_bundle(
     # The reason label is the same selection ranked into a tuple.
     ad_strs = [ci['anchor_day'].isoformat() for ci in fe.cohort_list]
     n_roots = np.array(
-        [n_by_anchor.get(s, 0.0) for s in ad_strs], dtype=np.float64,
+        [n_by_anchor.get(s, 0.0) for s in ad_strs], dtype=np.float32,
     )
     tau_obs = np.array(
         [int(ci.get('tau_observed', 0)) for ci in fe.cohort_list], dtype=np.int64,
     )
     a_pop_prior = np.array(
-        [float(ec.a_pop) for ec in fe.engine_cohorts], dtype=np.float64,
+        [float(ec.a_pop) for ec in fe.engine_cohorts], dtype=np.float32,
     )
     present = n_roots > 0.0
     empty = ~present & (tau_obs < 0)
@@ -2710,8 +2713,8 @@ def build_cf_projection_bundle(
     )
 
     def _scatter_to_cohort_list(arr):
-        a = np.asarray(arr, dtype=np.float64)
-        full = np.full((_c_all,) + a.shape[1:], np.nan, dtype=np.float64)
+        a = np.asarray(arr, dtype=np.float32)
+        full = np.full((_c_all,) + a.shape[1:], np.nan, dtype=np.float32)
         if _positions.size:
             full[_positions] = a
         return full
@@ -2779,7 +2782,7 @@ def build_cf_projection_bundle(
         float(np.nanmean(_ratio[i])) if np.isfinite(_ratio[i]).any()
         else np.nan
         for i in range(_c_n)
-    ], dtype=np.float64)
+    ], dtype=np.float32)
     bundle = CFProjectionBundle(
         frame_evidence=fe,
         runtime=runtime,
@@ -3045,8 +3048,10 @@ def reduce_cf_scalars(bundle: 'CFProjectionBundle') -> CFScalarReduction:
     # beyond the FC projection horizon, the frontier lies on the terminal
     # plateau and reads the terminal column. Skipped Cohorts remain all-NaN
     # slices and drop out through the finite/weight mask below.
-    ef_rate_bc = bundle.date_axis_projection.ef_rate_draws  # (C, S, T) cohort_list order, NaN skipped
-    weights = np.asarray(bundle.cohort_weights, dtype=np.float64)  # (C,)
+    ef_rate_bc = np.asarray(  # (C, S, T) cohort_list order, NaN skipped
+        bundle.date_axis_projection.ef_rate_draws, dtype=np.float32,
+    )
+    weights = np.asarray(bundle.cohort_weights, dtype=np.float32)  # (C,)
     ea = np.asarray(eval_ages, dtype=np.int64)                    # (C,)
     cohort_count = ef_rate_bc.shape[0]
     weights_sum = weights.sum() + float(weights.sum() == 0.0)
@@ -3064,8 +3069,8 @@ def reduce_cf_scalars(bundle: 'CFProjectionBundle') -> CFScalarReduction:
     # poison the scalar and yield None only when no Cohort is defined.
     defined = np.isfinite(fc_ratio_cs) & (weights[:, None] > 0.0)  # (C, S)
     w_def = np.where(defined, weights[:, None], 0.0)               # (C, S)
-    num = np.where(defined, w_def * fc_ratio_cs, 0.0).sum(axis=0)  # (S,)
-    den = w_def.sum(axis=0)                                        # (S,)
+    num = np.where(defined, w_def * fc_ratio_cs, 0.0).sum(axis=0, dtype=np.float32)  # (S,)
+    den = w_def.sum(axis=0, dtype=np.float32)                                        # (S,)
     with np.errstate(divide='ignore', invalid='ignore'):
         fc_weighted_per_draw = np.where(den > 0.0, num / den, np.nan)  # (S,)
     _fc_any = bool(np.isfinite(fc_weighted_per_draw).any())

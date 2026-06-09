@@ -279,16 +279,16 @@ def _raw_evidence_as_unit_weight_view(
             arrival_weight=1.0,
             n_weighted=n_val,
             k_weighted=k_val,
-            arrival_weight_draws=np.ones(S, dtype=np.float64),
-            n_weighted_draws=np.full(S, n_val, dtype=np.float64),
-            k_weighted_draws=np.full(S, k_val, dtype=np.float64),
+            arrival_weight_draws=np.ones(S, dtype=np.float32),
+            n_weighted_draws=np.full(S, n_val, dtype=np.float32),
+            k_weighted_draws=np.full(S, k_val, dtype=np.float32),
             root_day_shares={observed: 1.0},
         ))
     return WeightedPrimitiveEvidenceView(
         n_weighted_total=n_total,
         k_weighted_total=k_total,
-        n_weighted_total_draws=np.full(S, n_total, dtype=np.float64),
-        k_weighted_total_draws=np.full(S, k_total, dtype=np.float64),
+        n_weighted_total_draws=np.full(S, n_total, dtype=np.float32),
+        k_weighted_total_draws=np.full(S, k_total, dtype=np.float32),
         draw_count=S,
         rows=tuple(rows),
         arrival_weight_summary={
@@ -357,12 +357,12 @@ def _build_empirical_delta_kernel_draws(
         rows_by_source_day.setdefault(row.observed_date, []).append((
             int(age),
             str(row.retrieved_at or ''),
-            np.asarray(row.k_weighted_draws, dtype=np.float64),
-            np.asarray(row.n_weighted_draws, dtype=np.float64),
+            np.asarray(row.k_weighted_draws, dtype=np.float32),
+            np.asarray(row.n_weighted_draws, dtype=np.float32),
         ))
 
-    total_k_draws = np.zeros((S, T), dtype=np.float64)
-    total_n_pool_draws = np.zeros(S, dtype=np.float64)
+    total_k_draws = np.zeros((S, T), dtype=np.float32)
+    total_n_pool_draws = np.zeros(S, dtype=np.float32)
     tau_grid = np.arange(T)
     value_by_source_day: Dict[str, np.ndarray] = {}
     cumulative_by_source_day: Dict[str, np.ndarray] = {}
@@ -387,7 +387,7 @@ def _build_empirical_delta_kernel_draws(
         # the gather produces (T, S) which we transpose to (S, T).
         ages_with_sentinel = np.concatenate(([-1], ages))
         ks_with_sentinel = np.concatenate(
-            (np.zeros((1, S), dtype=np.float64), ks_per_draw), axis=0,
+            (np.zeros((1, S), dtype=np.float32), ks_per_draw), axis=0,
         )
         insertions = np.searchsorted(ages_with_sentinel, tau_grid, side='right')
         gathered = ks_with_sentinel[insertions - 1, :]  # (T, S)
@@ -730,7 +730,7 @@ def _empirical_kernel_for_source_bucket(
     S: int,
     T: int,
 ) -> np.ndarray:
-    cumulative = np.zeros((S, T), dtype=np.float64)
+    cumulative = np.zeros((S, T), dtype=np.float32)
     for relative_offset in range(T):
         tau_out = min(int(source_index) + int(relative_offset), T - 1)
         source_day, age = evidence_readout_binding.lookup(
@@ -941,14 +941,14 @@ def _build_empirical_flat_kernel_provider(
         out_basis = primitive.output_source_basis(source_basis)
         cohort_count, S_per_cohort, _ = source_mass_3d.shape
         out_3d = np.zeros(
-            (cohort_count, S_per_cohort, T), dtype=np.float64,
+            (cohort_count, S_per_cohort, T), dtype=np.float32,
         )
         # defaultdict factory removes the per-write ``if smear is None``
         # init check; first read of an unseen ``u`` produces the zero
         # (S, T) buffer in one expression.
         smear_map: Dict[int, np.ndarray] = defaultdict(
             lambda: np.zeros(
-                (cohort_count * S_per_cohort, T), dtype=np.float64,
+                (cohort_count * S_per_cohort, T), dtype=np.float32,
             ),
         )
         active = np.flatnonzero(
@@ -963,7 +963,7 @@ def _build_empirical_flat_kernel_provider(
         # Zero-cumulative fallback for source-days the primitive has no
         # evidence for. ``(s_eff, 1)`` is the minimum width that supports
         # the forward-fill slice algebra below without a None check.
-        _zero_cum = np.zeros((s_eff, 1), dtype=np.float64)
+        _zero_cum = np.zeros((s_eff, 1), dtype=np.float32)
         # Cubic-spline read_offset is determined by the primitive +
         # source_basis combination ONCE per (edge, basis) call. The
         # precomputed kernel cache is consultable only when the cubic
@@ -1042,7 +1042,7 @@ def _build_empirical_flat_kernel_provider(
                 # holds the kernel; tail past ``actual`` stays zero
                 # (algebraically the saturated transition's zero tail).
                 copy_width = min(int(precomputed.shape[1]), required)
-                kernel_full = np.zeros((s_eff, required), dtype=np.float64)
+                kernel_full = np.zeros((s_eff, required), dtype=np.float32)
                 kernel_full[:, :copy_width] = precomputed[:s_eff, :copy_width]
                 _apply_kernel_to_consumers(g, kernel_full)
                 n_cache_hits += 1
@@ -1128,7 +1128,7 @@ def _build_empirical_flat_kernel_provider(
                     chunk_groups = width_groups[chunk_start:chunk_end]
                     chunk_count = len(chunk_groups)
                     chunk_cum = np.zeros(
-                        (chunk_count, s_eff, cum_W), dtype=np.float64,
+                        (chunk_count, s_eff, cum_W), dtype=np.float32,
                     )
                     for local_idx, g in enumerate(chunk_groups):
                         source_day, age_start = group_keys[g]
@@ -1228,9 +1228,9 @@ def _run_empirical_lookup_bound_trace(
 
     topo = span.topology
     node_density: Dict[str, np.ndarray] = {
-        node: np.zeros((S, T), dtype=np.float64) for node in topo.on_path
+        node: np.zeros((S, T), dtype=np.float32) for node in topo.on_path
     }
-    node_density[topo.x_node_id] = np.asarray(root_seed, dtype=np.float64).copy()
+    node_density[topo.x_node_id] = np.asarray(root_seed, dtype=np.float32).copy()
     edge_contribution_by_edge_source: Dict[str, Dict[int, np.ndarray]] = {}
     # Canonical per-edge basis provenance + per-provenance mass. The
     # lookup-bound trace fixes ``source_basis = POINT_AT_ENDPOINT`` at
@@ -1258,7 +1258,7 @@ def _run_empirical_lookup_bound_trace(
     for node in topo.topo_order:
         for ce in topo.incoming_concrete_edges.get(node, ()):
             source_density = node_density[ce.from_id]
-            cumulative_contribution = np.zeros((S, T), dtype=np.float64)
+            cumulative_contribution = np.zeros((S, T), dtype=np.float32)
             edge_source_map: Dict[int, np.ndarray] = {}
             source_indices = np.flatnonzero(np.any(source_density != 0.0, axis=0))
             for source_index_raw in source_indices:
@@ -1275,7 +1275,7 @@ def _run_empirical_lookup_bound_trace(
                     T=T,
                 )
                 remaining = T - source_index
-                source_chunk = np.zeros((S, T), dtype=np.float64)
+                source_chunk = np.zeros((S, T), dtype=np.float32)
                 source_chunk[:, source_index:] = (
                     source_mass[:, None] * kernel[:, :remaining]
                 )
@@ -1341,7 +1341,7 @@ def _bound_age_cumulative_rate(
     through the same arithmetic.
     """
     cumulative = primitive.value_cumulative_by_source_day.get(
-        source_day, np.zeros((S, 1), dtype=np.float64),
+        source_day, np.zeros((S, 1), dtype=np.float32),
     )
     age_idx = min(max(int(age), 0), cumulative.shape[1] - 1)
     return cumulative[:, age_idx] * float(age >= 0)

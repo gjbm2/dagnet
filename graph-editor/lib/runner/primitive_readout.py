@@ -204,7 +204,7 @@ def _window_identity_arrival_weights(
         weights[cur.isoformat()] = 1.0
         cur = cur + _timedelta(days=1)
     weights_draws: Dict[str, np.ndarray] = {
-        day: np.full(int(draw_count), float(weight), dtype=np.float64)
+        day: np.full(int(draw_count), float(weight), dtype=np.float32)
         for day, weight in weights.items()
     }
     return NodeArrivalWeights(

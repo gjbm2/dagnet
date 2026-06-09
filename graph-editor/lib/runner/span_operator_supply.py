@@ -26,7 +26,7 @@ def delay_operator(
     *,
     family: str,
 ) -> SpanOperator:
-    increment_values = np.asarray(increments, dtype=float).reshape(1, -1)
+    increment_values = np.asarray(increments, dtype=np.float32).reshape(1, -1)
     return SpanOperator(
         name=name,
         value=increment_values,
@@ -39,7 +39,7 @@ class PrimitiveDrawSurface:
     """Per-edge per-draw kernel inputs for the operator supply."""
     edge_id: str
     p_draws: np.ndarray
-    conditional_cdf_draws: np.ndarray = field(default_factory=lambda: np.empty((0, 0), dtype=float))
+    conditional_cdf_draws: np.ndarray = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
     timing_family: str = "latent"
     deterministic_shift_days: int = 0
 
@@ -66,7 +66,7 @@ def _primitive_kernels(
             family="primitive_model_draw_deterministic",
         ).value[0]
 
-    cdf_values = np.asarray(cdf, dtype=float)
+    cdf_values = np.asarray(cdf, dtype=np.float32)
     return cumulative_empirical_rate_to_transition(
         "latent",
         cdf_values,
@@ -75,8 +75,8 @@ def _primitive_kernels(
 
 
 def draw_model_primitive_operators(primitive: PrimitiveDrawSurface) -> tuple[SpanOperator, ...]:
-    p_draws = np.asarray(primitive.p_draws, dtype=float)
-    cdfs = np.asarray(primitive.conditional_cdf_draws, dtype=float)
+    p_draws = np.asarray(primitive.p_draws, dtype=np.float32)
+    cdfs = np.asarray(primitive.conditional_cdf_draws, dtype=np.float32)
     has_cdf = primitive.timing_family == "latent"
     operators = []
     for draw_index, probability in enumerate(p_draws):

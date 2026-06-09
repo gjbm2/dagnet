@@ -39,6 +39,9 @@ from runner.cohort_forecast_v3 import (  # noqa: E402
 from test_cf_projection_bundle import _build_bundle  # noqa: E402
 
 
+FORECAST_SCALAR_TOL = 1e-6
+
+
 class TestScalarReducerShape:
 
     def test_returns_cf_scalar_reduction(self):
@@ -60,10 +63,10 @@ class TestScalarReducerShape:
         max_tau_idx = int(bundle.max_tau)
         ef_rate_at_sat = sp.ef_rate_draws[:, max_tau_idx]
         assert out.fc_terminal_rate_mean == pytest.approx(
-            float(np.nanmean(ef_rate_at_sat)), abs=1e-12,
+            float(np.nanmean(ef_rate_at_sat)), abs=FORECAST_SCALAR_TOL,
         )
         assert out.fc_terminal_rate_sd_predictive == pytest.approx(
-            float(np.nanstd(ef_rate_at_sat)), abs=1e-12,
+            float(np.nanstd(ef_rate_at_sat)), abs=FORECAST_SCALAR_TOL,
         )
 
     def test_completeness_scalars_are_finite_and_in_unit_interval(self):
@@ -160,10 +163,10 @@ class TestScalarReducerCalcScope:
         per_draw = (weights_admitted[:, None] * ratio_cs).sum(axis=0) / weights_admitted.sum()
         out = reduce_cf_scalars(bundle)
         assert out.fc_frontier_to_terminal_rate_ratio_mean == pytest.approx(
-            float(np.nanmean(per_draw)), abs=1e-12,
+            float(np.nanmean(per_draw)), abs=FORECAST_SCALAR_TOL,
         )
         assert out.fc_frontier_to_terminal_rate_ratio_sd_predictive == pytest.approx(
-            float(np.nanstd(per_draw)), abs=1e-12,
+            float(np.nanstd(per_draw)), abs=FORECAST_SCALAR_TOL,
         )
 
     def test_calc_horizon_independent_of_max_tau(self):
@@ -240,10 +243,10 @@ class TestScalarReducerGaugeSurface:
         out = reduce_cf_scalars(bundle)
         overlay = bundle.runtime.unconditioned_overlays['epistemic']
         assert out.unconditioned_terminal_rate_mean_epistemic == pytest.approx(
-            float(overlay.subject.span_p_mean), abs=1e-12,
+            float(overlay.subject.span_p_mean), abs=FORECAST_SCALAR_TOL,
         )
         assert out.unconditioned_terminal_rate_sd_epistemic == pytest.approx(
-            float(overlay.subject.span_p_sd), abs=1e-12,
+            float(overlay.subject.span_p_sd), abs=FORECAST_SCALAR_TOL,
         )
 
     def test_fc_progress_ratio_is_single_named_quantity(self):
@@ -291,10 +294,10 @@ class TestScalarReducerGaugeSurface:
             weights_admitted[None, :] * ratio_sc
         ).sum(axis=1) / weights_admitted.sum()
         assert out.unconditioned_frontier_to_terminal_cdf_ratio_mean == pytest.approx(
-            float(np.nanmean(per_draw)), abs=1e-12,
+            float(np.nanmean(per_draw)), abs=FORECAST_SCALAR_TOL,
         )
         assert out.unconditioned_frontier_to_terminal_cdf_ratio_sd_epistemic == pytest.approx(
-            float(np.nanstd(per_draw)), abs=1e-12,
+            float(np.nanstd(per_draw)), abs=FORECAST_SCALAR_TOL,
         )
 
     def test_completeness_pairs_are_finite_and_in_unit_interval(self):
@@ -403,10 +406,10 @@ class TestScalarFrontierBeyondHorizon:
             np.nan,
         )
         assert out.fc_frontier_to_terminal_rate_ratio_mean == pytest.approx(
-            float(np.nanmean(per_draw)), abs=1e-12,
+            float(np.nanmean(per_draw)), abs=FORECAST_SCALAR_TOL,
         )
         assert out.fc_frontier_to_terminal_rate_ratio_sd_predictive == pytest.approx(
-            float(np.nanstd(per_draw)), abs=1e-12,
+            float(np.nanstd(per_draw)), abs=FORECAST_SCALAR_TOL,
         )
 
     def test_all_cohorts_beyond_horizon_are_complete_not_none(self):
@@ -417,5 +420,5 @@ class TestScalarFrontierBeyondHorizon:
 
         out = reduce_cf_scalars(perturbed)
 
-        assert out.fc_frontier_to_terminal_rate_ratio_mean == pytest.approx(1.0, abs=1e-12)
-        assert out.fc_frontier_to_terminal_rate_ratio_sd_predictive == pytest.approx(0.0, abs=1e-12)
+        assert out.fc_frontier_to_terminal_rate_ratio_mean == pytest.approx(1.0, abs=FORECAST_SCALAR_TOL)
+        assert out.fc_frontier_to_terminal_rate_ratio_sd_predictive == pytest.approx(0.0, abs=FORECAST_SCALAR_TOL)

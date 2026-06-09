@@ -294,7 +294,7 @@ class ComposedPrimitiveSpan:
         on-path nodes with no arrivals degenerate to the empty sum.
         """
         T = int(self.max_tau) + 1
-        out = np.zeros((int(self.draw_count), T), dtype=np.float64)
+        out = np.zeros((int(self.draw_count), T), dtype=np.float32)
         for arrival_col, col_mass in self.node_density_by_node_bucket[node_id].items():
             out[:, int(arrival_col)] += col_mass
         return out
@@ -307,7 +307,7 @@ class ComposedPrimitiveSpan:
         the empty sum.
         """
         T = int(self.max_tau) + 1
-        out = np.zeros((int(self.draw_count), T), dtype=np.float64)
+        out = np.zeros((int(self.draw_count), T), dtype=np.float32)
         for smear in self.edge_contribution_by_edge_source[edge_key].values():
             out += smear
         return out
@@ -474,7 +474,7 @@ def _compose_draws(
         p_draws = primitive.probability_draws()
         p_draws_by_edge[edge_key] = p_draws
 
-        timing_kernel = np.zeros((S, T), dtype=np.float64)
+        timing_kernel = np.zeros((S, T), dtype=np.float32)
         if primitive.timing_family == TimingFamily.NON_LATENT:
             timing_kernel[:, 0] = 1.0
         elif primitive.timing_family == TimingFamily.DETERMINISTIC:
@@ -498,7 +498,7 @@ def _compose_draws(
 
         value_kernels_by_edge[edge_key] = timing_kernel * p_draws[:, None]
 
-    span_p_draws = np.zeros(S, dtype=np.float64)
+    span_p_draws = np.zeros(S, dtype=np.float32)
     # Per-draw expected reach decouples the asymptotic span probability
     # from the finite horizon T. Sibling edges with the same endpoint pair
     # contribute additively (the cohort's reach at V is the sum of
@@ -860,12 +860,12 @@ def _conditioned_kernel_maps(
         p_draws = primitive.probability_draws()
 
         if primitive.timing_family == TimingFamily.NON_LATENT:
-            endpoint_timing_kernel = np.zeros((S, T), dtype=np.float64)
+            endpoint_timing_kernel = np.zeros((S, T), dtype=np.float32)
             endpoint_timing_kernel[:, 0] = 1.0
             bucket_timing_kernel = endpoint_timing_kernel
         elif primitive.timing_family == TimingFamily.DETERMINISTIC:
             shift = primitive.timing_posterior.deterministic_shift_days
-            endpoint_timing_kernel = np.zeros((S, T), dtype=np.float64)
+            endpoint_timing_kernel = np.zeros((S, T), dtype=np.float32)
             endpoint_timing_kernel[:, min(int(shift), max_tau)] = 1.0
             bucket_timing_kernel = endpoint_timing_kernel
         else:

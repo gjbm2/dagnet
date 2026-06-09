@@ -108,10 +108,10 @@ def sample_timing_particles_from_params(
     ``(S,)``.
     """
     timing_rng = make_rng(draw_family_key, 'primitive_timing_draws')
-    means = np.array([float(mu), float(sigma), float(onset)], dtype=np.float64)
+    means = np.array([float(mu), float(sigma), float(onset)], dtype=np.float32)
     sds = np.array(
         [float(mu_sd), float(sigma_sd), float(onset_sd)],
-        dtype=np.float64,
+        dtype=np.float32,
     )
     cov = np.diag(sds ** 2)
     cov[2, 0] = cov[0, 2] = float(onset_mu_corr) * sds[2] * sds[0]
@@ -232,17 +232,17 @@ def build_endpoint_lognormal_cdf_from_draws(
     horizon_len: int,
 ) -> np.ndarray:
     """Evaluate shifted log-normal CDF at integer endpoints per draw."""
-    sigma_arr = np.asarray(sigma_draws, dtype=np.float64)
+    sigma_arr = np.asarray(sigma_draws, dtype=np.float32)
     if np.any(sigma_arr <= 0.0):
         raise ValueError('endpoint lognormal CDF requires sigma > 0')
 
-    mu_arr = np.asarray(mu_draws, dtype=np.float64)[:, None]
-    onset_arr = np.asarray(onset_draws, dtype=np.float64)[:, None]
+    mu_arr = np.asarray(mu_draws, dtype=np.float32)[:, None]
+    onset_arr = np.asarray(onset_draws, dtype=np.float32)[:, None]
     sigma_grid = sigma_arr[:, None]
-    age_grid = np.arange(int(horizon_len), dtype=np.float64)[None, :]
+    age_grid = np.arange(int(horizon_len), dtype=np.float32)[None, :]
     model_age = age_grid - onset_arr
 
-    cdf_values = np.zeros_like(model_age, dtype=np.float64)
+    cdf_values = np.zeros_like(model_age, dtype=np.float32)
     positive = model_age > 0.0
     mu_b = np.broadcast_to(mu_arr, model_age.shape)
     sigma_b = np.broadcast_to(sigma_grid, model_age.shape)
@@ -267,23 +267,23 @@ def build_row_aligned_lognormal_cdf_from_draws(
     ``[0, horizon_len)``. Gaussian-Legendre quadrature keeps the
     implementation family-agnostic while making the contract explicit.
     """
-    sigma_arr = np.asarray(sigma_draws, dtype=np.float64)
+    sigma_arr = np.asarray(sigma_draws, dtype=np.float32)
     if np.any(sigma_arr <= 0.0):
         raise ValueError('row-aligned lognormal CDF requires sigma > 0')
 
-    mu_arr = np.asarray(mu_draws, dtype=np.float64)[:, None, None]
-    onset_arr = np.asarray(onset_draws, dtype=np.float64)[:, None, None]
+    mu_arr = np.asarray(mu_draws, dtype=np.float32)[:, None, None]
+    onset_arr = np.asarray(onset_draws, dtype=np.float32)[:, None, None]
     sigma_grid = sigma_arr[:, None, None]
     T = int(horizon_len)
 
     nodes, weights = np.polynomial.legendre.leggauss(int(quadrature_order))
     offsets = 0.5 * (nodes + 1.0)
     scaled_weights = 0.5 * weights
-    tau_grid = np.arange(T, dtype=np.float64)[None, :, None]
+    tau_grid = np.arange(T, dtype=np.float32)[None, :, None]
     sample_age = tau_grid + offsets[None, None, :]
     model_age = sample_age - onset_arr
 
-    cdf_values = np.zeros_like(model_age, dtype=np.float64)
+    cdf_values = np.zeros_like(model_age, dtype=np.float32)
     positive = model_age > 0.0
     mu_b = np.broadcast_to(mu_arr, model_age.shape)
     sigma_b = np.broadcast_to(sigma_grid, model_age.shape)

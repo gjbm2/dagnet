@@ -45,7 +45,7 @@ def endpoint_cdf_to_transition(
 ) -> BucketTransition:
     """Convert endpoint-labelled cumulative values to transition mass."""
 
-    cdf = np.asarray(endpoint_cdf, dtype=np.float64)
+    cdf = np.asarray(endpoint_cdf, dtype=np.float32)
     value = float(probability) * np.diff(cdf, prepend=0.0, axis=-1)
     return BucketTransition(
         name=name,
@@ -81,7 +81,7 @@ def cdf_to_bucket_transition(
     produced. ``None`` (the default) emits full width.
     """
 
-    cdf = np.atleast_2d(np.asarray(cumulative, dtype=np.float64))
+    cdf = np.atleast_2d(np.asarray(cumulative, dtype=np.float32))
     T_in = int(cdf.shape[1])
     W = T_in if output_width is None else min(int(output_width), T_in)
 
@@ -110,7 +110,7 @@ def cdf_to_bucket_transition(
 
     def lookup(age_idx: int) -> np.ndarray:
         if age_idx < 0:
-            return np.zeros(cdf.shape[0], dtype=np.float64)
+            return np.zeros(cdf.shape[0], dtype=np.float32)
         if age_idx >= cdf.shape[1]:
             return cdf[:, -1]
         return cdf[:, age_idx]
@@ -130,7 +130,7 @@ def cdf_to_bucket_transition(
             return (1.0 - frac) * lookup(floor_idx) + frac * lookup(floor_idx + 1)
         raise ValueError(f"unknown bucket interpolation {interpolation!r}")
 
-    shifted = np.zeros((cdf.shape[0], W), dtype=np.float64)
+    shifted = np.zeros((cdf.shape[0], W), dtype=np.float32)
     for tau in range(W):
         shifted[:, tau] = read_fractional(float(tau) + float(read_offset))
     value = float(probability) * np.diff(shifted, prepend=0.0, axis=1)
@@ -147,7 +147,7 @@ def cdf_to_bucket_transition(
     scale = np.divide(
         terminal,
         row_sum,
-        out=np.ones_like(terminal, dtype=np.float64),
+        out=np.ones_like(terminal, dtype=np.float32),
         where=row_sum != 0.0,
     )
     value = value * scale[:, None]
@@ -188,7 +188,7 @@ def empirical_read_offset_for_basis(source_basis: BucketSourceBasis) -> float:
 def _monotone_cubic_read(cdf: np.ndarray, age: float) -> np.ndarray:
     """Shape-preserving cubic Hermite read for monotone cumulative rows."""
     if age < 0.0:
-        return np.zeros(cdf.shape[0], dtype=np.float64)
+        return np.zeros(cdf.shape[0], dtype=np.float32)
     max_idx = cdf.shape[1] - 1
     if age == 0.0:
         return cdf[:, 0]
@@ -222,7 +222,7 @@ def _monotone_slope(left_delta: np.ndarray, right_delta: np.ndarray) -> np.ndarr
     harmonic = np.divide(
         2.0 * left_delta * right_delta,
         left_delta + right_delta,
-        out=np.zeros_like(left_delta, dtype=np.float64),
+        out=np.zeros_like(left_delta, dtype=np.float32),
         where=(left_delta + right_delta) != 0.0,
     )
     return np.where(same_sign, harmonic, 0.0)
@@ -258,7 +258,7 @@ def _monotone_cubic_read_shifted(
     rows, T = cdf.shape
     W = T if output_width is None else min(int(output_width), T)
     if W <= 0:
-        return np.empty((rows, 0), dtype=np.float64)
+        return np.empty((rows, 0), dtype=np.float32)
     if T <= 1:
         return np.broadcast_to(cdf[:, -1:], (rows, W)).copy()
 
@@ -293,7 +293,7 @@ def _monotone_cubic_read_shifted(
     if cubic_count == 0:
         # W == 1 and T == 1: handled above; W == T == 1 too. Reach here
         # only when W == T == 1, which the T <= 1 short-circuit caught.
-        shifted = np.empty((rows, W), dtype=np.float64)
+        shifted = np.empty((rows, W), dtype=np.float32)
         shifted[:, -1] = cdf[:, -1]
         return shifted
 
@@ -340,7 +340,7 @@ def _monotone_cubic_read_shifted(
     hi = np.maximum(y0, y1)
     value = np.minimum(np.maximum(value, lo), hi)
 
-    shifted = np.empty((rows, W), dtype=np.float64)
+    shifted = np.empty((rows, W), dtype=np.float32)
     shifted[:, :cubic_count] = value
     if W == T:
         # Clamp τ = T − 1 to the cumulative asymptote — preserves the
@@ -401,7 +401,7 @@ def dirac_transition(
 ) -> BucketTransition:
     """Construct an exact degenerate transition at integer lag."""
 
-    value = np.zeros((1, int(lag) + 1), dtype=np.float64)
+    value = np.zeros((1, int(lag) + 1), dtype=np.float32)
     value[0, int(lag)] = float(probability)
     return BucketTransition(name=name, value=value, family=family)
 
@@ -411,6 +411,6 @@ def to_span_operator(transition: BucketTransition) -> SpanOperator:
 
     return SpanOperator(
         name=transition.name,
-        value=np.asarray(transition.value, dtype=float),
+        value=np.asarray(transition.value, dtype=np.float32),
         family=transition.family,
     )

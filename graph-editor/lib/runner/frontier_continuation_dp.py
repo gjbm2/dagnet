@@ -92,7 +92,7 @@ class ContinuationDPResult:
     def node_density(self, node: str) -> np.ndarray:
         out = np.zeros(
             (int(self.draw_count), int(self.horizon_len)),
-            dtype=np.float64,
+            dtype=np.float32,
         )
         for arrival_col, basis_map in self.node_density_by_node_bucket[node].items():
             for col_mass in basis_map.values():
@@ -127,7 +127,7 @@ def _basis_keyed_ledger_to_provenance(
             for basis, mass in basis_map.items():
                 basis_int = int(basis)
                 prov_key = f'frontier@{basis_int}'
-                prov_mass[prov_key] = np.asarray(mass, dtype=np.float64).copy()
+                prov_mass[prov_key] = np.asarray(mass, dtype=np.float32).copy()
                 prov_basis[prov_key] = basis_int
             node_mass[bucket_int] = prov_mass
             node_basis[bucket_int] = prov_basis

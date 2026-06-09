@@ -74,7 +74,7 @@ def compute_confidence_band(
     Returns:
         (upper, lower, median): lists of rate values at each age, within [0, 1].
     """
-    ages_arr = np.asarray(ages, dtype=float)
+    ages_arr = np.asarray(ages, dtype=np.float32)
     T = len(ages_arr)
 
     # If no uncertainty, return the point estimate

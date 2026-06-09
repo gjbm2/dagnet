@@ -855,23 +855,23 @@ def _compose_unconditioned_overlays(
 _MODEL_CURVE_ROOT_MASS = RuntimeRootMass(
     cohort_ids=("model-curve",),
     root_days=np.asarray([0], dtype=int),
-    root_counts=np.asarray([1.0], dtype=float),
-    root_weights=np.asarray([1.0], dtype=float),
+    root_counts=np.asarray([1.0], dtype=np.float32),
+    root_weights=np.asarray([1.0], dtype=np.float32),
 )
 
 
 _REQUEST_ROOT_MASS = RuntimeRootMass(
     cohort_ids=("request",),
     root_days=np.asarray([0], dtype=int),
-    root_counts=np.asarray([1.0], dtype=float),
-    root_weights=np.asarray([1.0], dtype=float),
+    root_counts=np.asarray([1.0], dtype=np.float32),
+    root_weights=np.asarray([1.0], dtype=np.float32),
 )
 
 
 def _pad_draw_cdfs(draw_cdfs: np.ndarray, horizon_len: int) -> np.ndarray:
     """Pad per-draw CDFs to ``horizon_len`` columns by repeating the
     saturating tail value. Truncate when longer."""
-    values = np.asarray(draw_cdfs, dtype=float)
+    values = np.asarray(draw_cdfs, dtype=np.float32)
     if values.shape[1] >= int(horizon_len):
         return values[:, : int(horizon_len)]
     last = values[:, -1:]
@@ -906,7 +906,7 @@ def build_per_draw_chain(
     probability into the CDF shape (request-CDF emission).
     """
     if reach_draws is None:
-        reach_draws = np.asarray(span.span_p_draws, dtype=float)
+        reach_draws = np.asarray(span.span_p_draws, dtype=np.float32)
     cdf_padded = _pad_draw_cdfs(span.cdf_draws, days)
     value = np.diff(cdf_padded, prepend=0.0, axis=1) * reach_draws[:, None]
     return tuple(
@@ -960,7 +960,7 @@ def _evaluate_chain_at_root_zero_per_draw(
     against the cohort-singleton row axis. Returns ``(S, max_tau + 1)``
     cumulative arrival values picked at ``τ ∈ [0, max_tau]``.
     """
-    ledger = np.zeros((S, days), dtype=float)
+    ledger = np.zeros((S, days), dtype=np.float32)
     ledger[:, 0] = root_mass
     for kernel in kernels:
         kernel_length = kernel.shape[1]
@@ -1047,7 +1047,7 @@ def evaluate_request_cdf_draws(
     """
     horizon_len = int(horizon) + 1
     S = int(subject.cdf_draws.shape[0])
-    unit_p = np.ones(S, dtype=float)
+    unit_p = np.ones(S, dtype=np.float32)
     subject_chain = build_per_draw_chain(
         subject, S=S, days=horizon_len,
         edge_id="strict-span-request-subject", reach_draws=unit_p,
@@ -1165,7 +1165,7 @@ def _summarise_empirical_span(span: ComposedPrimitiveSpan) -> Mapping[str, Any]:
     primitives = []
     for ce, primitive in span.empirical_edge_primitives:
         source_days = sorted(primitive.value_kernel_draws_by_source_day.keys())
-        saturation = np.asarray(primitive.saturation_per_draw, dtype=float)
+        saturation = np.asarray(primitive.saturation_per_draw, dtype=np.float32)
         raw_by_day: Dict[str, Dict[str, float]] = {}
         for point in primitive.resolution.raw_evidence_set.points:
             day = str(point.candidate.coordinate.observed_date)[:10]
@@ -1252,9 +1252,9 @@ def _summarise_empirical_span(span: ComposedPrimitiveSpan) -> Mapping[str, Any]:
 
 def _summarise_density_trace(trace: Any) -> Mapping[str, Any]:
     def _surface_summary(surface: np.ndarray) -> Mapping[str, Any]:
-        arr = np.asarray(surface, dtype=float)
+        arr = np.asarray(surface, dtype=np.float32)
         cumulative = np.cumsum(arr, axis=1) if arr.size else arr
-        final = cumulative[:, -1] if cumulative.size else np.asarray([], dtype=float)
+        final = cumulative[:, -1] if cumulative.size else np.asarray([], dtype=np.float32)
         active_columns = (
             np.flatnonzero(np.any(np.abs(arr) > 0.0, axis=0)).astype(int).tolist()
             if arr.ndim == 2 else []
@@ -1469,7 +1469,7 @@ def build_frontier_occupancy(
         for bucket, arrivals_flat in node_density_by_bucket.items():
             u = int(bucket)
             arrivals_cd = np.asarray(
-                arrivals_flat, dtype=np.float64,
+                arrivals_flat, dtype=np.float32,
             ).reshape(cohort_count, draw_count)
 
             # Empirical departures from (U, u) by each Cohort's
@@ -1481,7 +1481,7 @@ def build_frontier_occupancy(
             # departures to-date through that edge. Sum across all
             # on-path outgoing edges to get total departures.
             total_dep_cd = np.zeros(
-                (cohort_count, draw_count), dtype=np.float64,
+                (cohort_count, draw_count), dtype=np.float32,
             )
             for ce in outgoing_edges:
                 edge_src_map = trace.edge_contribution_by_edge_source[ce.edge_key]
@@ -1492,7 +1492,7 @@ def build_frontier_occupancy(
                     # invoked.
                     continue
                 edge_smear = np.asarray(
-                    edge_src_map[u], dtype=np.float64,
+                    edge_src_map[u], dtype=np.float32,
                 ).reshape(cohort_count, draw_count, T)
                 cum_dep_cdT = np.cumsum(edge_smear, axis=-1)
                 total_dep_cd = total_dep_cd + _cumulative_at_frontier(
@@ -1505,7 +1505,7 @@ def build_frontier_occupancy(
             # the cohort has not yet reached the row age where this
             # bucket's arrivals show up, so occupancy must be zero.
             # Multiplicative gate, no branch.
-            bucket_visible_c = (u <= f_by_cohort_arr).astype(np.float64)
+            bucket_visible_c = (u <= f_by_cohort_arr).astype(np.float32)
             unresolved_cd = (
                 (arrivals_cd - total_dep_cd) * bucket_visible_c[:, None]
             )
@@ -1551,10 +1551,10 @@ def build_frontier_occupancy(
     # sum to the zero accumulator by the additive identity of an
     # empty for-loop.
     root_arrivals = trace.node_density_by_node_bucket[topology.x_node_id]
-    root_total_flat = np.zeros(S_total, dtype=np.float64)
+    root_total_flat = np.zeros(S_total, dtype=np.float32)
     for bucket_mass in root_arrivals.values():
         root_total_flat = root_total_flat + np.asarray(
-            bucket_mass, dtype=np.float64,
+            bucket_mass, dtype=np.float32,
         )
     root_total = root_total_flat.reshape(cohort_count, draw_count)
 
@@ -1856,7 +1856,7 @@ def _project_frontier_continuation_surfaces(
     # BUCKET_DISTRIBUTED — matches the empirical root-deposit convention.
     carrier_root = carrier_topology.x_node_id
     population_seed_cdT = np.asarray(
-        population_seed, dtype=np.float64,
+        population_seed, dtype=np.float32,
     ).reshape(cohort_count, draw_count, T)
     col_idx_T = np.arange(T)
     post_frontier_mask_cT = col_idx_T[None, :] > f_by_cohort_arr[:, None]
@@ -2006,8 +2006,8 @@ def _project_frontier_continuation_surfaces(
     ef_x_cdT = strict_carried_x_cdT + future_x_cont_cdT
     ef_y_cdT = strict_carried_y_cdT + future_y_cont_cdT
 
-    ef_x_draws = ef_x_cdT.sum(axis=0)
-    ef_y_draws = ef_y_cdT.sum(axis=0)
+    ef_x_draws = ef_x_cdT.sum(axis=0, dtype=np.float32)
+    ef_y_draws = ef_y_cdT.sum(axis=0, dtype=np.float32)
     with np.errstate(divide='ignore', invalid='ignore'):
         ef_rate_draws = ef_y_draws / ef_x_draws  # 0/0 → NaN visibly
         # Per-Cohort rate (73q Phase 2): same NaN-on-0/0 policy, not
@@ -2021,8 +2021,8 @@ def _project_frontier_continuation_surfaces(
     # cumulant for τ > f_c. This is the algebraic future-only piece
     # carried out of the continuation DP from the per-cohort frontier
     # boundary, not a difference against a moving strict-evidence curve.
-    ef_forecast_x = future_x_cont_cdT.sum(axis=0)
-    ef_forecast_y = future_y_cont_cdT.sum(axis=0)
+    ef_forecast_x = future_x_cont_cdT.sum(axis=0, dtype=np.float32)
+    ef_forecast_y = future_y_cont_cdT.sum(axis=0, dtype=np.float32)
 
     return {
         'ef_x_draws': ef_x_draws,
@@ -2077,7 +2077,7 @@ def _origin_day_for_anchor(anchor_day: Any) -> date:
 #                 float(row.n),
 #             )
 #
-#     seed = np.zeros((len(selected_cohorts) * S, T), dtype=np.float64)
+#     seed = np.zeros((len(selected_cohorts) * S, T), dtype=np.float32)
 #     for cohort_idx, cohort in enumerate(selected_cohorts):
 #         anchor_day = str(cohort['anchor_day'])[:10]
 #         seed[cohort_idx * S:(cohort_idx + 1) * S, 0] = (
@@ -2142,8 +2142,8 @@ def project_selected_cohort_rows(
     #
     # For observed cohorts ``N_anchor = N_pop = n_root`` so the two
     # seeds are numerically identical and behaviour is unchanged.
-    empirical_seed_flat = np.zeros((cohort_count * S, T), dtype=np.float64)
-    population_seed_flat = np.zeros((cohort_count * S, T), dtype=np.float64)
+    empirical_seed_flat = np.zeros((cohort_count * S, T), dtype=np.float32)
+    population_seed_flat = np.zeros((cohort_count * S, T), dtype=np.float32)
     tau_max_by_anchor: list[int] = []
     tau_observed_by_anchor: list[int] = []
     for cohort_idx, cohort in enumerate(selected_cohorts):
@@ -2278,8 +2278,12 @@ def project_selected_cohort_rows(
     # surfaces. F mode answers "what does the conditioned model predict
     # for this selected Cohort set, end-to-end" — without inheriting
     # each Cohort's observed prefix.
-    f_x_draws = x_model_by_anchor.sum(axis=0)
-    f_y_draws = y_model_by_anchor.sum(axis=0)
+    # Public aggregate surfaces are small (S,T) relative to the retained
+    # per-cohort tensors. Keep the final reductions in float64 so chunking and
+    # full projection differ only by intentional summation order, not storage
+    # precision.
+    f_x_draws = x_model_by_anchor.sum(axis=0, dtype=np.float32)
+    f_y_draws = y_model_by_anchor.sum(axis=0, dtype=np.float32)
     f_rate_draws = np.divide(
         f_y_draws, f_x_draws,
         out=np.zeros_like(f_y_draws),
@@ -2290,9 +2294,9 @@ def project_selected_cohort_rows(
 
     evidence_x_strict_by_anchor_tau: Dict[Any, np.ndarray] = {}
     evidence_y_strict_by_anchor_tau: Dict[Any, np.ndarray] = {}
-    evidence_x_strict = np.zeros(T, dtype=np.float64)
-    evidence_y_strict = np.zeros(T, dtype=np.float64)
-    applicable = np.zeros((cohort_count, T), dtype=np.float64)
+    evidence_x_strict = np.zeros(T, dtype=np.float32)
+    evidence_y_strict = np.zeros(T, dtype=np.float32)
+    applicable = np.zeros((cohort_count, T), dtype=np.float32)
     # Ordered strict-evidence arrays aligned to selected-Cohort order
     # (73q Phase 2) — same per-Cohort data as the anchor-keyed maps, in
     # the order the date reducer iterates Cohorts.
@@ -2333,10 +2337,10 @@ def project_selected_cohort_rows(
         evidence_x_strict += strict_x_a[clamped]
         evidence_y_strict += strict_y_a[clamped]
 
-    applicable_cohort_count = applicable.sum(axis=0)
+    applicable_cohort_count = applicable.sum(axis=0, dtype=np.float32)
     applicability_row = (
         applicable_cohort_count / float(cohort_count)
-        if cohort_count > 0 else np.zeros(T, dtype=np.float64)
+        if cohort_count > 0 else np.zeros(T, dtype=np.float32)
     )
 
     rate_strict = np.divide(
@@ -2391,10 +2395,10 @@ def project_selected_cohort_rows(
         # Branchless (C, T) stack: a list of (T,) arrays → (C, T); the
         # empty selected-cohort case → (0, T) via reshape, no guard.
         evidence_x_strict_by_cohort=np.asarray(
-            strict_x_by_cohort_list, dtype=np.float64,
+            strict_x_by_cohort_list, dtype=np.float32,
         ).reshape(len(strict_x_by_cohort_list), T),
         evidence_y_strict_by_cohort=np.asarray(
-            strict_y_by_cohort_list, dtype=np.float64,
+            strict_y_by_cohort_list, dtype=np.float32,
         ).reshape(len(strict_y_by_cohort_list), T),
         diagnostics={
             'cohort_count': cohort_count,

@@ -110,7 +110,7 @@ def compose_timing_span_from_densities(
 
     T = max_tau + 1
     aligned: Dict[Tuple[str, str], np.ndarray] = {
-        key: np.asarray(density, dtype=np.float64) for key, density in densities.items()
+        key: np.asarray(density, dtype=np.float32) for key, density in densities.items()
     }
 
     density_cdf = _run_dp_density_grid(topo, aligned, T)
@@ -160,7 +160,7 @@ def _build_transition_primitive_edge_data(
     str,  # transition_source
 ]:
     """Walk topology edges, build per-edge density + parameter dicts."""
-    tau_grid = np.arange(max_tau + 1, dtype=float)
+    tau_grid = np.arange(max_tau + 1, dtype=np.float32)
     densities: Dict[Tuple[str, str], np.ndarray] = {}
     edge_probabilities: Dict[Tuple[str, str], float] = {}
     edge_params: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
@@ -280,7 +280,7 @@ def compose_timing_span_from_transition_primitives_with_mc(
         reach=timing.reach,
         conditional_cdf=timing.conditional_cdf,
         density_cdf=timing.density_cdf,
-        mc_cdf=np.asarray(mc_cdf, dtype=float),
+        mc_cdf=np.asarray(mc_cdf, dtype=np.float32),
         max_tau=timing.max_tau,
         topology_case=timing.topology_case,
         horizon_ratio=timing.horizon_ratio,
@@ -465,7 +465,7 @@ class SpanDPTrace:
         columns. Nodes off the topology raise ``KeyError``; on-path
         nodes with no arrivals degenerate to the empty sum.
         """
-        out = np.zeros((self.draw_count, self.horizon_len), dtype=np.float64)
+        out = np.zeros((self.draw_count, self.horizon_len), dtype=np.float32)
         for arrival_col, col_mass in self.node_density_by_node_bucket[node].items():
             out[:, int(arrival_col)] += col_mass
         return out
@@ -477,7 +477,7 @@ class SpanDPTrace:
         ``KeyError``; concrete edges with no flow degenerate to the
         empty sum.
         """
-        out = np.zeros((self.draw_count, self.horizon_len), dtype=np.float64)
+        out = np.zeros((self.draw_count, self.horizon_len), dtype=np.float32)
         for smear in self.edge_contribution_by_edge_source[edge_key].values():
             out += smear
         return out
@@ -623,7 +623,7 @@ def _make_scalar_applier(
         source_basis: BucketSourceBasis,
         source_mass_3d: np.ndarray,
     ) -> Tuple[np.ndarray, BucketSourceBasis, Mapping[int, np.ndarray]]:
-        out_3d = np.zeros((cohort_count, S_per_cohort, T), dtype=np.float64)
+        out_3d = np.zeros((cohort_count, S_per_cohort, T), dtype=np.float32)
         smear_map: Dict[int, np.ndarray] = {}
         active_buckets = np.flatnonzero(
             np.any(source_mass_3d != 0.0, axis=(0, 1))
@@ -632,7 +632,7 @@ def _make_scalar_applier(
         for u_int_np in active_buckets:
             u_int = int(u_int_np)
             remaining = T - u_int
-            smear = np.zeros((S, T), dtype=np.float64)
+            smear = np.zeros((S, T), dtype=np.float32)
             smear_3d = smear.reshape(cohort_count, S_per_cohort, T)
             for cohort_idx in range(cohort_count):
                 kernel, out_basis = provider(
@@ -641,7 +641,7 @@ def _make_scalar_applier(
                 out_basis_final = BucketSourceBasis(int(out_basis))
                 bucket_mass = source_mass_3d[cohort_idx, :, u_int]
                 smear_3d[cohort_idx, :, u_int:] = (
-                    bucket_mass[:, None] * np.asarray(kernel, dtype=np.float64)[:, :remaining]
+                    bucket_mass[:, None] * np.asarray(kernel, dtype=np.float32)[:, :remaining]
                 )
             out_3d += smear_3d
             smear_map[u_int] = smear
@@ -682,7 +682,7 @@ def _make_toeplitz_applier(
             ce, source_basis, source_mass_3d,
         )
         out_basis = BucketSourceBasis(int(provided_basis))
-        out_arr = np.asarray(out_3d, dtype=np.float64).reshape(
+        out_arr = np.asarray(out_3d, dtype=np.float32).reshape(
             cohort_count, S_per_cohort, T,
         )
         return out_arr, out_basis, {}
@@ -730,7 +730,7 @@ def _make_source_banded_applier(
             ce, source_basis, source_mass_3d,
         )
         out_basis = BucketSourceBasis(int(provided_basis))
-        out_arr = np.asarray(out_3d, dtype=np.float64).reshape(
+        out_arr = np.asarray(out_3d, dtype=np.float32).reshape(
             cohort_count, S_per_cohort, T,
         )
         return out_arr, out_basis, dict(smear_map)
@@ -792,7 +792,7 @@ def _run_dp_density_trace(
     policy — hardcoded here as a self-contained translation, not
     delegated to the caller.
     """
-    root_density = np.zeros((S, T), dtype=np.float64)
+    root_density = np.zeros((S, T), dtype=np.float32)
     root_density[:, 0] = 1.0
     root_basis = np.full(
         T,
@@ -845,7 +845,7 @@ def _run_dp_density_trace_from_seed(
     empirical seed) call ``_run_dp_density_trace_from_provenance_seed``
     instead.
     """
-    root_density_arr = np.asarray(root_density, dtype=np.float64)
+    root_density_arr = np.asarray(root_density, dtype=np.float32)
     root_basis_arr = np.asarray(
         root_basis if root_basis is not None
         else np.full(T, int(BucketSourceBasis.POINT_AT_ENDPOINT), dtype=np.int8),
@@ -1001,7 +1001,7 @@ def _run_dp_density_trace_from_ledger(
         for col, prov_mass_map in bucket_map.items():
             col_int = int(col)
             node_mass_by_provenance[node][col_int] = {
-                str(prov_key): np.asarray(mass, dtype=np.float64).copy()
+                str(prov_key): np.asarray(mass, dtype=np.float32).copy()
                 for prov_key, mass in prov_mass_map.items()
             }
             node_basis_by_node_bucket[node][col_int] = dict(
@@ -1034,7 +1034,7 @@ def _run_dp_density_trace_from_ledger(
             # produce one tensor; mixed-basis nodes produce one tensor
             # per basis, dispatched independently below.
             source_mass_by_basis: Dict[int, np.ndarray] = defaultdict(
-                lambda: np.zeros((S, T), dtype=np.float64),
+                lambda: np.zeros((S, T), dtype=np.float32),
             )
             for col_int, prov_mass_map in source_provenance_map.items():
                 col_basis_map = from_basis_map[col_int]
@@ -1051,10 +1051,10 @@ def _run_dp_density_trace_from_ledger(
             # ``edge_contribution_by_edge_source``; the smear map is
             # empty under TOEPLITZ_APPLY by design.
             edge_dest_mass_by_out_basis: Dict[int, np.ndarray] = defaultdict(
-                lambda: np.zeros((S, T), dtype=np.float64),
+                lambda: np.zeros((S, T), dtype=np.float32),
             )
             edge_source_smear_map: Dict[int, np.ndarray] = defaultdict(
-                lambda: np.zeros((S, T), dtype=np.float64),
+                lambda: np.zeros((S, T), dtype=np.float32),
             )
             for basis_int, source_mass in source_mass_by_basis.items():
                 source_basis = BucketSourceBasis(int(basis_int))
@@ -1074,7 +1074,7 @@ def _run_dp_density_trace_from_ledger(
                 out_3d, out_basis, basis_smear_map = apply_operator(
                     ce, source_basis, source_mass_3d,
                 )
-                out_flat = np.asarray(out_3d, dtype=np.float64).reshape(
+                out_flat = np.asarray(out_3d, dtype=np.float32).reshape(
                     S, T,
                 )
                 edge_dest_mass_by_out_basis[int(out_basis)] += out_flat
@@ -1144,7 +1144,7 @@ def _run_dp_density_grid(
     behaviour for callers that have not yet migrated to per-edge keys)
     and returns `cumsum(node_density[end])`.
     """
-    zero = np.zeros(T, dtype=np.float64)
+    zero = np.zeros(T, dtype=np.float32)
     densities_by_edge_key = {
         ce.edge_key: densities.get((ce.from_id, ce.to_id), zero)[None, :]
         for ce in topo.concrete_edges

@@ -110,7 +110,7 @@ def make_frontier_residual_kernel_provider(
         base_kernel_arr, out_basis = base_kernel_provider(
             ce, u, source_basis,
         )
-        base_kernel = np.asarray(base_kernel_arr, dtype=np.float64)
+        base_kernel = np.asarray(base_kernel_arr, dtype=np.float32)
 
         # Node-level survivor ``h[c, s] = Σ_e Σ_{τ ≤ f_c-u} q_e(τ)``.
         # Each outgoing edge's base kernel (D, T_offset) broadcasts
@@ -119,7 +119,7 @@ def make_frontier_residual_kernel_provider(
         h = sum(
             (np.asarray(
                 base_kernel_provider(outce, u, source_basis)[0],
-                dtype=np.float64,
+                dtype=np.float32,
             )[None, :, :] * prefix_mask[:, None, :]).sum(axis=-1)
             for outce in _outgoing_on_path(topology, ce.from_id)
         )  # (C, D)
@@ -174,7 +174,7 @@ def make_frontier_residual_kernel_provider(
         K = base_kernel_cache.get(key)
         if K is None:
             K_arr, _ = base_kernel_provider(ce, 0, source_basis)
-            K = np.asarray(K_arr, dtype=np.float64)
+            K = np.asarray(K_arr, dtype=np.float32)
             base_kernel_cache[key] = K
         return K
 
@@ -210,7 +210,7 @@ def make_frontier_residual_kernel_provider(
         # departures possible — survivor stays at 1).
         ks = f_arr[:, None] - u_idx[None, :]  # (C, H)
         ks_safe = np.maximum(ks, 0)  # (C, H)
-        H_sum = np.zeros((int(f_arr.size), 1, int(H)), dtype=np.float64)
+        H_sum = np.zeros((int(f_arr.size), 1, int(H)), dtype=np.float32)
         # Accumulator shape (C, D, H). Start by summing per-edge contributions.
         h_total = None
         outgoing = _outgoing_on_path(topology, from_node)
@@ -221,7 +221,7 @@ def make_frontier_residual_kernel_provider(
             # contribute zero — gated by ``ks_valid``.
             looked = cum_e[:, ks_safe]  # (D, C, H)
             looked = np.moveaxis(looked, 0, 1)  # (C, D, H)
-            ks_valid = (ks >= 0).astype(np.float64)[:, None, :]
+            ks_valid = (ks >= 0).astype(np.float32)[:, None, :]
             contribution = looked * ks_valid
             h_total = contribution if h_total is None else h_total + contribution
         if h_total is None:
@@ -229,7 +229,7 @@ def make_frontier_residual_kernel_provider(
             # be reached in practice — caller only invokes the
             # residual provider for nodes with on-path outgoings.)
             h_total = np.zeros(
-                (int(f_arr.size), 1, int(H)), dtype=np.float64,
+                (int(f_arr.size), 1, int(H)), dtype=np.float32,
             )
         survivor = 1.0 - h_total  # (C, D, H)
         survivor_cache[key] = survivor
@@ -238,7 +238,7 @@ def make_frontier_residual_kernel_provider(
     # Per-cohort post_mask in dest-column coordinates is independent
     # of source bucket: ``(dest > f_c[c])`` shape ``(C, H)``.
     dest_idx = np.arange(H)
-    post_mask_full = (dest_idx[None, :] > f_arr[:, None]).astype(np.float64)
+    post_mask_full = (dest_idx[None, :] > f_arr[:, None]).astype(np.float32)
 
     def batched_op(
         ce: ConcreteEdge,

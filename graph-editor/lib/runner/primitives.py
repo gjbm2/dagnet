@@ -450,7 +450,7 @@ class ConditionedTransitionPrimitive:
         # produced a deterministic CDF only (mu/sigma posterior not yet
         # sampled per draw).
         if self.timing_posterior.cdf_mean is not None:
-            mean = np.asarray(self.timing_posterior.cdf_mean, dtype=float)
+            mean = np.asarray(self.timing_posterior.cdf_mean, dtype=np.float32)
             return np.tile(mean, (self.draw_count, 1))
         raise DrawFamilyUnavailable(
             f"primitive {self.transition.edge_id} timing has no draws and "

@@ -83,7 +83,7 @@ def curvature_corrected_interp(
 
 def normal_cdf(z):
     """Vectorised standard normal CDF."""
-    z_arr = np.asarray(z, dtype=np.float64)
+    z_arr = np.asarray(z, dtype=np.float32)
     x = z_arr / np.sqrt(2.0)
     a1, a2, a3, a4, a5 = (
         0.254829592,
@@ -106,15 +106,15 @@ def normal_cdf(z):
 
 
 def logit(p):
-    p_arr = np.asarray(p, dtype=np.float64)
+    p_arr = np.asarray(p, dtype=np.float32)
     clipped = np.clip(p_arr, 1e-15, 1.0 - 1e-15)
     result = np.log(clipped / (1.0 - clipped))
     return float(result) if np.isscalar(p) else result
 
 
 def expit(x):
-    x_arr = np.asarray(x, dtype=np.float64)
-    result = np.empty_like(x_arr, dtype=np.float64)
+    x_arr = np.asarray(x, dtype=np.float32)
+    result = np.empty_like(x_arr, dtype=np.float32)
     positive = x_arr >= 0
     result[positive] = 1.0 / (1.0 + np.exp(-x_arr[positive]))
     exp_x = np.exp(x_arr[~positive])

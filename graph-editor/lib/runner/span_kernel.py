@@ -96,7 +96,7 @@ class SpanTopology:
 def _shifted_lognormal_pdf(tau_grid: np.ndarray, onset: float, mu: float, sigma: float) -> np.ndarray:
     """Evaluate shifted-lognormal PDF on integer tau grid."""
     age = tau_grid - onset
-    result = np.zeros_like(tau_grid, dtype=float)
+    result = np.zeros_like(tau_grid, dtype=np.float32)
     mask = age > 0
     if not np.any(mask) or sigma <= 0:
         return result
@@ -127,18 +127,18 @@ def _edge_sub_probability_density(
     handles single-hop and multi-hop spans uniformly.
     """
     if p <= 0:
-        return np.zeros_like(tau_grid, dtype=float)
+        return np.zeros_like(tau_grid, dtype=np.float32)
 
     if sigma <= 0:
         # Pure probability gate: delta at tau=0
-        result = np.zeros_like(tau_grid, dtype=float)
+        result = np.zeros_like(tau_grid, dtype=np.float32)
         if len(result) > 0:
             result[0] = p
         return result
 
     if sigma < 0.1:
         # Near-degenerate lognormal: delta at onset + exp(mu)
-        result = np.zeros_like(tau_grid, dtype=float)
+        result = np.zeros_like(tau_grid, dtype=np.float32)
         delta_tau = onset + math.exp(mu)
         idx = int(round(max(0, delta_tau)))
         if idx < len(result):
@@ -333,17 +333,17 @@ def _run_dp(
     Returns:
         K array (CDF at y), shape (max_tau+1,).
     """
-    tau_grid = np.arange(max_tau + 1, dtype=float)
+    tau_grid = np.arange(max_tau + 1, dtype=np.float32)
     g: Dict[str, np.ndarray] = {}
 
-    g[topo.x_node_id] = np.zeros(max_tau + 1, dtype=float)
+    g[topo.x_node_id] = np.zeros(max_tau + 1, dtype=np.float32)
     g[topo.x_node_id][0] = 1.0
 
     for node in topo.topo_order:
         if node == topo.x_node_id:
             continue
 
-        node_density = np.zeros(max_tau + 1, dtype=float)
+        node_density = np.zeros(max_tau + 1, dtype=np.float32)
 
         for from_id in topo.reverse_adj.get(node, []):
             if from_id not in topo.on_path or from_id not in g:
@@ -363,7 +363,7 @@ def _run_dp(
         g[node] = node_density
 
     if topo.y_node_id not in g:
-        return np.zeros(max_tau + 1, dtype=float)
+        return np.zeros(max_tau + 1, dtype=np.float32)
 
     return np.cumsum(g[topo.y_node_id])
 
@@ -473,8 +473,8 @@ def mc_span_cdfs(
     )
 
     # ── Run DP per draw ───────────────────────────────────────────────
-    cdf_arr = np.zeros((num_draws, T), dtype=np.float64)
-    p_s = np.zeros(num_draws, dtype=np.float64)
+    cdf_arr = np.zeros((num_draws, T), dtype=np.float32)
+    p_s = np.zeros(num_draws, dtype=np.float32)
 
     for s in range(num_draws):
         params: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}

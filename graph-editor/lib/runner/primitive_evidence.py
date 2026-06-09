@@ -252,8 +252,8 @@ def bind_primitive_evidence(
 
     S = int(arrival_weights.draw_count)
     rows: list[WeightedEvidenceRow] = []
-    n_total_draws = np.zeros(S, dtype=np.float64)
-    k_total_draws = np.zeros(S, dtype=np.float64)
+    n_total_draws = np.zeros(S, dtype=np.float32)
+    k_total_draws = np.zeros(S, dtype=np.float32)
     zero_clock_weight_row_count = 0
     for point in raw.points:
         observed = point.candidate.coordinate.observed_date

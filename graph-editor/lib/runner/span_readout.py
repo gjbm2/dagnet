@@ -92,7 +92,7 @@ def evaluate_span_readout(
     provenance: Mapping[str, object] = _EMPTY_PROVENANCE,
 ) -> PrefixSurface:
     n_cohorts = len(cohort_ids)
-    value_ledgers = [np.zeros((n_cohorts, days), dtype=float)]
+    value_ledgers = [np.zeros((n_cohorts, days), dtype=np.float32)]
     indices = np.arange(n_cohorts)
     value_ledgers[0][indices, root_days] = root_counts
     for operator in operators:

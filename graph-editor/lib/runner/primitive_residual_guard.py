@@ -316,7 +316,7 @@ def make_structurally_deterministic_primitive(
             f'for {transition.edge_id}'
         )
     p = float(deterministic_p)
-    draws = np.full(draw_count, p, dtype=float)
+    draws = np.full(draw_count, p, dtype=np.float32)
     probability_posterior = ProbabilityPosterior(
         mean=p,
         sd=0.0,

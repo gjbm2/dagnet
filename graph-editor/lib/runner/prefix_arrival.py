@@ -181,7 +181,7 @@ class NodeArrivalWeights:
         """
         result = self.weights_draws.get(calendar_day)
         if result is None:
-            return np.zeros(self.draw_count, dtype=np.float64)
+            return np.zeros(self.draw_count, dtype=np.float32)
         return result
 
     def root_day_shares_on(self, calendar_day: str) -> Mapping[str, float]:
@@ -310,7 +310,7 @@ def _shift_pmf_draws_to_calendar(
             contribution = w * pmf_draws[:, t]
             existing = result.get(day)
             if existing is None:
-                result[day] = contribution.astype(np.float64, copy=True)
+                result[day] = contribution.astype(np.float32, copy=True)
             else:
                 existing += contribution
     return result
@@ -328,7 +328,7 @@ def _normalise_per_draw(
     """
     if not weights_draws:
         return {}
-    totals = np.zeros(draw_count, dtype=np.float64)
+    totals = np.zeros(draw_count, dtype=np.float32)
     for arr in weights_draws.values():
         totals += arr
     safe_totals = np.where(totals > 0.0, totals, 1.0)
@@ -412,17 +412,17 @@ def build_prefix_arrival_map(
         for edge_key, primitive in transitions.items():
             degenerate_particles[edge_key] = EdgeTimingParticles(
                 mu_draws=np.full(
-                    S_degenerate, float(primitive.mu), dtype=np.float64,
+                    S_degenerate, float(primitive.mu), dtype=np.float32,
                 ),
                 sigma_draws=np.clip(
                     np.full(
-                        S_degenerate, float(primitive.sigma), dtype=np.float64,
+                        S_degenerate, float(primitive.sigma), dtype=np.float32,
                     ),
                     0.01, 20.0,
                 ),
                 onset_draws=np.maximum(
                     np.full(
-                        S_degenerate, float(primitive.onset), dtype=np.float64,
+                        S_degenerate, float(primitive.onset), dtype=np.float32,
                     ),
                     0.0,
                 ),
@@ -441,7 +441,7 @@ def build_prefix_arrival_map(
         k: float(v) for k, v in root_day_weights.items() if v > 0
     }
     root_draws_weights: Dict[str, np.ndarray] = {
-        k: np.full(S, float(v), dtype=np.float64)
+        k: np.full(S, float(v), dtype=np.float32)
         for k, v in root_day_weights.items()
         if v > 0
     }
@@ -505,7 +505,7 @@ def build_prefix_arrival_map(
                 continue
             pmf = cdf_to_bucket_transition(
                 f"prefix_arrival::{root_canonical}->{canonical}",
-                np.asarray(cdf, dtype=float),
+                np.asarray(cdf, dtype=np.float32),
                 family="prefix_arrival",
             ).value[0]
             # Numerical clean-up: clip tiny negatives from floating

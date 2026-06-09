@@ -1090,19 +1090,19 @@ def _build_cohort_likelihood_plan(
             k_raw=int(latest.k),
             n_weighted=float(latest.n_weighted),
             k_weighted=float(latest.k_weighted),
-            n_weighted_draws=np.asarray(latest.n_weighted_draws, dtype=np.float64),
-            k_weighted_draws=np.asarray(latest.k_weighted_draws, dtype=np.float64),
+            n_weighted_draws=np.asarray(latest.n_weighted_draws, dtype=np.float32),
+            k_weighted_draws=np.asarray(latest.k_weighted_draws, dtype=np.float32),
         ))
 
     cohort_n_total = float(sum(c.n_weighted for c in cohort_latest_list))
     cohort_k_total = float(sum(c.k_weighted for c in cohort_latest_list))
     cohort_n_total_draws = (
         np.sum(np.stack([c.n_weighted_draws for c in cohort_latest_list], axis=0), axis=0)
-        if cohort_latest_list else np.zeros(S, dtype=np.float64)
+        if cohort_latest_list else np.zeros(S, dtype=np.float32)
     )
     cohort_k_total_draws = (
         np.sum(np.stack([c.k_weighted_draws for c in cohort_latest_list], axis=0), axis=0)
-        if cohort_latest_list else np.zeros(S, dtype=np.float64)
+        if cohort_latest_list else np.zeros(S, dtype=np.float32)
     )
     m_S_doc52 = float(sum(c.n_raw for c in cohort_latest_list))
 
@@ -1156,16 +1156,16 @@ def _build_cohort_likelihood_plan(
                 i = j
             n_d = float(deduped[-1][1].n_weighted)
             n_d_draws = np.asarray(
-                deduped[-1][1].n_weighted_draws, dtype=np.float64,
+                deduped[-1][1].n_weighted_draws, dtype=np.float32,
             )
             last_observed_tau_idx = int(deduped[-1][0])
             increments: list[tuple[int, float]] = []
             increments_draws: list[tuple[int, np.ndarray]] = []
             prev_k = 0.0
-            prev_k_draws = np.zeros(S, dtype=np.float64)
+            prev_k_draws = np.zeros(S, dtype=np.float32)
             for tau_idx, row in deduped:
                 k = float(row.k_weighted)
-                k_draws = np.asarray(row.k_weighted_draws, dtype=np.float64)
+                k_draws = np.asarray(row.k_weighted_draws, dtype=np.float32)
                 if k < prev_k:
                     provenance.append(
                         f'monotone_k_clamp_fired['
@@ -1417,9 +1417,9 @@ def _evaluate_likelihood_plan(
     # ``(n_draws[s] − last_k_draws[s]) * log(1 − p[s]·F[s,τₘ])``.
     # Zero per-draw increments are algebraic degeneracies of the same
     # multiply (``0 * log(cell_prob) = 0``); no inc_k > 0 branch.
-    log_lik = np.zeros(draw_count, dtype=np.float64)
+    log_lik = np.zeros(draw_count, dtype=np.float32)
     for bucket in plan.cohort_buckets:
-        prev_F = np.zeros(draw_count, dtype=np.float64)
+        prev_F = np.zeros(draw_count, dtype=np.float32)
         for tau_idx, inc_k_draws in bucket.increments_draws:
             cur_F = proposal_cdf_draws[:, tau_idx]
             cell_prob = np.clip(
@@ -1524,7 +1524,7 @@ def _build_per_draw_cdf(
     posterior. Uses ``numpy_stats.normal_cdf`` to keep the prod runtime
     dependency-light.
     """
-    tau_grid = np.arange(T, dtype=np.float64)[None, :]  # (1, T)
+    tau_grid = np.arange(T, dtype=np.float32)[None, :]  # (1, T)
     onset = onset_draws[:, None]  # (S, 1)
     model_age = tau_grid - onset
     positive = model_age > 0.0
@@ -1846,12 +1846,12 @@ def make_unconditioned_primitive(
     timing_rng = make_rng(draw_family_key, 'primitive_timing_draws')
     has_dispersions = (mu_sd > 0.0 or sigma_sd > 0.0 or onset_sd > 0.0)
     if has_dispersions:
-        means = np.array([mu, sigma, onset], dtype=np.float64)
+        means = np.array([mu, sigma, onset], dtype=np.float32)
         sds = np.array([
             max(mu_sd, 1e-10),
             max(sigma_sd, 1e-10),
             max(onset_sd, 1e-10),
-        ], dtype=np.float64)
+        ], dtype=np.float32)
         cov = np.diag(sds ** 2)
         cov[2, 0] = cov[0, 2] = onset_mu_corr * sds[2] * sds[0]
         timing_particles = timing_rng.multivariate_normal(

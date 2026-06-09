@@ -71,6 +71,10 @@ from test_model_span_spine_selected_cohort import (  # noqa: E402
 )
 
 
+FLOAT32_AGG_RTOL = 2e-6
+FLOAT32_AGG_ATOL = 1e-5
+
+
 # ── Fixture: four observed window cohorts, varied frontier / extent ──────
 #
 # Distinct anchor days, distinct (N, k) evidence, and deliberately varied
@@ -234,7 +238,7 @@ def test_additive_aggregates_reconstruct_from_chunk_sums():
                 acc = acc + getattr(p, field)
             np.testing.assert_allclose(
                 acc, getattr(full, field),
-                rtol=1e-12, atol=1e-12,
+                rtol=FLOAT32_AGG_RTOL, atol=FLOAT32_AGG_ATOL,
                 err_msg=f'{field} aggregate does not reconstruct from chunk '
                         f'sums at K={k}',
             )
@@ -257,7 +261,8 @@ def test_derived_rates_reconstruct_divide_once():
             f_y, f_x, out=np.zeros_like(f_y), where=f_x > 0.0,
         )
         np.testing.assert_allclose(
-            f_rate, full.f_rate_draws, rtol=1e-12, atol=1e-12,
+            f_rate, full.f_rate_draws,
+            rtol=FLOAT32_AGG_RTOL, atol=FLOAT32_AGG_ATOL,
             err_msg=f'f_rate_draws divide-once mismatch at K={k}',
         )
 
@@ -268,7 +273,8 @@ def test_derived_rates_reconstruct_divide_once():
             ey, ex, out=np.zeros_like(ey), where=ex > 0.0,
         )
         np.testing.assert_allclose(
-            rate_strict, full.rate_strict, rtol=1e-12, atol=1e-12,
+            rate_strict, full.rate_strict,
+            rtol=FLOAT32_AGG_RTOL, atol=FLOAT32_AGG_ATOL,
             err_msg=f'rate_strict divide-once mismatch at K={k}',
         )
 
@@ -278,7 +284,8 @@ def test_derived_rates_reconstruct_divide_once():
         with np.errstate(divide='ignore', invalid='ignore'):
             ef_rate = ef_y / ef_x
         np.testing.assert_allclose(
-            ef_rate, full.ef_rate_draws, rtol=1e-12, atol=1e-12,
+            ef_rate, full.ef_rate_draws,
+            rtol=FLOAT32_AGG_RTOL, atol=FLOAT32_AGG_ATOL,
             equal_nan=True,
             err_msg=f'ef_rate_draws divide-once mismatch at K={k}',
         )
@@ -296,7 +303,7 @@ def test_applicability_row_reconstructs_over_total_cohort_count():
         applicability = acc_count / float(total_c)
         np.testing.assert_allclose(
             applicability, full.applicability_row,
-            rtol=1e-12, atol=1e-12,
+            rtol=FLOAT32_AGG_RTOL, atol=FLOAT32_AGG_ATOL,
             err_msg=f'applicability_row reconstruction mismatch at K={k}',
         )
 
@@ -339,17 +346,17 @@ def test_production_combine_matches_full_projection():
         for field in _ADDITIVE_AGG_FIELDS + ('f_rate_draws', 'rate_strict'):
             np.testing.assert_allclose(
                 getattr(combined, field), getattr(full, field),
-                rtol=1e-12, atol=1e-12,
+                rtol=FLOAT32_AGG_RTOL, atol=FLOAT32_AGG_ATOL,
                 err_msg=f'{field} production-combine mismatch at K={k}',
             )
         np.testing.assert_allclose(
             combined.ef_rate_draws, full.ef_rate_draws,
-            rtol=1e-12, atol=1e-12, equal_nan=True,
+            rtol=FLOAT32_AGG_RTOL, atol=FLOAT32_AGG_ATOL, equal_nan=True,
             err_msg=f'ef_rate_draws production-combine mismatch at K={k}',
         )
         np.testing.assert_allclose(
             combined.applicability_row, full.applicability_row,
-            rtol=1e-12, atol=1e-12,
+            rtol=FLOAT32_AGG_RTOL, atol=FLOAT32_AGG_ATOL,
             err_msg=f'applicability_row production-combine mismatch at K={k}',
         )
         assert (set(combined.evidence_x_strict_by_anchor_tau)

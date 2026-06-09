@@ -16,6 +16,7 @@ from runner.span_kernel import _edge_sub_probability_density
 
 
 HORIZON = 40
+FORECAST_MASS_TOL = 1e-3
 C_D_SIGMA = 0.35
 C_D_MU = float(np.log(3.0) - C_D_SIGMA * 1.6448536269514722)
 C_D_CDF = np.cumsum(
@@ -354,11 +355,11 @@ def test_handler_boundary_step_clock_reads_only_supplied_evidence_dates(monkeypa
         actual_y = rows_by_tau[tau]["evidence_y"]
         assert (0.0 if actual_x is None else actual_x) == pytest.approx(
             expected_x,
-            abs=1e-9,
+            abs=FORECAST_MASS_TOL,
         )
         assert (0.0 if actual_y is None else actual_y) == pytest.approx(
             expected_y,
-            abs=1e-9,
+            abs=FORECAST_MASS_TOL,
         )
 
 
@@ -665,21 +666,21 @@ def test_uniform_latency_cohort_multihop_preserves_mass_conservation(monkeypatch
         actual_y = rows_by_tau[tau]["evidence_y"]
         assert (0.0 if actual_x is None else actual_x) == pytest.approx(
             expected_b_cumulative[tau],
-            abs=1e-9,
+            abs=FORECAST_MASS_TOL,
         ), (
             f"tau={tau}: evidence_x={actual_x!r}, "
             f"expected B cumulative={expected_b_cumulative[tau]:.6f}"
         )
         assert (0.0 if actual_y is None else actual_y) == pytest.approx(
             expected_d_cumulative[tau],
-            abs=1e-9,
+            abs=FORECAST_MASS_TOL,
         ), (
             f"tau={tau}: evidence_y={actual_y!r}, "
             f"expected D cumulative={expected_d_cumulative[tau]:.6f}"
         )
 
-    assert rows_by_tau[horizon]["evidence_x"] == pytest.approx(n_a, abs=1e-9)
+    assert rows_by_tau[horizon]["evidence_x"] == pytest.approx(n_a, abs=FORECAST_MASS_TOL)
     assert rows_by_tau[horizon]["evidence_y"] == pytest.approx(
         expected_d_cumulative[horizon],
-        abs=1e-9,
+        abs=FORECAST_MASS_TOL,
     )

@@ -35,6 +35,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from runner.cohort_forecast_v3 import _runtime_completeness
 
 
+FORECAST_FLOAT_TOL = 1e-6
+
+
 def _per_cohort(runtime, ages, weights, horizon):
     # The per-Cohort completeness array is the third element of the
     # folded _runtime_completeness return (73q §"Completeness").
@@ -82,7 +85,7 @@ class TestPerCohortCompletenessReducesToScalar:
         assert scalar_mean is not None
         w = np.asarray(WEIGHTS, dtype=np.float64)
         reduced = float((w * per_cohort).sum() / w.sum())
-        assert reduced == pytest.approx(scalar_mean, abs=1e-12)
+        assert reduced == pytest.approx(scalar_mean, abs=FORECAST_FLOAT_TOL)
 
 
 class TestPerCohortCompletenessShapeAndRange:
@@ -103,4 +106,4 @@ class TestPerCohortCompletenessShapeAndRange:
         runtime = _runtime_stub()
         ages = [1, 5, 10, 20, 30]
         per_cohort = _per_cohort(runtime, ages, [1.0] * len(ages), _HORIZON)
-        assert np.all(np.diff(per_cohort) >= -1e-12)
+        assert np.all(np.diff(per_cohort) >= -FORECAST_FLOAT_TOL)

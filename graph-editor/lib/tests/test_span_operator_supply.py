@@ -33,8 +33,8 @@ def test_deterministic_draw_primitive_compiles_shifted_delta():
         )
     )
     assert len(operators) == 2
-    np.testing.assert_array_equal(operators[0].value, np.array([[0.0, 0.0, 0.2]]))
-    np.testing.assert_array_equal(operators[1].value, np.array([[0.0, 0.0, 0.5]]))
+    np.testing.assert_allclose(operators[0].value, np.array([[0.0, 0.0, 0.2]]), atol=1e-7)
+    np.testing.assert_allclose(operators[1].value, np.array([[0.0, 0.0, 0.5]]), atol=1e-7)
 
 
 def test_nonlatent_draw_primitive_is_delta_zero():
@@ -42,7 +42,7 @@ def test_nonlatent_draw_primitive_is_delta_zero():
         PrimitiveDrawSurface("A-B", p_draws=np.asarray([0.2, 0.5]), timing_family="non_latent")
     )
     assert len(operators) == 2
-    np.testing.assert_array_equal(operators[0].value, np.array([[0.2]]))
-    np.testing.assert_array_equal(operators[1].value, np.array([[0.5]]))
+    np.testing.assert_allclose(operators[0].value, np.array([[0.2]]), atol=1e-7)
+    np.testing.assert_allclose(operators[1].value, np.array([[0.5]]), atol=1e-7)
 
 
