@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.13b
+**Released:** 9-Jun-26
+
+Now running on prod. memory constraints (just)
+
+---
+
 ## Version 2.1.12b
 **Released:** 9-Jun-26
 
