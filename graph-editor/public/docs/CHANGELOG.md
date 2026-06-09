@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.1.11b
+**Released:** 9-Jun-26
+
+Lowered to Float32 for memory reasons
+
+---
+
 ## Version 2.1.10b
 **Released:** 8-Jun-26
 
